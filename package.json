@@ -1,0 +1,33 @@
+{
+  "name": "kahaani",
+  "version": "1.0.0",
+  "main": "index.js",
+  "directories": {
+    "lib": "lib"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.75.0",
+    "fluent-ffmpeg": "^2.1.3",
+    "next": "^15.5.4",
+    "node-fetch": "^3.3.2",
+    "openai": "^6.3.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "uuid": "^13.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.7.1",
+    "@types/react": "^19.2.2",
+    "typescript": "^5.9.3"
+  }
+}
