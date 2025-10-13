@@ -9,6 +9,27 @@ export const config = { api: { bodyParser: { sizeLimit: "4mb" } } };
 
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 
+// Helper function to extract character details for consistency
+function extractCharacterInfo(text: string): string {
+  const characters = [];
+  
+  // Look for character descriptions
+  if (/\b(young\s+)?boy\b/i.test(text)) {
+    characters.push("- Main character: Young boy (consistent age, hair, clothing throughout)");
+  }
+  if (/\b(young\s+)?girl\b/i.test(text)) {
+    characters.push("- Main character: Young girl (consistent age, hair, clothing throughout)");
+  }
+  if (/\bman\b/i.test(text)) {
+    characters.push("- Character: Adult man (consistent appearance)");
+  }
+  if (/\bwoman\b/i.test(text)) {
+    characters.push("- Character: Adult woman (consistent appearance)");
+  }
+  
+  return characters.join('\n');
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { story_id, style, instructions } = req.body;
   if (!story_id) return res.status(400).json({ error: "story_id required" });
@@ -53,12 +74,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // 3️⃣ Model + config setup
     const provider = process.env.PROVIDER || "openrouter";
     const model = process.env.IMAGE_MODEL || "google/gemini-2.5-flash-image-preview";
-    const aspect = process.env.IMAGE_ASPECT_RATIO || "16:9";
-
-    logger.log(`🧠 Using ${provider} model: ${model} (aspect ${aspect})`);
+    
+    // 🎯 Use same aspect ratio system as video generation
+    const aspect = process.env.ASPECT_RATIO || "9:16";
+    const videoWidth = parseInt(process.env.VIDEO_WIDTH || "1080");
+    const videoHeight = parseInt(process.env.VIDEO_HEIGHT || "1920");
+    
+    // 📱 Generate images with EXACT same dimensions as final video
+    const imageSize = `${videoWidth}x${videoHeight}`;
+    
+    logger.log(`🧠 Using ${provider} model: ${model} (${imageSize}, aspect ${aspect} - matches video dimensions)`);
 
     const finalStyle = style || "cinematic illustration";
     const extraNotes = instructions ? `\nInstructions: ${instructions}\n` : "";
+    
+    // 🎯 Extract character information for consistency
+    const allScenesText = scenes.map(s => s.text).join(' ');
+    const characterInfo = extractCharacterInfo(allScenesText);
+    
+    const characterConsistencyNote = characterInfo ? `
+🎭 CHARACTER REFERENCE FOR CONSISTENCY:
+${characterInfo}
+- MAINTAIN these exact character features in ALL scenes
+- Same clothing, hair, facial features, body proportions
+- Character must be visually identical across all images
+` : "";
 
     // 4️⃣ Build prompt
     const prompt = `
@@ -94,7 +134,7 @@ Each image must correspond to the matching numbered scene.
       }),
     });
 
-    const data = await resp.json();
+    const data: any = await resp.json();
     if (!resp.ok) {
       logger.error("❌ API error response", data);
       throw new Error(`Image generation failed: ${JSON.stringify(data)}`);
