@@ -172,18 +172,35 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // 8️⃣ Upload final video
     const buffer = fs.readFileSync(finalVideo);
     const fileName = `video-${audio_id}.mp4`;
+
     const { error: uploadErr } = await supabaseAdmin.storage
-      .from("videos")
-      .upload(fileName, buffer, {
+    .from("videos")
+    .upload(fileName, buffer, {
         contentType: "video/mp4",
         upsert: true,
-      });
+    });
+
     if (uploadErr) throw uploadErr;
 
     const publicUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/videos/${fileName}`;
-    await supabaseAdmin.from("videos").insert([{ story_id, audio_id, voice_id, video_url: publicUrl }]);
 
-    logger.log(`☁️ Uploaded final video → ${publicUrl}`);
+    // ✅ 9️⃣ Save metadata (consistent with audio)
+    const { error: upsertErr } = await supabaseAdmin
+    .from("videos")
+    .upsert(
+        {
+        story_id,
+        audio_id,
+        voice_id,
+        video_url: publicUrl,
+        created_at: new Date().toISOString(),
+        },
+        { onConflict: "story_id" } // ensures one video per story
+    );
+
+    if (upsertErr) throw upsertErr;
+
+    logger.log(`☁️ Uploaded and saved video → ${publicUrl}`);
     res.status(200).json({ story_id, audio_id, video_url: publicUrl });
   } catch (err: any) {
     if (logger) logger.error("❌ Error generating video", err);
