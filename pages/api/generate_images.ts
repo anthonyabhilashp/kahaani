@@ -40,35 +40,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     logger = new JobLogger(story_id, "generate_images");
     logger.log(`🎨 Starting image generation for story: ${story_id}`);
 
-    // 1️⃣ Fetch story scenes
+    // 1️⃣ Fetch story scenes with existing image info
     const { data: scenes, error: sceneErr } = await supabaseAdmin
       .from("scenes")
-      .select("text, order")
+      .select("id, text, order, image_url")
       .eq("story_id", story_id)
       .order("order", { ascending: true });
 
     if (sceneErr || !scenes?.length) throw new Error("No scenes found");
+    logger.log(`📚 Found ${scenes.length} scenes to generate images for`);
 
-    // 2️⃣ Clean up old images from Supabase (DB + Storage)
-    const { data: oldImages, error: fetchErr } = await supabaseAdmin
-      .from("images")
-      .select("image_url")
-      .eq("story_id", story_id);
-
-    if (fetchErr) throw fetchErr;
-
-    if (oldImages?.length) {
-      logger.log(`🧹 Cleaning up ${oldImages.length} old images from Supabase...`);
-      const paths = oldImages.map((img) => img.image_url.split("/images/")[1]);
+    // 2️⃣ Clean up old image files from storage if they exist
+    const oldImageUrls = scenes.filter(s => s.image_url).map(s => s.image_url);
+    if (oldImageUrls.length) {
+      logger.log(`🧹 Cleaning up ${oldImageUrls.length} old images from storage...`);
+      const paths = oldImageUrls.map((url) => url.split("/images/")[1]);
       if (paths.length) {
         const { error: delErr } = await supabaseAdmin.storage
           .from("images")
           .remove(paths);
         if (delErr) logger.error("⚠️ Error deleting old image files", delErr);
       }
-
-      await supabaseAdmin.from("images").delete().eq("story_id", story_id);
-      logger.log("🧾 Old image records removed from database");
     }
 
     // 3️⃣ Model + config setup
@@ -183,16 +175,21 @@ Each image must correspond to the matching numbered scene.
       if (uploadErr) throw uploadErr;
 
       const publicUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/images/${fileName}`;
-      uploads.push({ story_id, scene_order: i + 1, image_url: publicUrl });
-      logger.log(`✅ Uploaded scene ${i + 1} → ${publicUrl}`);
+      
+      // 8️⃣ Update scene with image URL directly
+      const { error: updateErr } = await supabaseAdmin
+        .from("scenes")
+        .update({ image_url: publicUrl })
+        .eq("id", scenes[i].id);
+        
+      if (updateErr) throw updateErr;
+      
+      uploads.push({ scene_id: scenes[i].id, scene_order: i + 1, image_url: publicUrl });
+      logger.log(`✅ Updated scene ${i + 1} with image → ${publicUrl}`);
     }
 
-    // 8️⃣ Insert new records
-    const { error: insertErr } = await supabaseAdmin.from("images").insert(uploads);
-    if (insertErr) throw insertErr;
-
-    logger.log(`📸 Stored ${uploads.length} new image records in DB`);
-    res.status(200).json({ story_id, images: uploads });
+    logger.log(`📸 Updated ${uploads.length} scenes with image URLs`);
+    res.status(200).json({ story_id, updated_scenes: uploads });
 
   } catch (err: any) {
     if (logger) logger.error("❌ Error generating images", err);

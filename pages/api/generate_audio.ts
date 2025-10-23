@@ -17,31 +17,29 @@ function ffprobeAsync(filePath: string): Promise<ffmpeg.FfprobeData> {
 export const config = { api: { bodyParser: { sizeLimit: "5mb" } } };
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const { story_id, voice_id } = req.body;
-  if (!story_id) return res.status(400).json({ error: "story_id is required" });
+  const { scene_id, voice_id } = req.body;
+  if (!scene_id) return res.status(400).json({ error: "scene_id is required" });
 
   let logger: JobLogger | null = null;
 
   try {
-    logger = new JobLogger(story_id, "generate_audio");
-    logger.log(`🎙️ Starting audio generation for story: ${story_id}`);
+    logger = new JobLogger(scene_id, "generate_audio");
+    logger.log(`🎙️ Starting audio generation for scene: ${scene_id}`);
 
     const voiceId = voice_id || "21m00Tcm4TlvDq8ikWAM";
 
-    // 1️⃣ Fetch scenes
-    const { data: scenes, error: sceneErr } = await supabaseAdmin
+    // 1️⃣ Fetch scene data
+    const { data: scene, error: sceneErr } = await supabaseAdmin
       .from("scenes")
-      .select("text")
-      .eq("story_id", story_id)
-      .order("order", { ascending: true });
+      .select("id, text, story_id, order")
+      .eq("id", scene_id)
+      .single();
 
     if (sceneErr) throw sceneErr;
-    if (!scenes || scenes.length === 0)
-      throw new Error("No scenes found for this story.");
+    if (!scene) throw new Error("Scene not found.");
 
-    // 2️⃣ Combine text
-    const fullStoryText = scenes.map((s) => s.text).join(" ");
-    logger.log(`📖 Combined story length: ${fullStoryText.length} chars`);
+    const sceneText = scene.text;
+    logger.log(`📖 Scene text length: ${sceneText.length} chars`);
 
     // 3️⃣ Generate audio
     logger.log(`🧠 Generating TTS with ElevenLabs voice: ${voiceId}`);
@@ -52,7 +50,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        text: fullStoryText,
+        text: sceneText,
         model_id: "eleven_multilingual_v2",
         voice_settings: { stability: 0.4, similarity_boost: 0.7 },
       }),
@@ -63,9 +61,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const audioBuffer = Buffer.from(await ttsRes.arrayBuffer());
 
     // 4️⃣ Save locally
-    const tempDir = path.join(process.cwd(), "tmp", story_id);
+    const tempDir = path.join(process.cwd(), "tmp", scene_id);
     fs.mkdirSync(tempDir, { recursive: true });
-    const audioPath = path.join(tempDir, `story-${story_id}.mp3`);
+    const audioPath = path.join(tempDir, `scene-${scene_id}.mp3`);
     fs.writeFileSync(audioPath, audioBuffer);
 
     // 5️⃣ Get duration
@@ -74,7 +72,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     logger.log(`⏱ Audio duration: ${duration.toFixed(2)} seconds`);
 
     // 6️⃣ Upload to Supabase
-    const fileName = `story-${story_id}.mp3`;
+    const fileName = `scene-${scene_id}.mp3`;
     const { error: uploadErr } = await supabaseAdmin.storage
       .from("audio")
       .upload(fileName, fs.readFileSync(audioPath), {
@@ -85,18 +83,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const audioUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/audio/${fileName}`;
 
-    // 7️⃣ Save metadata
-    const { error: insertErr } = await supabaseAdmin.from("audio")
-                                .upsert(
-                                    { story_id, voice_id: voiceId, audio_url: audioUrl, duration },
-                                    { onConflict: "story_id, voice_id" }
-                                );
-
-    if (insertErr) throw insertErr;
-
-    logger.log(`✅ Audio saved to Supabase: ${audioUrl}`);
-
-    res.status(200).json({ story_id, voice_id: voiceId, audio_url: audioUrl, duration });
+    // 7️⃣ Update scene with audio URL directly
+    const { error: updateErr } = await supabaseAdmin
+      .from("scenes")
+      .update({ 
+        audio_url: audioUrl
+        // Note: We could also store voice_id and duration as additional columns if needed
+      })
+      .eq("id", scene_id);
+      
+    if (updateErr) throw updateErr;
+    
+    logger.log(`✅ Audio saved to Supabase for scene: ${audioUrl}`);
+    res.status(200).json({ scene_id, story_id: scene.story_id, voice_id: voiceId, audio_url: audioUrl, duration });
   } catch (err: any) {
     if (logger) logger.error("❌ Error during audio generation", err);
     res.status(500).json({ error: err.message });

@@ -62,10 +62,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       logger.log(`🧠 Generating scenes with ${SCENE_MODEL} (${PROVIDER})...`);
 
       const storyPrompt = `
-You are a JSON generator. Break the following story idea into 3–6 short, visual scenes.
+You are a JSON generator. Break the following story idea into 3–6 short, visual scenes and create a catchy title.
 Each scene should describe what happens visually in one sentence.
 Return ONLY valid JSON in this format:
-{"scenes":[{"text":"..."},{"text":"..."}]}
+{"title":"A catchy title for the story","scenes":[{"text":"..."},{"text":"..."}]}
 
 Story: ${prompt}
       `;
@@ -83,13 +83,22 @@ Story: ${prompt}
         }),
       });
 
-      const data = await response.json();
+      const data = await response.json() as any;
       const raw = data?.choices?.[0]?.message?.content || "";
       const clean = cleanJSON(raw);
 
       try {
         const parsed = JSON.parse(clean);
         scenes = parsed.scenes || [];
+        
+        // Update story title if generated
+        if (parsed.title && !story_id) {
+          await supabaseAdmin
+            .from("stories")
+            .update({ title: parsed.title })
+            .eq("id", storyId);
+          logger.log(`📝 Generated title: "${parsed.title}"`);
+        }
       } catch {
         logger.error("⚠️ Model returned invalid JSON, fallback to single scene");
         scenes = [{ text: prompt }];
