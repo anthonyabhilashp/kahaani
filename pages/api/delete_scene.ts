@@ -19,6 +19,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     logger = new JobLogger(story_id, "delete_scene");
     logger.log(`🗑️ Deleting scene for story: ${story_id}`);
 
+    // 1️⃣ Get scene data before deleting (for storage cleanup)
+    const { data: sceneData, error: fetchSceneError } = await supabaseAdmin
+      .from("scenes")
+      .select("id, image_url, audio_url")
+      .eq("id", scene_id)
+      .single();
+
+    if (fetchSceneError) {
+      logger.log(`⚠️ Warning: Could not fetch scene data: ${fetchSceneError.message}`);
+    } else {
+      logger.log(`📦 Scene data: image=${!!sceneData?.image_url}, audio=${!!sceneData?.audio_url}`);
+    }
+
     // Get image URLs before deleting from database (for storage cleanup)
     const { data: imagesToDelete, error: fetchImagesError } = await supabaseAdmin
       .from("images")
@@ -50,6 +63,50 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (deleteResult.error) {
       throw new Error(`Failed to delete scene: ${deleteResult.error.message}`);
+    }
+
+    logger.log("✅ Scene deleted from database");
+
+    // 2️⃣ Delete audio file from storage
+    if (sceneData?.audio_url && scene_id) {
+      try {
+        const audioFileName = `scene-${scene_id}.mp3`;
+        logger.log(`🎵 Deleting audio file: ${audioFileName}`);
+
+        const { error: audioStorageError } = await supabaseAdmin.storage
+          .from("audio")
+          .remove([audioFileName]);
+
+        if (audioStorageError) {
+          logger.log(`⚠️ Warning: Could not delete audio file: ${audioStorageError.message}`);
+        } else {
+          logger.log(`✅ Audio file deleted: ${audioFileName}`);
+        }
+      } catch (audioErr) {
+        logger.log(`⚠️ Warning: Error deleting audio: ${audioErr instanceof Error ? audioErr.message : 'Unknown'}`);
+      }
+    }
+
+    // 3️⃣ Delete image file from storage
+    if (sceneData?.image_url) {
+      try {
+        const imagePath = sceneData.image_url.split("/images/")[1];
+        if (imagePath) {
+          logger.log(`🖼️ Deleting image file: ${imagePath}`);
+
+          const { error: imageStorageError } = await supabaseAdmin.storage
+            .from("images")
+            .remove([imagePath]);
+
+          if (imageStorageError) {
+            logger.log(`⚠️ Warning: Could not delete image file: ${imageStorageError.message}`);
+          } else {
+            logger.log(`✅ Image file deleted: ${imagePath}`);
+          }
+        }
+      } catch (imageErr) {
+        logger.log(`⚠️ Warning: Error deleting image: ${imageErr instanceof Error ? imageErr.message : 'Unknown'}`);
+      }
     }
 
     // Delete associated images from database

@@ -92,21 +92,29 @@ ${characterInfo}
 - Character must be visually identical across all images
 ` : "";
 
-    // 4️⃣ Build prompt
+    // 4️⃣ Build prompt - requesting multiple separate images in one call for consistency
     const prompt = `
-You are a cinematic illustrator. Generate exactly ${scenes.length} distinct images — 
-one per scene — for the following story.
+You are a cinematic illustrator. Generate exactly ${scenes.length} separate, distinct images.
 
-Each image should represent the visual description of that scene,
+CRITICAL INSTRUCTIONS:
+- Generate EXACTLY ${scenes.length} SEPARATE IMAGES (one image per scene)
+- Each image should be ONE STANDALONE IMAGE (not multiple panels, not a comic strip, not a storyboard)
+- DO NOT combine multiple scenes into one image
+- DO NOT create split-screen or multi-panel layouts
+- Each image represents only ONE scene
+
+Each image should represent the visual description of that specific scene,
 while keeping characters, art style, environment, and lighting consistent throughout all images.
 
 Style: ${finalStyle}.
 ${extraNotes}
 
-Scenes:
+${characterConsistencyNote}
+
+Scenes (generate ONE separate image for each):
 ${scenes.map((s, i) => `${i + 1}. ${s.text}`).join("\n\n")}
 
-Return multiple images (one for each scene, in the same order).
+IMPORTANT: Return ${scenes.length} separate images (one for each scene, in the same order). Each image should be a standalone image, not multiple scenes combined.
 Each image must correspond to the matching numbered scene.
 `;
 
@@ -184,7 +192,12 @@ Each image must correspond to the matching numbered scene.
         
       if (updateErr) throw updateErr;
       
-      uploads.push({ scene_id: scenes[i].id, scene_order: i + 1, image_url: publicUrl });
+      uploads.push({
+        id: scenes[i].id,
+        scene_id: scenes[i].id,
+        scene_order: i + 1,
+        image_url: publicUrl
+      });
       logger.log(`✅ Updated scene ${i + 1} with image → ${publicUrl}`);
     }
 

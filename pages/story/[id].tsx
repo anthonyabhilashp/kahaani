@@ -1,17 +1,27 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/router";
 import { Button } from "../../components/ui/button";
-import { Card } from "../../components/ui/card";
-import { ArrowLeft, Play, Pause, Download, Volume2, VolumeX, ChevronDown, Maximize, Loader2, ImageIcon, Image, Edit2, Trash2, Save, X, Check } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "../../components/ui/popover";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../components/ui/alert-dialog";
+import { Slider } from "../../components/ui/slider";
+import { ArrowLeft, Play, Pause, Download, Volume2, VolumeX, Maximize, Loader2, ImageIcon, Image, Pencil, Trash2, Check, X, PlayCircle, ChevronDown, Plus, Type } from "lucide-react";
+import { WordByWordCaption, SimpleCaption, type WordTimestamp } from "../../components/WordByWordCaption";
 
-type Scene = { 
-  id?: string; 
-  text: string; 
+type Scene = {
+  id?: string;
+  text: string;
   order: number;
   image_url?: string;
   audio_url?: string;
+  voice_id?: string;
+  duration?: number;
+  word_timestamps?: WordTimestamp[] | null;
 };
-type Video = { video_url: string };
+type Video = {
+  video_url: string;
+  is_valid?: boolean;
+  duration?: number;
+};
 
 // Placeholder component for missing images
 const ImagePlaceholder = ({ className = "", alt = "No image" }: { className?: string; alt?: string }) => (
@@ -20,29 +30,6 @@ const ImagePlaceholder = ({ className = "", alt = "No image" }: { className?: st
     <span className="text-[8px] mt-1 font-medium">No Image</span>
   </div>
 );
-
-// Video component that handles different aspect ratios
-const VideoPlayer = ({ src, className }: { src: string; className?: string }) => {
-  return (
-    <video
-      key={src}
-      src={src}
-      controls
-      className={`rounded-xl shadow-2xl border-2 border-white/20 ${className || ''}`}
-      style={{ 
-        maxWidth: '480px', 
-        maxHeight: '480px',
-        width: 'auto',
-        height: 'auto'
-      }}
-      onLoadedMetadata={(e) => {
-        const video = e.target as HTMLVideoElement;
-        console.log(`Video dimensions: ${video.videoWidth}x${video.videoHeight}`);
-        console.log(`Aspect ratio: ${(video.videoWidth / video.videoHeight).toFixed(2)}`);
-      }}
-    />
-  );
-};
 
 export default function StoryDetailsPage() {
   const router = useRouter();
@@ -54,7 +41,10 @@ export default function StoryDetailsPage() {
   const [selectedScene, setSelectedScene] = useState(0);
   const [loading, setLoading] = useState(true);
   const [generatingImages, setGeneratingImages] = useState(false);
+  const [generatingSceneImage, setGeneratingSceneImage] = useState<Set<number>>(new Set());
   const [generatingSceneAudio, setGeneratingSceneAudio] = useState<Set<number>>(new Set());
+  const [generatingVideo, setGeneratingVideo] = useState(false);
+  const [imageStyle, setImageStyle] = useState<string>("cinematic illustration");
   const [editingScene, setEditingScene] = useState<number | null>(null);
   const [editText, setEditText] = useState("");
   const [modifiedScenes, setModifiedScenes] = useState<Set<number>>(new Set());
@@ -67,32 +57,132 @@ export default function StoryDetailsPage() {
   const [mediaPreloaded, setMediaPreloaded] = useState(false);
   const [preloadedAudio, setPreloadedAudio] = useState<{[key: number]: HTMLAudioElement}>({});
   const [aspectRatio, setAspectRatio] = useState<"9:16" | "16:9" | "1:1">("9:16");
-  
+  const [sceneProgress, setSceneProgress] = useState(0); // Current scene progress (0 to scene duration)
+  const [sceneDuration, setSceneDuration] = useState(0); // Current scene's audio duration
+  const [totalProgress, setTotalProgress] = useState(0); // Cumulative progress across all scenes
+  const [isSeeking, setIsSeeking] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0); // Current playback time for word-by-word captions
+  const progressIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const currentAudioRef = useRef<HTMLAudioElement | null>(null); // Track currently playing audio
+
+  // Helper function to calculate total video duration
+  const getTotalDuration = () => {
+    return scenes.reduce((sum, scene) => sum + (scene.duration || 0), 0);
+  };
+
+  // Helper function to get scene start times (cumulative)
+  const getSceneStartTimes = () => {
+    const startTimes: number[] = [];
+    let cumulative = 0;
+    scenes.forEach((scene) => {
+      startTimes.push(cumulative);
+      cumulative += scene.duration || 0;
+    });
+    return startTimes;
+  };
+
+  // Helper function to find which scene a given time belongs to
+  const getSceneAtTime = (time: number): { sceneIndex: number; sceneTime: number } => {
+    const startTimes = getSceneStartTimes();
+    for (let i = 0; i < scenes.length; i++) {
+      const start = startTimes[i];
+      const end = start + (scenes[i].duration || 0);
+      if (time >= start && time < end) {
+        return { sceneIndex: i, sceneTime: time - start };
+      }
+    }
+    // If past end, return last scene
+    const lastIndex = scenes.length - 1;
+    return { sceneIndex: lastIndex, sceneTime: scenes[lastIndex]?.duration || 0 };
+  };
+
+  // Audio drawer state
+  const [audioDrawerOpen, setAudioDrawerOpen] = useState(false);
+  const [audioDrawerScene, setAudioDrawerScene] = useState<number | null>(null);
+  const [selectedVoiceId, setSelectedVoiceId] = useState<string>("21m00Tcm4TlvDq8ikWAM"); // Default voice
+  const [voices, setVoices] = useState<Array<{id: string; name: string; preview_url?: string}>>([]);
+  const [loadingVoices, setLoadingVoices] = useState(false);
+  const [playingPreviewId, setPlayingPreviewId] = useState<string | null>(null);
+  const voicePreviewAudioRef = useRef<HTMLAudioElement | null>(null);
+  const voiceListRef = useRef<HTMLDivElement | null>(null);
+
+  // Image drawer state
+  const [imageDrawerOpen, setImageDrawerOpen] = useState(false);
+  const [imageDrawerScene, setImageDrawerScene] = useState<number | null>(null);
+  const [selectedImageStyle, setSelectedImageStyle] = useState<string>("cinematic illustration");
+  const [imageInstructions, setImageInstructions] = useState<string>("");
+  const [bulkImageDrawerOpen, setBulkImageDrawerOpen] = useState(false);
+  const [storyVoicePopoverOpen, setStoryVoicePopoverOpen] = useState(false);
+  const [voiceUpdateConfirmOpen, setVoiceUpdateConfirmOpen] = useState(false);
+  const [pendingVoiceId, setPendingVoiceId] = useState<string>("");
+  const [pendingVoiceName, setPendingVoiceName] = useState("");
+  const [aspectRatioPopoverOpen, setAspectRatioPopoverOpen] = useState(false);
+  const [addSceneDialogOpen, setAddSceneDialogOpen] = useState(false);
+  const [addScenePosition, setAddScenePosition] = useState<number | null>(null);
+  const [newSceneText, setNewSceneText] = useState("");
+  const [addingScene, setAddingScene] = useState(false);
+  const [captionsDrawerOpen, setCaptionsDrawerOpen] = useState(false);
+  const [captionsEnabled, setCaptionsEnabled] = useState(true);
+  const [captionPositionFromBottom, setCaptionPositionFromBottom] = useState(20); // Default 20% from bottom (0-100 range)
+  const [captionFontSize, setCaptionFontSize] = useState(20); // Good default for readability
+  const [captionFontWeight, setCaptionFontWeight] = useState(700); // Bold by default
+  const [captionFontFamily, setCaptionFontFamily] = useState("Montserrat"); // Default font
+  const [captionActiveColor, setCaptionActiveColor] = useState("#FFEB3B"); // Yellow highlight
+  const [captionInactiveColor, setCaptionInactiveColor] = useState("#FFFFFF"); // White
+  const [captionWordsPerBatch, setCaptionWordsPerBatch] = useState(3); // Default 3 words at a time
+  const [captionTextTransform, setCaptionTextTransform] = useState<"none" | "uppercase" | "lowercase" | "capitalize">("none");
+  const [leftPanelView, setLeftPanelView] = useState<"scenes" | "captions">("scenes");
+
   // Use ref for immediate cancellation without state delays
   const previewCancelledRef = useRef(false);
   const currentPreviewRef = useRef<Promise<void> | null>(null);
+  const volumeRef = useRef(volume); // Track current volume with ref
+
+  // Keep volumeRef in sync with volume state
+  useEffect(() => {
+    volumeRef.current = volume;
+  }, [volume]);
+
+  // Scroll to selected voice when drawer opens
+  useEffect(() => {
+    if (audioDrawerOpen && voiceListRef.current && selectedVoiceId) {
+      // Small delay to ensure DOM is rendered
+      setTimeout(() => {
+        const selectedElement = voiceListRef.current?.querySelector(`[data-voice-id="${selectedVoiceId}"]`);
+        if (selectedElement) {
+          selectedElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      }, 100);
+    }
+  }, [audioDrawerOpen, selectedVoiceId]);
+
+  // Stop audio when navigating away or unmounting
+  useEffect(() => {
+    return () => {
+      console.log("🧹 Cleaning up: stopping all audio on unmount");
+      stopVideoPreview();
+    };
+  }, []);
 
   // Update volume for all preloaded audio when volume changes
   useEffect(() => {
+    console.log(`🔊 Updating volume to ${volume} for ${Object.keys(preloadedAudio).length} audio elements`);
     Object.values(preloadedAudio).forEach(audio => {
       audio.volume = volume;
     });
   }, [volume, preloadedAudio]);
 
-  // Get preview dimensions based on aspect ratio - MUCH LARGER
+  // Get preview dimensions based on aspect ratio - Smaller for cleaner look
   const getPreviewDimensions = () => {
-    const maxWidth = 600; // Significantly increased from 400
-    const maxHeight = 680; // Significantly increased from 450
-    
     switch (aspectRatio) {
       case "9:16": // Portrait (mobile/vertical)
-        return { width: Math.min(maxWidth * 0.75, 450), height: Math.min(maxHeight, 800) };
+        return { width: 280, height: 498 }; // 9:16 ratio, compact
       case "16:9": // Landscape (desktop/horizontal)
-        return { width: maxWidth, height: Math.min(maxHeight * 0.56, 340) };
+        return { width: 498, height: 280 }; // 16:9 ratio, compact
       case "1:1": // Square
-        return { width: Math.min(maxWidth * 0.85, 510), height: Math.min(maxHeight * 0.75, 510) };
+        return { width: 400, height: 400 }; // 1:1 ratio, compact
       default:
-        return { width: 600, height: 450 };
+        return { width: 400, height: 400 };
     }
   };
 
@@ -121,6 +211,7 @@ export default function StoryDetailsPage() {
           return new Promise((resolve) => {
             const actualIndex = scenes.findIndex(s => s === scene);
             const audioElement = new Audio(scene.audio_url!);
+            audioElement.volume = volume; // Set initial volume
             audioElement.oncanplaythrough = () => {
               audioCache[actualIndex] = audioElement;
               resolve(void 0);
@@ -154,11 +245,24 @@ export default function StoryDetailsPage() {
       const res = await fetch(`/api/get_story_details?id=${id}`);
       const data = await res.json();
       console.log("📊 Story data received:", data);
-      
+
+      // Add cache-busting timestamp to all images and audio to force browser to reload
+      const timestamp = Date.now();
+      const scenesWithTimestamp = (data.scenes || []).map((scene: any) => ({
+        ...scene,
+        image_url: scene.image_url ? `${scene.image_url}?t=${timestamp}` : scene.image_url,
+        audio_url: scene.audio_url ? `${scene.audio_url}?t=${timestamp}` : scene.audio_url
+      }));
+
       setStory(data.story);
-      setScenes(data.scenes || []);
+      setScenes(scenesWithTimestamp);
       setVideo(data.video);
-      
+
+      // Load voices if not already loaded (for story voice selector)
+      if (voices.length === 0) {
+        fetchVoices();
+      }
+
       // Preload media assets after setting state - only if not already preloaded
       if (data.scenes?.length > 0 && !mediaPreloaded) {
         preloadMedia(data.scenes);
@@ -169,14 +273,17 @@ export default function StoryDetailsPage() {
     } finally {
       setLoading(false);
     }
-  }, [id, preloadMedia, mediaPreloaded]);
+  }, [id]); // Removed preloadMedia and mediaPreloaded to prevent multiple fetches
 
   // Fetch story only once when component mounts or id changes
   useEffect(() => {
     if (id) {
       fetchStory();
     }
-  }, [fetchStory]); // Now properly depend on fetchStory
+  }, [id, fetchStory]); // fetchStory is now stable since we removed changing deps
+
+  // Video validity is now checked automatically via the is_valid flag
+  // No need for manual hash checking - database trigger handles it
 
   // Debug state changes
   useEffect(() => {
@@ -190,15 +297,21 @@ export default function StoryDetailsPage() {
     });
   }, [scenes.length, video?.video_url, generatingImages, generatingSceneAudio, scenes]);
 
-  const generateImages = async () => {
+  const generateImages = async (style?: string, instructions?: string) => {
     if (!id) return;
     setGeneratingImages(true);
+    setBulkImageDrawerOpen(false); // Close drawer when generation starts
+
     try {
       console.log("Starting image generation for story:", id);
       const res = await fetch("/api/generate_images", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ story_id: id }),
+        body: JSON.stringify({
+          story_id: id,
+          style: style || selectedImageStyle || imageStyle,
+          instructions: instructions || imageInstructions
+        }),
       });
       if (!res.ok) {
         const errorData = await res.json();
@@ -206,15 +319,22 @@ export default function StoryDetailsPage() {
       }
       const result = await res.json();
       console.log("✅ Image generation completed:", result);
-      
-      // Instead of full refresh, just update images without losing audio cache
-      const res2 = await fetch(`/api/get_story_details?id=${id}`);
-      const data = await res2.json();
-      
-      // Update scenes while preserving existing audio cache
-      const updatedScenes = data.scenes || [];
+
+      // Update scenes with new images, using cache-busting timestamp
+      const timestamp = Date.now();
+      const updatedScenes = scenes.map((scene) => {
+        // Find the matching updated scene from API response
+        const updatedScene = result.updated_scenes?.find((s: any) => s.id === scene.id);
+        if (updatedScene && updatedScene.image_url) {
+          return {
+            ...scene,
+            image_url: `${updatedScene.image_url}?t=${timestamp}`
+          };
+        }
+        return scene;
+      });
       setScenes(updatedScenes);
-      
+
       // Don't reset media preload state or re-preload audio
     } catch (err) {
       console.error("Image generation error:", err);
@@ -224,20 +344,202 @@ export default function StoryDetailsPage() {
     }
   };
 
-  const generateSceneAudio = async (sceneIndex: number) => {
+  const generateSceneImage = async (sceneIndex: number, style?: string, instructions?: string) => {
     if (!scenes[sceneIndex]) return;
-    
+
+    const newGenerating = new Set(generatingSceneImage);
+    newGenerating.add(sceneIndex);
+    setGeneratingSceneImage(newGenerating);
+
+    // Close the drawer when generation starts
+    setImageDrawerOpen(false);
+
+    try {
+      console.log("Starting image generation for scene:", sceneIndex);
+      const res = await fetch("/api/generate_scene_image", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          scene_id: scenes[sceneIndex].id,
+          style: style || selectedImageStyle || imageStyle,
+          instructions: instructions || imageInstructions
+        }),
+      });
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || "Scene image generation failed");
+      }
+      const result = await res.json();
+      console.log("Scene image generation completed:", result);
+
+      // Update the specific scene with the new image URL
+      // Add cache-busting timestamp to force browser to reload the image
+      const imageUrlWithTimestamp = result.image_url ? `${result.image_url}?t=${Date.now()}` : result.image_url;
+      console.log("🔄 Updating scene", sceneIndex, "with cache-busted URL:", imageUrlWithTimestamp);
+      const updatedScenes = [...scenes];
+      updatedScenes[sceneIndex] = {
+        ...updatedScenes[sceneIndex],
+        image_url: imageUrlWithTimestamp
+      };
+      setScenes(updatedScenes);
+      console.log("✅ Scenes state updated, thumbnail should refresh now");
+
+    } catch (err) {
+      console.error("Scene image generation error:", err);
+      alert(`Image generation failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      const newGenerating = new Set(generatingSceneImage);
+      newGenerating.delete(sceneIndex);
+      setGeneratingSceneImage(newGenerating);
+    }
+  };
+
+  // Fetch ElevenLabs voices
+  const fetchVoices = async () => {
+    setLoadingVoices(true);
+    try {
+      const res = await fetch("/api/get_voices");
+      const data = await res.json();
+      setVoices(data.voices || []);
+    } catch (error) {
+      console.error("Error fetching voices:", error);
+    } finally {
+      setLoadingVoices(false);
+    }
+  };
+
+  // Open audio drawer
+  const openAudioDrawer = (sceneIndex: number) => {
+    setAudioDrawerScene(sceneIndex);
+
+    // Voice selection hierarchy:
+    // 1. Scene-specific voice_id (if set and valid - must be a valid ElevenLabs voice ID format)
+    // 2. Story default voice_id
+    // 3. Global default voice_id
+    const scene = scenes[sceneIndex];
+
+    // Check if scene has a valid voice_id (should be alphanumeric, not "text" or other invalid values)
+    const isValidVoiceId = (voiceId: string | undefined) => {
+      if (!voiceId) return false;
+      // Valid ElevenLabs voice IDs are typically alphanumeric strings of reasonable length
+      // Filter out invalid values like "text", empty strings, etc.
+      return voiceId.length > 10 && /^[a-zA-Z0-9]+$/.test(voiceId);
+    };
+
+    const sceneVoiceId = isValidVoiceId(scene?.voice_id) ? scene.voice_id : null;
+    const voiceToUse = sceneVoiceId || story?.voice_id || "21m00Tcm4TlvDq8ikWAM";
+
+    console.log("🎤 Opening audio drawer for scene", sceneIndex);
+    console.log("🎤 Scene voice_id:", scene?.voice_id, "Valid:", isValidVoiceId(scene?.voice_id));
+    console.log("🎤 Story voice_id:", story?.voice_id);
+    console.log("🎤 Voice to use:", voiceToUse);
+
+    setSelectedVoiceId(voiceToUse);
+
+    setAudioDrawerOpen(true);
+    if (voices.length === 0) {
+      fetchVoices();
+    }
+  };
+
+  // Open image drawer
+  const openImageDrawer = (sceneIndex: number) => {
+    setImageDrawerScene(sceneIndex);
+
+    // Style selection hierarchy:
+    // 1. Scene-specific style (not implemented yet)
+    // 2. Story default style
+    // 3. Global default style
+    const styleToUse = story?.default_image_style || "cinematic illustration";
+    setSelectedImageStyle(styleToUse);
+
+    // Load story's default instructions if available
+    setImageInstructions(story?.image_instructions || "");
+
+    setImageDrawerOpen(true);
+  };
+
+  // Open voice update confirmation dialog
+  const openVoiceUpdateConfirm = (voiceId: string) => {
+    const voiceName = voices.find(v => v.id === voiceId)?.name || "Unknown Voice";
+    setPendingVoiceId(voiceId);
+    setPendingVoiceName(voiceName);
+    setStoryVoicePopoverOpen(false);
+    setVoiceUpdateConfirmOpen(true);
+  };
+
+  // Update story voice (called after confirmation)
+  const updateStoryVoice = async () => {
+    try {
+      const res = await fetch("/api/update_story_voice", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          story_id: id,
+          voice_id: pendingVoiceId
+        }),
+      });
+
+      if (res.ok) {
+        setStory({ ...story, voice_id: pendingVoiceId });
+        setVoiceUpdateConfirmOpen(false);
+        console.log(`✅ Updated story default voice to: ${pendingVoiceId}`);
+      } else {
+        alert("Failed to update voice. Please try again.");
+      }
+    } catch (error) {
+      console.error("Error updating story voice:", error);
+      alert("Failed to update voice. Please try again.");
+    }
+  };
+
+  // Play voice preview
+  const playVoicePreview = (voiceId: string, previewUrl?: string) => {
+    if (!previewUrl) return;
+
+    // Stop any currently playing preview
+    if (voicePreviewAudioRef.current) {
+      voicePreviewAudioRef.current.pause();
+      voicePreviewAudioRef.current = null;
+    }
+
+    // If clicking the same voice, just stop
+    if (playingPreviewId === voiceId) {
+      setPlayingPreviewId(null);
+      return;
+    }
+
+    // Play new preview
+    const audio = new Audio(previewUrl);
+    voicePreviewAudioRef.current = audio;
+    setPlayingPreviewId(voiceId);
+
+    audio.play();
+    audio.onended = () => {
+      setPlayingPreviewId(null);
+      voicePreviewAudioRef.current = null;
+    };
+    audio.onerror = () => {
+      setPlayingPreviewId(null);
+      voicePreviewAudioRef.current = null;
+    };
+  };
+
+  const generateSceneAudio = async (sceneIndex: number, voiceId?: string) => {
+    if (!scenes[sceneIndex]) return;
+
     const newGenerating = new Set(generatingSceneAudio);
     newGenerating.add(sceneIndex);
     setGeneratingSceneAudio(newGenerating);
-    
+
     try {
-      console.log("Starting audio generation for scene:", sceneIndex);
+      console.log("Starting audio generation for scene:", sceneIndex, "with voice:", voiceId || selectedVoiceId);
       const res = await fetch("/api/generate_audio", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
-          scene_id: scenes[sceneIndex].id
+        body: JSON.stringify({
+          scene_id: scenes[sceneIndex].id,
+          voice_id: voiceId || selectedVoiceId
         }),
       });
       if (!res.ok) {
@@ -246,28 +548,35 @@ export default function StoryDetailsPage() {
       }
       const result = await res.json();
       console.log("Scene audio generation completed:", result);
-      
-      // Update the specific scene with the new audio URL
+
+      // Update the specific scene with the new audio URL, voice_id, duration, and word_timestamps
+      // Add cache-busting timestamp to force browser to reload the audio
+      const audioUrlWithTimestamp = result.audio_url ? `${result.audio_url}?t=${Date.now()}` : result.audio_url;
       const updatedScenes = [...scenes];
       updatedScenes[sceneIndex] = {
         ...updatedScenes[sceneIndex],
-        audio_url: result.audio_url
+        audio_url: audioUrlWithTimestamp,
+        voice_id: result.voice_id || voiceId || selectedVoiceId,
+        duration: result.duration,
+        word_timestamps: result.word_timestamps || null
       };
       setScenes(updatedScenes);
-      
-      // Update preloaded audio cache with new audio
+
+      // Update preloaded audio cache with new audio (add cache buster to force reload)
       if (result.audio_url) {
-        const audioElement = new Audio(result.audio_url);
+        const cacheBustedUrl = `${result.audio_url}?t=${Date.now()}`;
+        const audioElement = new Audio(cacheBustedUrl);
         audioElement.preload = 'metadata';
         audioElement.oncanplaythrough = () => {
           setPreloadedAudio(prev => ({
             ...prev,
             [sceneIndex]: audioElement
           }));
-          console.log(`✅ New audio preloaded for scene ${sceneIndex + 1}`);
+          console.log(`✅ New audio preloaded for scene ${sceneIndex + 1} with cache-busted URL`);
         };
+        audioElement.load(); // Force load the new audio
       }
-      
+
     } catch (err) {
       console.error("Scene audio generation error:", err);
       alert(`Scene audio generation failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
@@ -278,77 +587,290 @@ export default function StoryDetailsPage() {
     }
   };
 
+  const generateVideo = async () => {
+    if (!id) return;
+    setGeneratingVideo(true);
+    try {
+      console.log("🎬 Starting video export for story:", id, "with aspect ratio:", aspectRatio);
+      const res = await fetch("/api/generate_video", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          story_id: id,
+          aspect_ratio: aspectRatio,
+          captions: captionsEnabled ? {
+            enabled: true,
+            fontFamily: captionFontFamily,
+            fontSize: captionFontSize,
+            fontWeight: captionFontWeight,
+            positionFromBottom: captionPositionFromBottom,
+            activeColor: captionActiveColor,
+            inactiveColor: captionInactiveColor,
+            wordsPerBatch: captionWordsPerBatch,
+            textTransform: captionTextTransform
+          } : { enabled: false }
+        }),
+      });
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || "Video generation failed");
+      }
+      const result = await res.json();
+      console.log("✅ Video export completed:", result);
+
+      // Update video state
+      setVideo({
+        video_url: result.video_url,
+        is_valid: result.is_valid,
+        duration: result.duration
+      });
+
+      // Auto-download the video
+      const link = document.createElement('a');
+      link.href = result.video_url;
+      link.download = `${story?.title || 'story'}-${aspectRatio}.mp4`;
+      link.click();
+
+      alert(`✅ Video exported successfully! Duration: ${result.duration?.toFixed(1)}s`);
+    } catch (err) {
+      console.error("❌ Video export error:", err);
+      alert(`Video export failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      setGeneratingVideo(false);
+    }
+  };
+
   const stopVideoPreview = () => {
     console.log("🛑 Stopping video preview");
-    previewCancelledRef.current = true; // Signal all running previews to stop immediately
+    previewCancelledRef.current = true;
     setIsPlayingPreview(false);
-    
+    setIsSeeking(false);
+
     // Stop preloaded audio elements
     Object.values(preloadedAudio).forEach(audio => {
       audio.pause();
       audio.currentTime = 0;
     });
-    
+
     // Also stop any other audio elements as fallback
     const audios = document.querySelectorAll('audio');
     audios.forEach(audio => {
       audio.pause();
       audio.currentTime = 0;
     });
+
+    // Clear progress tracking
+    if (progressIntervalRef.current) {
+      clearInterval(progressIntervalRef.current);
+      progressIntervalRef.current = null;
+    }
+    setSceneProgress(0);
+    setSceneDuration(0);
+    setCurrentTime(0);
+    currentAudioRef.current = null;
+  };
+
+  // Seek to a specific time in the total video timeline
+  const seekToTotalTime = async (targetTotalTime: number) => {
+    console.log(`⏩ Seeking to ${targetTotalTime.toFixed(1)}s in total timeline`);
+    setIsSeeking(true);
+
+    // Find which scene this time belongs to
+    const { sceneIndex, sceneTime } = getSceneAtTime(targetTotalTime);
+
+    console.log(`📍 Time ${targetTotalTime.toFixed(1)}s is in scene ${sceneIndex + 1} at ${sceneTime.toFixed(1)}s`);
+
+    // If we're in a different scene, stop current and switch
+    if (sceneIndex !== selectedScene) {
+      const wasPlaying = isPlayingPreview;
+
+      // Stop current playback
+      if (currentAudioRef.current) {
+        currentAudioRef.current.pause();
+        currentAudioRef.current.currentTime = 0;
+      }
+      if (progressIntervalRef.current) {
+        clearInterval(progressIntervalRef.current);
+      }
+
+      // Switch to target scene
+      setSelectedScene(sceneIndex);
+
+      // Wait a moment for state to update
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      // If was playing, resume from new position
+      if (wasPlaying && preloadedAudio[sceneIndex]) {
+        const audio = preloadedAudio[sceneIndex];
+        audio.currentTime = sceneTime;
+        audio.volume = volume;
+        currentAudioRef.current = audio;
+
+        const sceneStartTimes = getSceneStartTimes();
+        const cumulativeStart = sceneStartTimes[sceneIndex];
+
+        setSceneDuration(audio.duration);
+        setSceneProgress(sceneTime);
+        setTotalProgress(cumulativeStart + sceneTime);
+
+        // Start progress tracking
+        progressIntervalRef.current = setInterval(() => {
+          if (audio && !audio.paused) {
+            const currentSceneTime = audio.currentTime;
+            setSceneProgress(currentSceneTime);
+            setTotalProgress(cumulativeStart + currentSceneTime);
+          }
+        }, 100);
+
+        await audio.play();
+      }
+    } else {
+      // Same scene, just seek within it
+      if (currentAudioRef.current) {
+        const audio = currentAudioRef.current;
+        const wasPlaying = !audio.paused;
+
+        audio.pause();
+        audio.currentTime = sceneTime;
+        setSceneProgress(sceneTime);
+        setTotalProgress(targetTotalTime);
+
+        if (wasPlaying) {
+          try {
+            await audio.play();
+          } catch (err) {
+            console.error("Resume play error:", err);
+          }
+        }
+      }
+    }
+
+    setIsSeeking(false);
+  };
+
+  // Legacy function for seeking within current scene (kept for compatibility)
+  const seekToTime = async (targetTime: number) => {
+    if (!currentAudioRef.current) return;
+
+    console.log(`⏩ Seeking to ${targetTime.toFixed(1)}s in current scene`);
+    setIsSeeking(true);
+
+    const audio = currentAudioRef.current;
+    const wasPlaying = !audio.paused;
+
+    audio.pause();
+    audio.currentTime = targetTime;
+    setSceneProgress(targetTime);
+
+    // Also update total progress
+    const sceneStartTimes = getSceneStartTimes();
+    const cumulativeStart = sceneStartTimes[selectedScene];
+    setTotalProgress(cumulativeStart + targetTime);
+
+    if (wasPlaying) {
+      try {
+        await audio.play();
+      } catch (err) {
+        console.error("Resume play error:", err);
+      }
+    }
+
+    setIsSeeking(false);
   };
 
   const startVideoPreview = async () => {
     console.log("🎬 Starting video preview from scene:", selectedScene);
-    
+
     // Stop any existing preview first
     stopVideoPreview();
-    
+
     // Wait for cleanup
     await new Promise(resolve => setTimeout(resolve, 50));
-    
+
+    // Reset progress
+    setSceneProgress(0);
+
     // Reset cancellation flag and start new preview
     previewCancelledRef.current = false;
     setIsPlayingPreview(true);
     
     const playScene = async (sceneIndex: number) => {
       if (previewCancelledRef.current) return false;
-      
+
       console.log(`🎬 Playing scene ${sceneIndex + 1}`);
       setSelectedScene(sceneIndex);
-      
+
       const scene = scenes[sceneIndex];
       if (scene?.audio_url && preloadedAudio[sceneIndex]) {
-        console.log(`🔊 Playing preloaded audio for scene ${sceneIndex + 1}`);
+        const currentVol = volumeRef.current;
+        console.log(`🔊 Playing preloaded audio for scene ${sceneIndex + 1} with volume ${currentVol}`);
         const audio = preloadedAudio[sceneIndex];
-        audio.volume = volume;
+        audio.volume = currentVol;
         audio.currentTime = 0;
-        
+        console.log(`🎵 Audio element volume set to: ${audio.volume}, muted: ${audio.muted}`);
+
+        // Set scene duration and reset progress
+        setSceneDuration(audio.duration);
+        setSceneProgress(0);
+        currentAudioRef.current = audio;
+
+        // Calculate cumulative start time for this scene
+        const sceneStartTimes = getSceneStartTimes();
+        const cumulativeStart = sceneStartTimes[sceneIndex];
+
         try {
+          // Start progress tracking for this scene
+          progressIntervalRef.current = setInterval(() => {
+            if (audio && !audio.paused) {
+              const currentSceneTime = audio.currentTime;
+              setSceneProgress(currentSceneTime);
+              // Update total progress (cumulative time across all scenes)
+              setTotalProgress(cumulativeStart + currentSceneTime);
+              // Update current time for word-by-word captions
+              setCurrentTime(currentSceneTime);
+            }
+          }, 100);
+
           await audio.play();
           await new Promise<void>((resolve) => {
             const checkCancellation = () => {
               if (previewCancelledRef.current) {
                 audio.pause();
+                if (progressIntervalRef.current) {
+                  clearInterval(progressIntervalRef.current);
+                }
                 resolve();
                 return;
               }
               setTimeout(checkCancellation, 100);
             };
-            
-            audio.onended = () => resolve();
-            audio.onerror = () => resolve();
-            setTimeout(() => {
-              audio.pause();
+
+            audio.onended = () => {
+              if (progressIntervalRef.current) {
+                clearInterval(progressIntervalRef.current);
+              }
+              setSceneProgress(0); // Reset for next scene
+              setCurrentTime(0); // Reset caption time
               resolve();
-            }, 10000); // Max 10 seconds
-            
+            };
+            audio.onerror = () => {
+              if (progressIntervalRef.current) {
+                clearInterval(progressIntervalRef.current);
+              }
+              resolve();
+            };
+
             checkCancellation();
           });
         } catch (err) {
           console.error("Audio play error:", err);
+          if (progressIntervalRef.current) {
+            clearInterval(progressIntervalRef.current);
+          }
           // Fallback timing with cancellation check
           for (let i = 0; i < 30 && !previewCancelledRef.current; i++) {
             await new Promise(resolve => setTimeout(resolve, 100));
+            setSceneProgress((i + 1) * 0.1);
           }
         }
       } else {
@@ -471,6 +993,49 @@ export default function StoryDetailsPage() {
     }
   };
 
+  const handleAddScene = async () => {
+    if (!newSceneText.trim() || addScenePosition === null || !id) return;
+
+    setAddingScene(true);
+    try {
+      const res = await fetch("/api/add_scene", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          story_id: id,
+          scene_text: newSceneText.trim(),
+          position: addScenePosition // 0 = before first scene, 1 = after first scene, etc.
+        }),
+      });
+
+      if (!res.ok) throw new Error("Failed to add scene");
+
+      const result = await res.json();
+
+      // Update local state with the updated scenes (includes cache-busting for existing media)
+      if (result.updated_scenes) {
+        const timestamp = Date.now();
+        const scenesWithTimestamp = result.updated_scenes.map((scene: any) => ({
+          ...scene,
+          image_url: scene.image_url ? `${scene.image_url}?t=${timestamp}` : scene.image_url,
+          audio_url: scene.audio_url ? `${scene.audio_url}?t=${timestamp}` : scene.audio_url
+        }));
+        setScenes(scenesWithTimestamp);
+      }
+
+      // Close dialog and reset state
+      setAddSceneDialogOpen(false);
+      setNewSceneText("");
+      setAddScenePosition(null);
+
+    } catch (err) {
+      console.error("Add scene error:", err);
+      alert(`Failed to add scene: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      setAddingScene(false);
+    }
+  };
+
   const startEditing = (sceneIndex: number) => {
     setEditingScene(sceneIndex);
     setEditText(scenes[sceneIndex]?.text || "");
@@ -493,544 +1058,1806 @@ export default function StoryDetailsPage() {
   }
 
   return (
-    <div className="flex flex-col h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100">
-      {/* Header - Compact */}
-      <header className="bg-white/80 backdrop-blur-sm border-b border-white/20 shadow-sm">
-        <div className="px-4 py-2">
-          <div className="flex items-center justify-between">
-            <div className="flex-1 min-w-0">
-              <h1 className="text-lg font-bold text-gray-900 truncate">
-                ✨ {story?.title || "Untitled Story"}
-              </h1>
-              <p className="text-gray-600 text-xs line-clamp-1 max-w-xl">
-                {story?.prompt}
-              </p>
-            </div>
+    <div className="flex flex-col h-screen bg-black">
+      {/* Top Header - Dark theme like StoryShort */}
+      <header className="bg-black border-b border-gray-800">
+        <div className="px-6 py-3 flex items-center justify-between">
+          <div className="flex items-center gap-4">
             <Button
-              variant="outline"
+              variant="ghost"
               size="sm"
               onClick={() => router.push("/")}
-              className="flex items-center gap-1 hover:bg-purple-50 hover:border-purple-200 ml-2"
+              className="text-gray-400 hover:text-white hover:bg-gray-800"
             >
-              <ArrowLeft className="w-3 h-3" />
-              <span className="hidden sm:inline">Back</span>
+              <ArrowLeft className="w-4 h-4 mr-1" />
+              Back to videos
+            </Button>
+            <h1 className="text-lg font-semibold text-white">
+              {story?.title || "Video Editor"}
+            </h1>
+          </div>
+
+          <div className="flex items-center gap-4">
+            {/* Story Default Voice Selector */}
+            <Popover open={storyVoicePopoverOpen} onOpenChange={setStoryVoicePopoverOpen}>
+              <PopoverTrigger asChild>
+                <Button
+                  variant="outline"
+                  className="bg-gray-800 border-gray-700 text-white hover:bg-gray-700 hover:text-white"
+                >
+                  <Volume2 className="w-4 h-4 mr-2" />
+                  {voices.find(v => v.id === (story?.voice_id || "21m00Tcm4TlvDq8ikWAM"))?.name || "Select Voice"}
+                  <ChevronDown className="w-4 h-4 ml-2 opacity-50" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-64 p-0 bg-gray-900 border-gray-700" align="start">
+                <div className="p-2">
+                  <div className="px-2 py-1.5 text-xs font-medium text-gray-400 mb-1">
+                    Story Default Voice
+                  </div>
+                  <div className="max-h-[300px] overflow-y-auto">
+                    {loadingVoices ? (
+                      <div className="flex items-center justify-center py-4">
+                        <Loader2 className="w-4 h-4 animate-spin text-purple-500" />
+                      </div>
+                    ) : voices.length > 0 ? (
+                      voices.map((voice) => (
+                        <button
+                          key={voice.id}
+                          onClick={() => openVoiceUpdateConfirm(voice.id)}
+                          className={`w-full flex items-center justify-between px-3 py-2 text-sm rounded-md transition-colors ${
+                            (story?.voice_id || "21m00Tcm4TlvDq8ikWAM") === voice.id
+                              ? "bg-purple-900/30 text-white"
+                              : "text-gray-300 hover:bg-gray-800"
+                          }`}
+                        >
+                          <span>{voice.name}</span>
+                          {(story?.voice_id || "21m00Tcm4TlvDq8ikWAM") === voice.id && (
+                            <Check className="w-4 h-4 text-purple-400" />
+                          )}
+                        </button>
+                      ))
+                    ) : (
+                      <div className="px-3 py-2 text-sm text-gray-500">No voices available</div>
+                    )}
+                  </div>
+                </div>
+              </PopoverContent>
+            </Popover>
+
+            {/* Voice Update Confirmation Dialog */}
+            <AlertDialog open={voiceUpdateConfirmOpen} onOpenChange={setVoiceUpdateConfirmOpen}>
+              <AlertDialogContent className="bg-gray-900 border-gray-700 text-white">
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Update Story Default Voice?</AlertDialogTitle>
+                  <AlertDialogDescription className="text-gray-400">
+                    Change story default voice to <span className="font-semibold text-purple-400">{pendingVoiceName}</span>?
+                    <br /><br />
+                    All new scenes will use this voice by default. Existing scenes will keep their current voice unless regenerated.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel className="bg-gray-800 border-gray-700 text-white hover:bg-gray-700 hover:text-white">
+                    Cancel
+                  </AlertDialogCancel>
+                  <AlertDialogAction
+                    onClick={updateStoryVoice}
+                    className="bg-purple-600 hover:bg-purple-700 text-white"
+                  >
+                    Update Voice
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+
+            {/* Aspect Ratio Selector */}
+            <Popover open={aspectRatioPopoverOpen} onOpenChange={setAspectRatioPopoverOpen}>
+              <PopoverTrigger asChild>
+                <Button
+                  variant="outline"
+                  className="bg-gray-800 border-gray-700 text-white hover:bg-gray-700 hover:text-white"
+                >
+                  <Maximize className="w-4 h-4 mr-2" />
+                  {aspectRatio === "9:16" && "9:16"}
+                  {aspectRatio === "16:9" && "16:9"}
+                  {aspectRatio === "1:1" && "1:1"}
+                  <ChevronDown className="w-4 h-4 ml-2 opacity-50" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-48 p-0 bg-gray-900 border-gray-700" align="start">
+                <div className="p-2">
+                  <div className="px-2 py-1.5 text-xs font-medium text-gray-400 mb-1">
+                    Aspect Ratio
+                  </div>
+                  <div className="space-y-1">
+                    <button
+                      onClick={() => {
+                        setAspectRatio("9:16");
+                        setAspectRatioPopoverOpen(false);
+                      }}
+                      className={`w-full flex items-center justify-between px-3 py-2 text-sm rounded-md transition-colors ${
+                        aspectRatio === "9:16"
+                          ? "bg-purple-900/30 text-white"
+                          : "text-gray-300 hover:bg-gray-800"
+                      }`}
+                    >
+                      <span>9:16 (Portrait)</span>
+                      {aspectRatio === "9:16" && (
+                        <Check className="w-4 h-4 text-purple-400" />
+                      )}
+                    </button>
+                    <button
+                      onClick={() => {
+                        setAspectRatio("16:9");
+                        setAspectRatioPopoverOpen(false);
+                      }}
+                      className={`w-full flex items-center justify-between px-3 py-2 text-sm rounded-md transition-colors ${
+                        aspectRatio === "16:9"
+                          ? "bg-purple-900/30 text-white"
+                          : "text-gray-300 hover:bg-gray-800"
+                      }`}
+                    >
+                      <span>16:9 (Landscape)</span>
+                      {aspectRatio === "16:9" && (
+                        <Check className="w-4 h-4 text-purple-400" />
+                      )}
+                    </button>
+                    <button
+                      onClick={() => {
+                        setAspectRatio("1:1");
+                        setAspectRatioPopoverOpen(false);
+                      }}
+                      className={`w-full flex items-center justify-between px-3 py-2 text-sm rounded-md transition-colors ${
+                        aspectRatio === "1:1"
+                          ? "bg-purple-900/30 text-white"
+                          : "text-gray-300 hover:bg-gray-800"
+                      }`}
+                    >
+                      <span>1:1 (Square)</span>
+                      {aspectRatio === "1:1" && (
+                        <Check className="w-4 h-4 text-purple-400" />
+                      )}
+                    </button>
+                  </div>
+                </div>
+              </PopoverContent>
+            </Popover>
+
+            {/* Captions Button */}
+            <Button
+              onClick={() => setCaptionsDrawerOpen(true)}
+              variant="outline"
+              className="bg-gray-800 border-gray-700 text-white hover:bg-gray-700 hover:text-white"
+            >
+              <Type className="w-4 h-4 mr-2" />
+              Captions
+              {captionsEnabled && (
+                <div className="ml-2 w-2 h-2 rounded-full bg-green-500"></div>
+              )}
+            </Button>
+
+            {/* Export Button */}
+            <Button
+              onClick={generateVideo}
+              disabled={generatingVideo}
+              className="bg-orange-500 hover:bg-orange-600 text-white font-medium px-6"
+            >
+              {generatingVideo ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Exporting...
+                </>
+              ) : (
+                <>
+                  <Download className="w-4 h-4 mr-2" />
+                  Export / Share
+                </>
+              )}
             </Button>
           </div>
         </div>
       </header>
 
       <div className="flex flex-1 overflow-hidden">
-        {/* Left Sidebar - Scenes - Restore proper width */}
-        <aside className="w-[460px] border-r border-white/20 bg-white/80 backdrop-blur-sm shadow-lg overflow-y-auto">
-          <div className="sticky top-0 bg-white/90 backdrop-blur-sm p-4 border-b border-gray-100">
-            <div className="flex items-center gap-3">
-              <div className="w-8 h-8 bg-gradient-to-r from-purple-500 to-pink-500 rounded-lg flex items-center justify-center shadow-lg">
-                <span className="text-white text-sm">🎬</span>
-              </div>
-              <div>
-                <h2 className="text-lg font-bold text-gray-800">Scenes</h2>
-                <p className="text-xs text-gray-500">{scenes.length} moments</p>
-              </div>
-            </div>
-          </div>
+        {/* Left Sidebar - Tool Icons - Narrow */}
+        <aside className="w-16 bg-black border-r border-gray-800 flex flex-col items-center py-6 gap-6">
+          {/* Scenes/Frames Icon */}
+          <button
+            onClick={() => setLeftPanelView("scenes")}
+            className={`w-10 h-10 flex flex-col items-center justify-center transition-colors ${
+              leftPanelView === "scenes" ? "text-purple-400 bg-purple-900/20" : "text-gray-400 hover:text-white"
+            }`}
+            title="Scenes"
+          >
+            <ImageIcon className="w-5 h-5" />
+            <span className="text-[10px] mt-1">Scenes</span>
+          </button>
 
-          <div className="p-6 space-y-4">
-            {scenes.map((scene, index) => (
-              <Card
-                key={scene.id || index}
-                onClick={() => {
-                  stopVideoPreview(); // Stop any existing preview
-                  setSelectedScene(index);
-                }}
-                className={`group relative overflow-hidden transition-all duration-500 cursor-pointer border-2 shadow-lg hover:shadow-xl ${
-                  selectedScene === index
-                    ? "ring-4 ring-purple-300/50 shadow-2xl bg-gradient-to-br from-purple-50 via-white to-pink-50 border-purple-300 scale-[1.02]"
-                    : "hover:shadow-xl hover:scale-[1.01] bg-white border-gray-200/60 hover:border-gray-300"
-                } ${modifiedScenes.has(index) ? "border-amber-300 bg-gradient-to-br from-amber-50 to-yellow-50" : ""}`}
-              >
-                {/* Scene Number Badge - Enhanced */}
-                <div className={`absolute top-4 left-4 w-10 h-10 rounded-xl flex items-center justify-center text-sm font-bold shadow-xl z-20 border-2 transition-all duration-300 ${
-                  selectedScene === index && isPlayingPreview
-                    ? "bg-gradient-to-br from-emerald-500 to-cyan-500 text-white animate-pulse border-white/50 shadow-emerald-500/25"
-                    : selectedScene === index
-                    ? "bg-gradient-to-br from-purple-500 to-pink-500 text-white border-white/50 shadow-purple-500/25"
-                    : modifiedScenes.has(index)
-                    ? "bg-gradient-to-br from-amber-500 to-orange-500 text-white border-white/50 shadow-amber-500/25"
-                    : "bg-white/95 text-gray-700 border-gray-200 shadow-gray-200/50 backdrop-blur-sm"
-                }`}>
-                  {selectedScene === index && isPlayingPreview ? '▶' : index + 1}
-                </div>
+          {/* Captions Icon */}
+          <button
+            onClick={() => setLeftPanelView("captions")}
+            className={`w-10 h-10 flex flex-col items-center justify-center transition-colors ${
+              leftPanelView === "captions" ? "text-purple-400 bg-purple-900/20" : "text-gray-400 hover:text-white"
+            }`}
+            title="Captions"
+          >
+            <Type className="w-5 h-5" />
+            <span className="text-[10px] mt-1">Captions</span>
+          </button>
 
-                {/* Edit/Delete Icons - Enhanced */}
-                {editingScene !== index && (
-                  <div className="absolute top-4 right-4 flex gap-2 z-20 opacity-0 group-hover:opacity-100 transition-all duration-300">
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setEditingScene(index);
-                        setEditText(scene.text);
-                      }}
-                      className="w-9 h-9 rounded-xl bg-white/95 hover:bg-blue-50 text-gray-600 hover:text-blue-600 shadow-lg border border-gray-200/80 backdrop-blur-sm transition-all duration-300 hover:scale-110"
-                      title="Edit scene"
-                    >
-                      <Edit2 className="w-4 h-4" />
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleDeleteClick(index);
-                      }}
-                      className="w-9 h-9 rounded-xl bg-white/95 hover:bg-red-50 text-gray-600 hover:text-red-600 shadow-lg border border-gray-200/80 backdrop-blur-sm transition-all duration-300 hover:scale-110"
-                      title="Delete scene"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </Button>
-                  </div>
-                )}
-
-                <div className="flex gap-6 p-6">
-                  {/* Thumbnail - Enhanced */}
-                  <div className="relative flex-shrink-0">
-                    {scene.image_url ? (
-                      <div className="w-36 h-36 rounded-2xl overflow-hidden shadow-xl border-2 border-gray-200/60 bg-gray-50 ring-1 ring-gray-200/50">
-                        <img
-                          src={scene.image_url}
-                          alt={`Scene ${index + 1}`}
-                          className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
-                        />
-                      </div>
-                    ) : (
-                      <div className="w-36 h-36 rounded-2xl shadow-xl border-2 border-dashed border-gray-300 bg-gradient-to-br from-gray-50 to-gray-100 flex flex-col items-center justify-center transition-all duration-300 group-hover:border-gray-400">
-                        <Image className="w-12 h-12 text-gray-400 mb-2" />
-                        <span className="text-xs text-gray-500 font-medium">No Image</span>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Text Content - Enhanced */}
-                  <div className="flex-1 pt-3">
-                    {editingScene === index ? (
-                      <div className="space-y-4" onClick={(e) => e.stopPropagation()}>
-                        <textarea
-                          value={editText}
-                          onChange={(e) => setEditText(e.target.value)}
-                          className="w-full text-sm p-4 border-2 border-gray-200 rounded-xl resize-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition-all duration-300 bg-white shadow-sm"
-                          rows={4}
-                          autoFocus
-                          placeholder="Enter scene description..."
-                        />
-                        <div className="flex gap-3">
-                          <Button
-                            onClick={() => editScene(index, editText)}
-                            size="sm"
-                            className="h-9 px-4 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white text-sm font-medium rounded-xl shadow-lg hover:shadow-xl transition-all duration-300"
-                          >
-                            <Check className="w-4 h-4 mr-2" />
-                            Save Changes
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => {
-                              setEditingScene(null);
-                              setEditText("");
-                            }}
-                            className="h-9 px-4 text-sm rounded-xl border-2 hover:bg-gray-50 transition-all duration-300"
-                          >
-                            <X className="w-4 h-4 mr-2" />
-                            Cancel
-                          </Button>
-                        </div>
-                      </div>
-                    ) : (
-                      <>
-                        <p className="text-sm leading-relaxed text-gray-700 line-clamp-5 mb-4 font-medium">
-                          {scene.text}
-                        </p>
-                        <div className="flex items-center gap-3 text-xs flex-wrap">
-                          <span className="bg-gradient-to-r from-gray-100 to-gray-200 px-4 py-2 rounded-xl text-sm font-semibold text-gray-700 shadow-sm border border-gray-200/80">
-                            Scene {index + 1}
-                          </span>
-                          
-                          {/* Audio Status - Enhanced badges */}
-                          {scene.audio_url ? (
-                            <Button
-                              size="sm"
-                              variant="secondary"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                if (preloadedAudio[index]) {
-                                  const audio = preloadedAudio[index];
-                                  audio.volume = volume; // Apply current volume setting
-                                  audio.currentTime = 0;
-                                  audio.play().catch(console.error);
-                                } else {
-                                  const audio = new Audio(scene.audio_url!);
-                                  audio.volume = volume; // Apply current volume setting
-                                  audio.play().catch(console.error);
-                                }
-                              }}
-                              className="bg-gradient-to-r from-emerald-100 to-green-100 hover:from-emerald-200 hover:to-green-200 text-emerald-700 px-4 py-2 rounded-xl flex items-center gap-2 transition-all duration-300 shadow-sm border border-emerald-200/80 font-medium"
-                              title="Play audio"
-                            >
-                              <Volume2 className="w-4 h-4" />
-                              Audio Ready
-                            </Button>
-                          ) : generatingSceneAudio.has(index) ? (
-                            <span className="bg-gradient-to-r from-blue-100 to-cyan-100 text-blue-700 px-4 py-2 rounded-xl flex items-center gap-2 text-sm shadow-sm border border-blue-200/80 font-medium">
-                              <Loader2 className="w-4 h-4 animate-spin" />
-                              Generating...
-                            </span>
-                          ) : (
-                            <Button
-                              size="sm"
-                              variant="secondary"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                generateSceneAudio(index);
-                              }}
-                              className="bg-gradient-to-r from-blue-100 to-indigo-100 hover:from-blue-200 hover:to-indigo-200 text-blue-700 px-4 py-2 rounded-xl transition-all duration-300 shadow-sm border border-blue-200/80 font-medium"
-                              title="Generate audio"
-                            >
-                              + Generate Audio
-                            </Button>
-                          )}
-                          
-                          {modifiedScenes.has(index) && (
-                            <span className="bg-gradient-to-r from-amber-100 to-yellow-100 text-amber-700 px-4 py-2 rounded-xl text-sm shadow-sm border border-amber-200/80 font-medium">
-                              ⚠ Modified
-                            </span>
-                          )}
-                        </div>
-                      </>
-                    )}
-                  </div>
-                </div>
-              </Card>
-            ))}
-          </div>
+          {/* Audio Icon */}
+          <button
+            className="w-10 h-10 flex flex-col items-center justify-center text-gray-400 hover:text-white transition-colors"
+            title="Audio"
+          >
+            <Volume2 className="w-5 h-5" />
+            <span className="text-[10px] mt-1">Audio</span>
+          </button>
         </aside>
 
-        {/* Main Content - Minimal empty space */}
-        <main className="flex-1 flex items-center justify-center bg-gradient-to-br from-gray-900 via-purple-900 to-violet-900 relative overflow-hidden py-2">
-          {/* Minimal Background Elements */}
-          <div className="absolute inset-0 bg-[url('/grid.svg')] bg-center [mask-image:linear-gradient(180deg,white,rgba(255,255,255,0))] opacity-20"></div>
-          <div className="absolute top-1/4 left-1/4 w-20 h-20 bg-purple-500 rounded-full mix-blend-multiply filter blur-xl opacity-10 animate-blob"></div>
-          <div className="absolute top-1/3 right-1/4 w-20 h-20 bg-yellow-500 rounded-full mix-blend-multiply filter blur-xl opacity-10 animate-blob animation-delay-2000"></div>
-          <div className="absolute bottom-1/4 left-1/3 w-20 h-20 bg-pink-500 rounded-full mix-blend-multiply filter blur-xl opacity-10 animate-blob animation-delay-4000"></div>
-
-          {/* Main Preview Area - Maximum compact */}
-          <div className="relative z-10 flex flex-col items-center justify-center w-full max-w-lg px-4">
-            {/* Aspect Ratio Controls - Compact */}
-            <div className="mb-1 flex items-center gap-2">
-              <label className="text-white text-xs font-medium">Aspect:</label>
-              <select
-                value={aspectRatio}
-                onChange={(e) => setAspectRatio(e.target.value as "9:16" | "16:9" | "1:1")}
-                className="bg-white/20 backdrop-blur-sm border border-white/30 rounded px-2 py-1 text-white text-xs focus:outline-none focus:ring-1 focus:ring-purple-400"
-              >
-                <option value="9:16" className="text-gray-900">9:16</option>
-                <option value="16:9" className="text-gray-900">16:9</option>
-                <option value="1:1" className="text-gray-900">1:1</option>
-              </select>
-            </div>
-
-            {/* Always show scene-based preview, with option to view generated video */}
-            <div className="flex flex-col items-center justify-center video-preview-container">
-              {scenes[selectedScene]?.image_url ? (
-                  <div className="relative group">
-                    <div 
-                      className="rounded-xl shadow-2xl border-2 border-white/20 overflow-hidden bg-gray-900"
-                      style={{
-                        width: `${getPreviewDimensions().width}px`,
-                        height: `${getPreviewDimensions().height}px`
+        {/* Main Content - Side by Side Layout: 40% Timeline + 60% Preview */}
+        <main className="flex-1 flex bg-black overflow-hidden">
+          {/* Left Timeline Section - 40% width */}
+          <div className="w-[40%] border-r border-gray-800 bg-black overflow-y-auto">
+            {leftPanelView === "scenes" ? (
+              /* Scenes Timeline View */
+              <div className="p-4 space-y-3">
+                {scenes.map((scene, index) => (
+                <div key={`scene-wrapper-${scene.id}`}>
+                  {/* Add Scene Button - appears before each scene */}
+                  <div className="flex justify-center my-2">
+                    <button
+                      onClick={() => {
+                        setAddScenePosition(index);
+                        setAddSceneDialogOpen(true);
                       }}
+                      className="flex items-center gap-2 px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white text-xs rounded-full transition-colors border border-gray-700 hover:border-gray-600"
                     >
-                      <img
-                        src={scenes[selectedScene].image_url}
-                        alt="Scene preview"
-                        className="w-full h-full object-cover"
-                      />
-                      
-                      {/* Video Controls Overlay - Compact */}
-                      {/* Video Controls Overlay - Enhanced & Bigger */}
-                      <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 via-black/60 to-transparent p-6 opacity-0 group-hover:opacity-100 transition-all duration-500">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-4">
-                            {/* Play/Pause Button - Bigger & Smoother */}
-                            <Button
-                              size="lg"
-                              onClick={isPlayingPreview ? stopVideoPreview : startVideoPreview}
-                              className="w-14 h-14 bg-white/20 hover:bg-white/30 backdrop-blur-md rounded-2xl flex items-center justify-center transition-all duration-300 border border-white/40 shadow-2xl hover:scale-110 hover:shadow-white/20"
-                            >
-                              {isPlayingPreview ? (
-                                <Pause className="w-6 h-6 text-white" />
-                              ) : (
-                                <Play className="w-6 h-6 text-white ml-1" />
-                              )}
-                            </Button>
-                            
-                            {/* Volume Control - Enhanced */}
-                            <div 
-                              className="relative"
-                              onMouseLeave={() => setIsVolumeVisible(false)}
-                            >
-                              <Button
-                                size="lg"
-                                onMouseEnter={() => setIsVolumeVisible(true)}
-                                onClick={() => {
-                                  if (volume === 0) {
-                                    setVolume(lastVolume);
-                                  } else {
-                                    setLastVolume(volume);
-                                    setVolume(0);
-                                  }
-                                }}
-                                className="w-12 h-12 bg-white/15 hover:bg-white/25 backdrop-blur-md rounded-xl flex items-center justify-center transition-all duration-300 border border-white/30 shadow-xl hover:scale-110"
-                              >
-                                {volume === 0 ? (
-                                  <VolumeX className="w-5 h-5 text-white" />
-                                ) : (
-                                  <Volume2 className="w-5 h-5 text-white" />
-                                )}
-                              </Button>
-                              
-                              {/* Volume Slider - Enhanced */}
-                              {isVolumeVisible && (
-                                <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-3 bg-black/95 backdrop-blur-md rounded-xl p-4 border border-white/20 shadow-2xl">
-                                  <input
-                                    type="range"
-                                    min="0"
-                                    max="1"
-                                    step="0.1"
-                                    value={volume}
-                                    onChange={(e) => {
-                                      const newVolume = parseFloat(e.target.value);
-                                      setVolume(newVolume);
-                                      if (newVolume > 0) {
-                                        setLastVolume(newVolume);
-                                      }
-                                    }}
-                                    className="w-20 h-2 bg-white/20 rounded-full appearance-none cursor-pointer slider hover:bg-white/30 transition-all duration-300"
-                                    style={{
-                                      background: `linear-gradient(to right, #ffffff ${volume * 100}%, rgba(255,255,255,0.2) ${volume * 100}%)`
-                                    }}
-                                  />
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                          
-                          {/* Right side controls - Enhanced */}
-                          <div className="flex items-center gap-3">
-                            {/* Fullscreen Button - Bigger */}
-                            <Button
-                              size="lg"
-                              onClick={() => {
-                                const element = document.querySelector('.video-preview-container');
-                                if (element) {
-                                  if (document.fullscreenElement) {
-                                    document.exitFullscreen();
-                                  } else {
-                                    element.requestFullscreen();
-                                  }
-                                }
-                              }}
-                              className="w-12 h-12 bg-white/15 hover:bg-white/25 backdrop-blur-md rounded-xl flex items-center justify-center transition-all duration-300 border border-white/30 shadow-xl hover:scale-110"
-                            >
-                              <Maximize className="w-5 h-5 text-white" />
-                            </Button>
-                          </div>
-                        </div>
+                      <Plus className="w-3 h-3" />
+                      Add Scene
+                    </button>
+                  </div>
 
+                  {/* Scene Tile */}
+                <div
+                  key={`${scene.id}-${scene.image_url}`}
+                  onClick={() => {
+                    stopVideoPreview();
+                    setSelectedScene(index);
+                  }}
+                  className={`bg-gray-900 rounded-lg border-2 transition-all cursor-pointer ${
+                    index === selectedScene
+                      ? 'border-orange-500 shadow-lg shadow-orange-500/20'
+                      : 'border-gray-800 hover:border-gray-700'
+                  }`}
+                >
+                  <div className="p-3 flex flex-col">
+                    {/* Thumbnail and Scene Number */}
+                    <div className="flex gap-3 mb-3">
+                      {/* Thumbnail */}
+                      <div className="relative w-20 h-32 flex-shrink-0 rounded overflow-hidden bg-gray-800">
+                        {scene.image_url ? (
+                          <img
+                            key={scene.image_url}
+                            src={scene.image_url}
+                            alt={`Scene ${index + 1}`}
+                            className="w-full h-full object-cover"
+                          />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center">
+                            <ImageIcon className="w-6 h-6 text-gray-600" />
+                          </div>
+                        )}
+                        {/* Scene number badge */}
+                        <div className="absolute top-1 left-1 bg-black/80 px-2 py-0.5 rounded text-white text-xs font-bold">
+                          #{index}
+                        </div>
+                        {/* Audio indicator */}
+                        {scene.audio_url && (
+                          <div className="absolute bottom-1 right-1 bg-green-500 p-1 rounded">
+                            <Volume2 className="w-3 h-3 text-white" />
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Scene Info */}
+                      <div className="flex-1 flex flex-col min-w-0">
+                        <div className="text-orange-500 text-xs font-medium mb-1 flex items-center gap-1">
+                          <span>🎤</span> Voice caption
+                        </div>
+                        <div className="text-gray-400 text-xs line-clamp-4 mb-2">
+                          {scene.text}
+                        </div>
+                        <div className="text-gray-500 text-xs mt-auto flex items-center gap-1">
+                          <span>⏱️</span> {scene.duration ? `${Math.round(scene.duration)}s` : '--'}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Action Buttons */}
+                    <div className="flex items-center justify-between gap-2 pt-3 border-t border-gray-800">
+                      <div className="flex gap-2">
+                        {/* Audio Button or Status */}
+                        {scene.audio_url ? (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openAudioDrawer(index);
+                            }}
+                            className="px-3 py-1.5 bg-green-800 hover:bg-green-700 text-white text-xs rounded transition-colors flex items-center gap-1.5"
+                          >
+                            <Check className="w-3 h-3" />
+                            Audio
+                          </button>
+                        ) : (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openAudioDrawer(index);
+                            }}
+                            disabled={generatingSceneAudio.has(index)}
+                            className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-400 text-xs rounded transition-colors flex items-center gap-1.5 disabled:opacity-50"
+                          >
+                            {generatingSceneAudio.has(index) ? (
+                              <>
+                                <Loader2 className="w-3 h-3 animate-spin" />
+                                Audio...
+                              </>
+                            ) : (
+                              <>
+                                <X className="w-3 h-3" />
+                                Audio
+                              </>
+                            )}
+                          </button>
+                        )}
+
+                        {/* Image Button or Status */}
+                        {scene.image_url ? (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openImageDrawer(index);
+                            }}
+                            disabled={generatingSceneImage.has(index)}
+                            className="px-3 py-1.5 bg-green-800 hover:bg-green-700 text-white text-xs rounded transition-colors flex items-center gap-1.5 disabled:opacity-50"
+                          >
+                            {generatingSceneImage.has(index) ? (
+                              <>
+                                <Loader2 className="w-3 h-3 animate-spin" />
+                                Regen...
+                              </>
+                            ) : (
+                              <>
+                                <Check className="w-3 h-3" />
+                                Image
+                              </>
+                            )}
+                          </button>
+                        ) : (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openImageDrawer(index);
+                            }}
+                            disabled={generatingSceneImage.has(index)}
+                            className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-400 text-xs rounded transition-colors flex items-center gap-1.5 disabled:opacity-50"
+                          >
+                            {generatingSceneImage.has(index) ? (
+                              <>
+                                <Loader2 className="w-3 h-3 animate-spin" />
+                                Image...
+                              </>
+                            ) : (
+                              <>
+                                <X className="w-3 h-3" />
+                                Image
+                              </>
+                            )}
+                          </button>
+                        )}
+                      </div>
+                      <div className="flex gap-2">
+                        <button className="p-2 bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white rounded transition-colors">
+                          <Pencil className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSceneToDelete(index);
+                            setDeleteDialogOpen(true);
+                          }}
+                          className="p-2 bg-gray-800 hover:bg-red-600 text-gray-400 hover:text-white rounded transition-colors"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
                       </div>
                     </div>
                   </div>
-                ) : (
-                  <div 
-                    className="rounded-xl bg-white/10 backdrop-blur-md border-2 border-white/20 flex flex-col items-center justify-center text-white/70 shadow-2xl"
+                </div>
+                </div>
+              ))}
+
+              {/* Add Scene Button - appears after all scenes */}
+              <div className="flex justify-center my-2">
+                <button
+                  onClick={() => {
+                    setAddScenePosition(scenes.length);
+                    setAddSceneDialogOpen(true);
+                  }}
+                  className="flex items-center gap-2 px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white text-xs rounded-full transition-colors border border-gray-700 hover:border-gray-600"
+                >
+                  <Plus className="w-3 h-3" />
+                  Add Scene
+                </button>
+              </div>
+
+              {/* Generate Images Button */}
+              <div className="bg-gray-900 rounded-lg border-2 border-dashed border-gray-700 hover:border-gray-600 transition-all">
+                <div className="p-4 flex flex-col items-center justify-center gap-3">
+                  <Button
+                    onClick={() => setBulkImageDrawerOpen(true)}
+                    disabled={generatingImages}
+                    className="w-full bg-blue-600 hover:bg-blue-700 text-white"
+                  >
+                    {generatingImages ? (
+                      <>
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        Generating All...
+                      </>
+                    ) : (
+                      <>
+                        <Image className="w-4 h-4 mr-2" />
+                        Generate All Images
+                      </>
+                    )}
+                  </Button>
+                  <div className="text-xs text-gray-400 text-center">
+                    {scenes.filter(s => s.image_url).length} / {scenes.length} scenes with images
+                  </div>
+                  <div className="text-xs text-gray-500 text-center">
+                    Tip: Click "Image" on each scene to generate individually
+                  </div>
+                </div>
+              </div>
+            </div>
+            ) : (
+              /* Captions Settings View */
+              <div className="p-6 space-y-6">
+                <h2 className="text-xl font-semibold text-white mb-4">Caption Settings</h2>
+
+                {/* Enable/Disable Captions */}
+                <div className="p-4 bg-gray-800 rounded-lg">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="text-sm font-medium text-white">Enable Captions</h3>
+                      <p className="text-xs text-gray-400 mt-1">Show text captions in exported video</p>
+                    </div>
+                    <button
+                      onClick={() => setCaptionsEnabled(!captionsEnabled)}
+                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                        captionsEnabled ? "bg-purple-600" : "bg-gray-700"
+                      }`}
+                    >
+                      <span
+                        className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                          captionsEnabled ? "translate-x-6" : "translate-x-1"
+                        }`}
+                      />
+                    </button>
+                  </div>
+                </div>
+
+                {captionsEnabled && (
+                  <>
+                    {/* Caption Position from Bottom */}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-3">
+                        Position from Bottom: <span className="text-purple-400 font-bold">{captionPositionFromBottom}%</span>
+                      </label>
+                      <Slider
+                        value={[captionPositionFromBottom]}
+                        onValueChange={(value) => setCaptionPositionFromBottom(value[0])}
+                        min={0}
+                        max={100}
+                        step={1}
+                        className="w-full"
+                      />
+                    </div>
+
+                    {/* Font Family */}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-3">
+                        Font Family
+                      </label>
+                      <select
+                        value={captionFontFamily}
+                        onChange={(e) => setCaptionFontFamily(e.target.value)}
+                        className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded text-gray-300 focus:outline-none focus:border-purple-500"
+                        style={{
+                          backgroundImage: `url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e")`,
+                          backgroundPosition: 'right 0.5rem center',
+                          backgroundRepeat: 'no-repeat',
+                          backgroundSize: '1.5em 1.5em',
+                          paddingRight: '2.5rem',
+                        }}
+                      >
+                        <optgroup label="Sans-Serif (Modern)" className="bg-gray-900 text-gray-400">
+                          <option value="Montserrat">Montserrat</option>
+                          <option value="Poppins">Poppins</option>
+                          <option value="Inter">Inter</option>
+                          <option value="Roboto">Roboto</option>
+                          <option value="Open Sans">Open Sans</option>
+                          <option value="Lato">Lato</option>
+                          <option value="Raleway">Raleway</option>
+                          <option value="Nunito">Nunito</option>
+                          <option value="Source Sans Pro">Source Sans Pro</option>
+                          <option value="Oswald">Oswald</option>
+                          <option value="Bebas Neue">Bebas Neue</option>
+                          <option value="Arial">Arial</option>
+                          <option value="Helvetica">Helvetica</option>
+                          <option value="Verdana">Verdana</option>
+                        </optgroup>
+                        <optgroup label="Serif (Classic)" className="bg-gray-900 text-gray-400">
+                          <option value="Playfair Display">Playfair Display</option>
+                          <option value="Merriweather">Merriweather</option>
+                          <option value="Lora">Lora</option>
+                          <option value="PT Serif">PT Serif</option>
+                          <option value="Times New Roman">Times New Roman</option>
+                          <option value="Georgia">Georgia</option>
+                        </optgroup>
+                        <optgroup label="Display & Handwriting" className="bg-gray-900 text-gray-400">
+                          <option value="Bangers">Bangers</option>
+                          <option value="Pacifico">Pacifico</option>
+                          <option value="Righteous">Righteous</option>
+                          <option value="Lobster">Lobster</option>
+                          <option value="Permanent Marker">Permanent Marker</option>
+                          <option value="Dancing Script">Dancing Script</option>
+                        </optgroup>
+                        <optgroup label="Monospace" className="bg-gray-900 text-gray-400">
+                          <option value="Courier New">Courier New</option>
+                          <option value="Roboto Mono">Roboto Mono</option>
+                          <option value="Source Code Pro">Source Code Pro</option>
+                        </optgroup>
+                      </select>
+                    </div>
+
+                    {/* Font Size */}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-3">
+                        Font Size: <span className="text-purple-400 font-bold">{captionFontSize}px</span>
+                      </label>
+                      <Slider
+                        value={[captionFontSize]}
+                        onValueChange={(value) => setCaptionFontSize(value[0])}
+                        min={16}
+                        max={32}
+                        step={1}
+                        className="w-full"
+                      />
+                    </div>
+
+                    {/* Font Weight */}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-3">
+                        Font Weight: <span className="text-purple-400 font-bold">{captionFontWeight}</span>
+                      </label>
+                      <Slider
+                        value={[captionFontWeight]}
+                        onValueChange={(value) => setCaptionFontWeight(value[0])}
+                        min={100}
+                        max={900}
+                        step={100}
+                        className="w-full"
+                      />
+                    </div>
+
+                    {/* Active Word Color */}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-3">
+                        Active Word Color
+                      </label>
+                      <div className="flex items-center gap-3">
+                        <div className="relative">
+                          <input
+                            type="color"
+                            value={captionActiveColor}
+                            onChange={(e) => setCaptionActiveColor(e.target.value)}
+                            className="w-12 h-10 rounded border-2 border-gray-700 cursor-pointer bg-transparent"
+                            style={{ colorScheme: 'dark' }}
+                          />
+                        </div>
+                        <input
+                          type="text"
+                          value={captionActiveColor}
+                          onChange={(e) => setCaptionActiveColor(e.target.value)}
+                          className="flex-1 px-3 py-2 bg-gray-800 border border-gray-700 rounded text-gray-300 text-sm focus:outline-none focus:border-purple-500"
+                          placeholder="#FFEB3B"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Inactive Word Color */}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-3">
+                        Inactive Word Color
+                      </label>
+                      <div className="flex items-center gap-3">
+                        <div className="relative">
+                          <input
+                            type="color"
+                            value={captionInactiveColor}
+                            onChange={(e) => setCaptionInactiveColor(e.target.value)}
+                            className="w-12 h-10 rounded border-2 border-gray-700 cursor-pointer bg-transparent"
+                            style={{ colorScheme: 'dark' }}
+                          />
+                        </div>
+                        <input
+                          type="text"
+                          value={captionInactiveColor}
+                          onChange={(e) => setCaptionInactiveColor(e.target.value)}
+                          className="flex-1 px-3 py-2 bg-gray-800 border border-gray-700 rounded text-gray-300 text-sm focus:outline-none focus:border-purple-500"
+                          placeholder="#FFFFFF"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Text Transform */}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-3">
+                        Text Transform
+                      </label>
+                      <select
+                        value={captionTextTransform}
+                        onChange={(e) => setCaptionTextTransform(e.target.value as any)}
+                        className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded text-gray-300"
+                      >
+                        <option value="none">None</option>
+                        <option value="uppercase">UPPERCASE</option>
+                        <option value="lowercase">lowercase</option>
+                        <option value="capitalize">Capitalize Each Word</option>
+                      </select>
+                    </div>
+
+                    {/* Words Per Batch */}
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-3">
+                        Words Per Batch: <span className="text-purple-400 font-bold">{captionWordsPerBatch} {captionWordsPerBatch === 1 ? 'word' : 'words'}</span>
+                      </label>
+                      <Slider
+                        value={[captionWordsPerBatch]}
+                        onValueChange={(value) => setCaptionWordsPerBatch(value[0])}
+                        min={1}
+                        max={5}
+                        step={1}
+                        className="w-full"
+                      />
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Right Preview Section - 60% width */}
+          <div className="w-[60%] flex items-center justify-center p-8 bg-black">
+            <div className="video-preview-container">
+              {scenes[selectedScene]?.image_url ? (
+                <div className="relative group">
+                  {/* Main Preview Container */}
+                  <div
+                    className="rounded-lg shadow-2xl overflow-hidden bg-gray-900 relative"
                     style={{
                       width: `${getPreviewDimensions().width}px`,
                       height: `${getPreviewDimensions().height}px`
                     }}
                   >
-                    <div className="w-24 h-24 mb-6 bg-white/10 rounded-full flex items-center justify-center">
-                      <span className="text-4xl">�</span>
-                    </div>
-                    <h3 className="text-xl font-semibold mb-4">Story Ready to Visualize</h3>
-                    <div className="text-center max-w-sm space-y-2">
-                      <p className="text-white/60 text-sm">
-                        Your scenes are ready! Follow the steps below to create:
-                      </p>
-                      <div className="text-white/40 text-xs space-y-1">
-                        <div className="flex items-center justify-center gap-2">
-                          <span className="w-4 h-4 rounded-full bg-white/20 flex items-center justify-center text-[10px]">1</span>
-                          <span>Generate Images (uses AI credits)</span>
+                    <img
+                      src={scenes[selectedScene].image_url}
+                      alt="Scene preview"
+                      className="w-full h-full object-cover"
+                      loading="eager"
+                      decoding="async"
+                    />
+
+                    {/* Caption Overlay */}
+                    {captionsEnabled && scenes[selectedScene]?.text && (() => {
+                      const baseStyle: React.CSSProperties = {
+                        fontFamily: captionFontFamily,
+                        fontSize: `${captionFontSize}px`,
+                        fontWeight: captionFontWeight,
+                        color: captionInactiveColor,
+                        textShadow: '2px 2px 4px rgba(0,0,0,0.8)',
+                        lineHeight: '1.4',
+                      };
+
+                      return (
+                        <div
+                          className="absolute left-0 right-0 px-8 pointer-events-none flex items-center justify-center"
+                          style={{ bottom: `${captionPositionFromBottom}%` }}
+                        >
+                          <div className="max-w-full text-center">
+                            {scenes[selectedScene].word_timestamps && scenes[selectedScene].word_timestamps!.length > 0 ? (
+                              <WordByWordCaption
+                                wordTimestamps={scenes[selectedScene].word_timestamps!}
+                                currentTime={currentTime}
+                                style={baseStyle}
+                                highlightColor={captionActiveColor}
+                                inactiveColor={captionInactiveColor}
+                                dimmedOpacity={0.6}
+                                wordsPerBatch={captionWordsPerBatch}
+                                textTransform={captionTextTransform}
+                              />
+                            ) : (
+                              <SimpleCaption text={scenes[selectedScene].text} style={baseStyle} />
+                            )}
+                          </div>
                         </div>
-                        <div className="flex items-center justify-center gap-2">
-                          <span className="w-4 h-4 rounded-full bg-white/20 flex items-center justify-center text-[10px]">2</span>
-                          <span>Add Audio narration</span>
+                      );
+                    })()}
+
+                    {/* Video Controls Overlay - Only on Hover */}
+                    <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 via-black/60 to-transparent p-6 opacity-0 group-hover:opacity-100 transition-all duration-300">
+                      {/* Progress Bar */}
+                      {isPlayingPreview && getTotalDuration() > 0 && (
+                        <div className="mb-4">
+                          <div className="flex items-center justify-between text-white/70 text-xs mb-1">
+                            <span>{totalProgress.toFixed(1)}s</span>
+                            <span>{getTotalDuration().toFixed(1)}s</span>
+                          </div>
+                          <input
+                            type="range"
+                            min="0"
+                            max={getTotalDuration()}
+                            step="0.1"
+                            value={totalProgress}
+                            onChange={(e) => {
+                              const newTime = parseFloat(e.target.value);
+                              seekToTotalTime(newTime);
+                            }}
+                            disabled={isSeeking}
+                            className="w-full h-2 bg-white/20 rounded-full appearance-none cursor-pointer disabled:opacity-50"
+                            style={{
+                              background: `linear-gradient(to right, #10b981 ${(totalProgress / getTotalDuration()) * 100}%, rgba(255,255,255,0.2) ${(totalProgress / getTotalDuration()) * 100}%)`
+                            }}
+                          />
+                          {/* Scene markers on timeline */}
+                          <div className="relative w-full h-1 mt-1">
+                            {getSceneStartTimes().slice(1).map((startTime, index) => (
+                              <div
+                                key={index}
+                                className="absolute top-0 w-0.5 h-full bg-white/30"
+                                style={{
+                                  left: `${(startTime / getTotalDuration()) * 100}%`
+                                }}
+                                title={`Scene ${index + 2} starts at ${startTime.toFixed(1)}s`}
+                              />
+                            ))}
+                          </div>
                         </div>
-                        <div className="flex items-center justify-center gap-2">
-                          <span className="w-4 h-4 rounded-full bg-white/20 flex items-center justify-center text-[10px]">3</span>
-                          <span>Create final video</span>
+                      )}
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-4">
+                          {/* Play/Pause Button */}
+                          <Button
+                            size="lg"
+                            onClick={isPlayingPreview ? stopVideoPreview : startVideoPreview}
+                            className="w-12 h-12 bg-white/20 hover:bg-white/30 backdrop-blur-md rounded-xl flex items-center justify-center transition-all"
+                          >
+                            {isPlayingPreview ? (
+                              <Pause className="w-5 h-5 text-white" />
+                            ) : (
+                              <Play className="w-5 h-5 text-white ml-1" />
+                            )}
+                          </Button>
+
+                          {/* Volume Control */}
+                          <div
+                            className="relative"
+                            onMouseEnter={() => setIsVolumeVisible(true)}
+                            onMouseLeave={() => setIsVolumeVisible(false)}
+                          >
+                            <Button
+                              size="lg"
+                              onClick={() => {
+                                if (volume === 0) {
+                                  setVolume(lastVolume);
+                                } else {
+                                  setLastVolume(volume);
+                                  setVolume(0);
+                                }
+                              }}
+                              className="w-10 h-10 bg-white/15 hover:bg-white/25 backdrop-blur-md rounded-lg flex items-center justify-center transition-all"
+                            >
+                              {volume === 0 ? (
+                                <VolumeX className="w-4 h-4 text-white" />
+                              ) : (
+                                <Volume2 className="w-4 h-4 text-white" />
+                              )}
+                            </Button>
+
+                            {/* Volume Slider */}
+                            {isVolumeVisible && (
+                              <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 bg-black/95 backdrop-blur-md rounded-lg p-3 border border-white/20">
+                                <input
+                                  type="range"
+                                  min="0"
+                                  max="1"
+                                  step="0.1"
+                                  value={volume}
+                                  onChange={(e) => {
+                                    const newVolume = parseFloat(e.target.value);
+                                    setVolume(newVolume);
+                                    if (newVolume > 0) {
+                                      setLastVolume(newVolume);
+                                    }
+                                  }}
+                                  className="w-20 h-2 bg-white/20 rounded-full appearance-none cursor-pointer"
+                                  style={{
+                                    background: `linear-gradient(to right, #ffffff ${volume * 100}%, rgba(255,255,255,0.2) ${volume * 100}%)`
+                                  }}
+                                />
+                              </div>
+                            )}
+                          </div>
                         </div>
+
+                        {/* Fullscreen Button */}
+                        <Button
+                          size="lg"
+                          onClick={() => {
+                            const element = document.querySelector('.video-preview-container');
+                            if (element) {
+                              if (document.fullscreenElement) {
+                                document.exitFullscreen();
+                              } else {
+                                element.requestFullscreen();
+                              }
+                            }
+                          }}
+                          className="w-10 h-10 bg-white/15 hover:bg-white/25 backdrop-blur-md rounded-lg flex items-center justify-center transition-all"
+                        >
+                          <Maximize className="w-4 h-4 text-white" />
+                        </Button>
                       </div>
                     </div>
                   </div>
-                )}
-              </div>
-            </div>
-        </main>
-
-        {/* Right Sidebar - Controls - Restore proper width */}
-        <aside className="w-80 border-l border-white/20 bg-white/90 backdrop-blur-sm shadow-lg overflow-y-auto">
-          <div className="p-6 space-y-6">
-            
-            {/* Generation Controls Section */}
-            <div className="space-y-4">
-              <div className="flex items-center gap-2 pb-2 border-b border-gray-200">
-                <div className="w-8 h-8 bg-gradient-to-r from-blue-500 to-purple-500 rounded-lg flex items-center justify-center">
-                  <span className="text-white text-sm">⚡</span>
                 </div>
-                <h3 className="text-lg font-semibold text-gray-800">Generation</h3>
-              </div>
-              
-              <div className="space-y-3">
-                {/* Images Button - restore proper size */}
-                <Button
-                  onClick={generateImages}
-                  disabled={generatingImages}
-                  className={`w-full px-4 py-3 rounded-lg text-sm font-medium transition-all ${
-                    scenes.some(s => s.image_url) 
-                      ? 'bg-green-600 hover:bg-green-700 text-white' 
-                      : 'bg-blue-600 hover:bg-blue-700 text-white'
-                  }`}
+              ) : (
+                <div
+                  className="rounded-lg bg-gray-900 border border-gray-800 flex flex-col items-center justify-center text-gray-400"
+                  style={{
+                    width: `${getPreviewDimensions().width}px`,
+                    height: `${getPreviewDimensions().height}px`
+                  }}
                 >
-                  {generatingImages ? (
-                    <div className="flex items-center justify-center gap-2">
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      Creating Images...
-                    </div>
-                  ) : (
-                    <div className="flex items-center justify-center gap-2">
-                      <Image className="w-4 h-4" />
-                      {scenes.some(s => s.image_url) ? `Regenerate Images (${scenes.filter(s => s.image_url).length})` : 'Generate Images'}
-                    </div>
-                  )}
-                </Button>
-
-                {/* Video Generation - restore proper size */}
-                {scenes.some(s => s.image_url) && (
-                  <Button 
-                    onClick={() => {
-                      console.log('Generate video for story:', id);
-                    }}
-                    className="w-full py-3 text-sm"
-                  >
-                    <Play className="w-4 h-4 mr-2" />
-                    Generate Video
-                  </Button>
-                )}
-              </div>
-            </div>
-
-            {/* Captions Section - restore proper spacing */}
-            <div className="space-y-4">
-              <div className="flex items-center gap-2 pb-2 border-b border-gray-200">
-                <div className="w-8 h-8 bg-gradient-to-r from-yellow-500 to-orange-500 rounded-lg flex items-center justify-center">
-                  <span className="text-white text-sm">CC</span>
+                  <ImageIcon className="w-16 h-16 mb-4 text-gray-600" />
+                  <h3 className="text-lg font-medium mb-2">No Image Generated</h3>
+                  <p className="text-sm text-gray-500">Generate images to see preview</p>
                 </div>
-                <h3 className="text-lg font-semibold text-gray-800">Captions</h3>
-              </div>
-              
-              <div className="space-y-2">
-                <Button 
-                  variant="outline" 
-                  className="w-full text-sm" 
-                  disabled
-                >
-                  Generate Captions
-                </Button>
-                <p className="text-xs text-gray-500">Coming soon - Auto-generate captions</p>
-              </div>
+              )}
             </div>
-
-            {/* Background Section - restore proper spacing */}
-            <div className="space-y-4">
-              <div className="flex items-center gap-2 pb-2 border-b border-gray-200">
-                <div className="w-8 h-8 bg-gradient-to-r from-pink-500 to-red-500 rounded-lg flex items-center justify-center">
-                  <span className="text-white text-sm">🎨</span>
-                </div>
-                <h3 className="text-lg font-semibold text-gray-800">Background</h3>
-              </div>
-              
-              <div className="space-y-2">
-                <Button 
-                  variant="outline" 
-                  className="w-full text-sm" 
-                  disabled
-                >
-                  Customize Background
-                </Button>
-                <p className="text-xs text-gray-500">Coming soon - Add custom backgrounds</p>
-              </div>
-            </div>
-
           </div>
-        </aside>
+        </main>
       </div>
 
       {/* Delete Confirmation Dialog */}
-      {deleteDialogOpen && (
+      {deleteDialogOpen && sceneToDelete !== null && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
           {/* Background Overlay */}
-          <div 
-            className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+          <div
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
             onClick={() => {
               setDeleteDialogOpen(false);
               setSceneToDelete(null);
             }}
           />
-          
+
           {/* Dialog Content */}
-          <div className="relative bg-white rounded-2xl shadow-2xl border border-gray-200 max-w-md w-full mx-4 transform transition-all">
+          <div className="relative bg-gray-900 border border-gray-700 rounded-lg shadow-2xl max-w-lg w-full mx-4 max-h-[90vh] overflow-y-auto">
             <div className="p-6">
+              {/* Header */}
               <div className="flex items-center gap-4 mb-4">
-                <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center">
-                  <Trash2 className="w-6 h-6 text-red-600" />
+                <div className="w-12 h-12 bg-red-900/30 rounded-full flex items-center justify-center">
+                  <Trash2 className="w-6 h-6 text-red-400" />
                 </div>
                 <div>
-                  <h3 className="text-lg font-semibold text-gray-900">Delete Scene</h3>
-                  <p className="text-sm text-gray-500">This action cannot be undone</p>
+                  <h3 className="text-lg font-semibold text-white">Delete Scene?</h3>
+                  <p className="text-sm text-gray-400">Scene {sceneToDelete + 1} of {scenes.length}</p>
                 </div>
               </div>
-              
-              <p className="text-gray-700 mb-6">
-                Are you sure you want to delete Scene {sceneToDelete !== null ? sceneToDelete + 1 : 1}? 
-                This will permanently remove the scene and any associated images.
+
+              {/* Warning Message */}
+              <p className="text-gray-300 mb-4">
+                Are you sure you want to delete this scene? <span className="font-semibold text-red-400">This action cannot be undone.</span>
               </p>
-              
-              <div className="flex gap-3 justify-end">
+
+              {/* Scene Preview */}
+              <div className="mb-4 p-4 bg-gray-800 rounded-lg border border-gray-700">
+                <div className="flex gap-3">
+                  {/* Scene Image Preview */}
+                  {scenes[sceneToDelete]?.image_url ? (
+                    <div className="flex-shrink-0">
+                      <img
+                        key={scenes[sceneToDelete].image_url}
+                        src={scenes[sceneToDelete].image_url}
+                        alt={`Scene ${sceneToDelete + 1}`}
+                        className="w-20 h-32 object-cover rounded border border-gray-600"
+                      />
+                    </div>
+                  ) : (
+                    <div className="flex-shrink-0 w-20 h-32 bg-gray-700 rounded border border-gray-600 flex items-center justify-center">
+                      <ImageIcon className="w-6 h-6 text-gray-500" />
+                    </div>
+                  )}
+
+                  {/* Scene Description */}
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs text-gray-400 mb-2">Scene Description</div>
+                    <p className="text-sm text-gray-300 line-clamp-4 leading-relaxed">
+                      {scenes[sceneToDelete]?.text}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* What Will Be Deleted */}
+              <div className="mb-6 p-3 bg-red-900/20 border border-red-700/30 rounded-lg">
+                <p className="text-xs text-red-300 font-semibold mb-2">This will permanently delete:</p>
+                <ul className="text-xs text-red-200 space-y-1">
+                  <li className="flex items-center gap-2">
+                    <span className="w-1.5 h-1.5 bg-red-400 rounded-full"></span>
+                    Scene text and description
+                  </li>
+                  {scenes[sceneToDelete]?.image_url && (
+                    <li className="flex items-center gap-2">
+                      <span className="w-1.5 h-1.5 bg-red-400 rounded-full"></span>
+                      Image file
+                    </li>
+                  )}
+                  {scenes[sceneToDelete]?.audio_url && (
+                    <li className="flex items-center gap-2">
+                      <span className="w-1.5 h-1.5 bg-red-400 rounded-full"></span>
+                      Audio file
+                    </li>
+                  )}
+                </ul>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex gap-3">
                 <Button
                   variant="outline"
                   onClick={() => {
                     setDeleteDialogOpen(false);
                     setSceneToDelete(null);
                   }}
-                  className="px-4 py-2"
+                  className="flex-1 border-gray-700 text-gray-300 hover:bg-gray-800"
                 >
                   Cancel
                 </Button>
                 <Button
                   onClick={confirmDelete}
-                  className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white"
+                  className="flex-1 bg-red-600 hover:bg-red-700 text-white"
                 >
+                  <Trash2 className="w-4 h-4 mr-2" />
                   Delete Scene
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Add Scene Dialog */}
+      {addSceneDialogOpen && addScenePosition !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          {/* Background Overlay */}
+          <div
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            onClick={() => {
+              setAddSceneDialogOpen(false);
+              setNewSceneText("");
+              setAddScenePosition(null);
+            }}
+          />
+
+          {/* Dialog Content */}
+          <div className="relative bg-gray-900 border border-gray-700 rounded-lg shadow-2xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
+            <div className="p-6">
+              {/* Header */}
+              <div className="flex items-center gap-4 mb-4">
+                <div className="w-12 h-12 bg-orange-900/30 rounded-full flex items-center justify-center">
+                  <Plus className="w-6 h-6 text-orange-400" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-white">Add New Scene</h3>
+                  <p className="text-sm text-gray-400">
+                    {addScenePosition === 0
+                      ? "Insert before scene 1"
+                      : addScenePosition === scenes.length
+                      ? `Add after scene ${scenes.length}`
+                      : `Insert between scene ${addScenePosition} and ${addScenePosition + 1}`}
+                  </p>
+                </div>
+              </div>
+
+              {/* Scene Text Input */}
+              <div className="mb-6">
+                <label className="block text-sm font-medium text-gray-300 mb-2">
+                  Scene Description
+                </label>
+                <textarea
+                  value={newSceneText}
+                  onChange={(e) => setNewSceneText(e.target.value)}
+                  placeholder="Describe what happens in this scene..."
+                  className="w-full h-32 px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent resize-none"
+                />
+                <div className="mt-2 flex items-center justify-between text-xs text-gray-400">
+                  <span>Enter a detailed description for this scene</span>
+                  <span>{newSceneText.length} characters</span>
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex gap-3">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setAddSceneDialogOpen(false);
+                    setNewSceneText("");
+                    setAddScenePosition(null);
+                  }}
+                  disabled={addingScene}
+                  className="flex-1 border-gray-700 text-gray-300 hover:bg-gray-800"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={handleAddScene}
+                  disabled={!newSceneText.trim() || addingScene}
+                  className="flex-1 bg-orange-600 hover:bg-orange-700 text-white disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {addingScene ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Adding Scene...
+                    </>
+                  ) : (
+                    <>
+                      <Plus className="w-4 h-4 mr-2" />
+                      Add Scene
+                    </>
+                  )}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Audio Generation Drawer */}
+      {audioDrawerOpen && audioDrawerScene !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          {/* Background Overlay */}
+          <div
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            onClick={() => {
+              // Stop any playing voice preview
+              if (voicePreviewAudioRef.current) {
+                voicePreviewAudioRef.current.pause();
+                voicePreviewAudioRef.current = null;
+              }
+              setPlayingPreviewId(null);
+              setAudioDrawerOpen(false);
+            }}
+          />
+
+          {/* Drawer Content */}
+          <div className="relative bg-gray-900 rounded-2xl shadow-2xl border border-gray-700 max-w-md w-full mx-4 transform transition-all">
+            <div className="p-6">
+              {/* Header */}
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold text-white">
+                  {scenes[audioDrawerScene]?.audio_url ? 'Regenerate Audio' : 'Generate Audio'}
+                </h3>
+                <button
+                  onClick={() => {
+                    // Stop any playing voice preview
+                    if (voicePreviewAudioRef.current) {
+                      voicePreviewAudioRef.current.pause();
+                      voicePreviewAudioRef.current = null;
+                    }
+                    setPlayingPreviewId(null);
+                    setAudioDrawerOpen(false);
+                  }}
+                  className="text-gray-400 hover:text-white transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Scene Info */}
+              <div className="mb-4 p-3 bg-gray-800 rounded-lg">
+                <div className="text-sm text-gray-400 mb-1">Scene #{audioDrawerScene}</div>
+                <div className="text-sm text-gray-300 line-clamp-2">
+                  {scenes[audioDrawerScene]?.text}
+                </div>
+              </div>
+
+              {/* Voice Selection */}
+              <div className="mb-6">
+                <div className="flex items-center justify-between mb-2">
+                  <label className="block text-sm font-medium text-gray-300">
+                    Select Voice
+                  </label>
+                  {audioDrawerScene !== null && !scenes[audioDrawerScene]?.voice_id && (
+                    <span className="text-xs text-gray-500">Using story default</span>
+                  )}
+                </div>
+                {loadingVoices ? (
+                  <div className="flex items-center justify-center py-3">
+                    <Loader2 className="w-5 h-5 animate-spin text-purple-500" />
+                    <span className="ml-2 text-sm text-gray-400">Loading voices...</span>
+                  </div>
+                ) : (
+                  <div ref={voiceListRef} className="max-h-[300px] overflow-y-auto border border-gray-700 rounded-lg bg-gray-800">
+                    {voices.map((voice) => (
+                      <div
+                        key={voice.id}
+                        data-voice-id={voice.id}
+                        onClick={() => setSelectedVoiceId(voice.id)}
+                        className={`flex items-center justify-between p-3 cursor-pointer transition-colors border-b border-gray-700 last:border-b-0 ${
+                          selectedVoiceId === voice.id
+                            ? 'bg-purple-900/30 border-l-4 border-l-purple-500'
+                            : 'hover:bg-gray-700'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2 flex-1">
+                          {selectedVoiceId === voice.id && (
+                            <Check className="w-4 h-4 text-purple-400" />
+                          )}
+                          <span className="text-sm text-white">{voice.name}</span>
+                        </div>
+                        {voice.preview_url && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              playVoicePreview(voice.id, voice.preview_url);
+                            }}
+                            className={`p-1.5 rounded-full transition-colors ${
+                              playingPreviewId === voice.id
+                                ? 'bg-purple-600 text-white'
+                                : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
+                            }`}
+                            title="Preview voice"
+                          >
+                            {playingPreviewId === voice.id ? (
+                              <Pause className="w-4 h-4" />
+                            ) : (
+                              <PlayCircle className="w-4 h-4" />
+                            )}
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {scenes[audioDrawerScene]?.audio_url && (
+                  <p className="mt-2 text-xs text-gray-400">
+                    Current voice will be replaced with your selection
+                  </p>
+                )}
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex gap-3">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    // Stop any playing voice preview
+                    if (voicePreviewAudioRef.current) {
+                      voicePreviewAudioRef.current.pause();
+                      voicePreviewAudioRef.current = null;
+                    }
+                    setPlayingPreviewId(null);
+                    setAudioDrawerOpen(false);
+                  }}
+                  className="flex-1 border-gray-700 text-gray-300 hover:bg-gray-800"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={async () => {
+                    // Stop any playing voice preview before generating
+                    if (voicePreviewAudioRef.current) {
+                      voicePreviewAudioRef.current.pause();
+                      voicePreviewAudioRef.current = null;
+                    }
+                    setPlayingPreviewId(null);
+                    await generateSceneAudio(audioDrawerScene, selectedVoiceId);
+                    setAudioDrawerOpen(false);
+                  }}
+                  disabled={generatingSceneAudio.has(audioDrawerScene)}
+                  className="flex-1 bg-purple-600 hover:bg-purple-700 text-white"
+                >
+                  {generatingSceneAudio.has(audioDrawerScene) ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Generating...
+                    </>
+                  ) : (
+                    <>
+                      <Volume2 className="w-4 h-4 mr-2" />
+                      Generate Audio
+                    </>
+                  )}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Image Generation Drawer */}
+      {imageDrawerOpen && imageDrawerScene !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          {/* Background overlay */}
+          <div
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            onClick={() => setImageDrawerOpen(false)}
+          />
+
+          {/* Drawer content */}
+          <div className="relative bg-gray-900 border border-gray-700 rounded-lg shadow-2xl max-w-2xl w-full mx-4 max-h-[80vh] overflow-y-auto">
+            <div className="p-6">
+              {/* Header */}
+              <div className="flex items-center justify-between mb-6">
+                <div>
+                  <h2 className="text-xl font-semibold text-white">Generate Image</h2>
+                  <p className="text-sm text-gray-400 mt-1">
+                    Scene {imageDrawerScene + 1} of {scenes.length}
+                  </p>
+                </div>
+                <button
+                  onClick={() => setImageDrawerOpen(false)}
+                  className="text-gray-400 hover:text-white transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Scene Preview */}
+              <div className="mb-6 p-4 bg-gray-800 rounded-lg">
+                <div className="flex gap-4">
+                  {/* Current Image Preview (if exists) */}
+                  {scenes[imageDrawerScene]?.image_url && (
+                    <div className="flex-shrink-0">
+                      <div className="text-xs text-gray-400 mb-2">Current Image</div>
+                      <img
+                        src={scenes[imageDrawerScene].image_url}
+                        alt="Current scene"
+                        className="w-24 h-40 object-cover rounded border border-gray-700"
+                      />
+                    </div>
+                  )}
+
+                  {/* Scene Text */}
+                  <div className="flex-1">
+                    <div className="text-xs text-gray-400 mb-2">Scene Description</div>
+                    <p className="text-sm text-gray-300 leading-relaxed">
+                      {scenes[imageDrawerScene]?.text}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Visual Consistency Info */}
+              {imageDrawerScene !== null && scenes.filter(s => s.image_url && scenes.indexOf(s) !== imageDrawerScene).length > 0 && (
+                <div className="mb-6 p-3 bg-blue-900/20 border border-blue-700/30 rounded-lg">
+                  <div className="flex items-start gap-2">
+                    <Image className="w-4 h-4 text-blue-400 mt-0.5 flex-shrink-0" />
+                    <div className="text-xs text-blue-300">
+                      <span className="font-semibold">Visual Consistency:</span> This image will be generated using AI to match the style and characters from your existing {scenes.filter(s => s.image_url && scenes.indexOf(s) !== imageDrawerScene).length} scene image(s).
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Optional Instructions */}
+              <div className="mb-6">
+                <label className="block text-sm font-medium text-gray-300 mb-2">
+                  Additional Instructions (Optional)
+                </label>
+                <textarea
+                  value={imageInstructions}
+                  onChange={(e) => setImageInstructions(e.target.value)}
+                  placeholder="Add specific details or requirements for this image..."
+                  rows={3}
+                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-md text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent text-sm"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Example: "Show the character from behind", "Include a sunset in the background"
+                </p>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex gap-3">
+                <Button
+                  variant="outline"
+                  onClick={() => setImageDrawerOpen(false)}
+                  className="flex-1 border-gray-700 text-gray-300 hover:bg-gray-800"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={async () => {
+                    if (imageDrawerScene !== null) {
+                      await generateSceneImage(
+                        imageDrawerScene,
+                        undefined, // Don't pass style - will use existing scenes for consistency
+                        imageInstructions
+                      );
+                    }
+                  }}
+                  disabled={imageDrawerScene !== null && generatingSceneImage.has(imageDrawerScene)}
+                  className="flex-1 bg-purple-600 hover:bg-purple-700 text-white"
+                >
+                  {imageDrawerScene !== null && generatingSceneImage.has(imageDrawerScene) ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Generating...
+                    </>
+                  ) : (
+                    <>
+                      <Image className="w-4 h-4 mr-2" />
+                      Generate Image
+                    </>
+                  )}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk Image Generation Drawer */}
+      {bulkImageDrawerOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          {/* Background overlay */}
+          <div
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            onClick={() => setBulkImageDrawerOpen(false)}
+          />
+
+          {/* Drawer content */}
+          <div className="relative bg-gray-900 border border-gray-700 rounded-lg shadow-2xl max-w-2xl w-full mx-4 max-h-[80vh] overflow-y-auto">
+            <div className="p-6">
+              {/* Header */}
+              <div className="flex items-center justify-between mb-6">
+                <div>
+                  <h2 className="text-xl font-semibold text-white">Generate All Images</h2>
+                  <p className="text-sm text-gray-400 mt-1">
+                    Generate images for all {scenes.length} scenes in this story
+                  </p>
+                </div>
+                <button
+                  onClick={() => setBulkImageDrawerOpen(false)}
+                  className="text-gray-400 hover:text-white transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Warning about regeneration */}
+              {scenes.filter(s => s.image_url).length > 0 && (
+                <div className="mb-6 p-3 bg-orange-900/20 border border-orange-700/30 rounded-lg">
+                  <div className="flex items-start gap-2">
+                    <Image className="w-4 h-4 text-orange-400 mt-0.5 flex-shrink-0" />
+                    <div className="text-xs text-orange-300">
+                      <span className="font-semibold">Note:</span> This will regenerate ALL scene images, including existing ones. Use individual scene generation if you only want to create missing images.
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Visual Consistency Info */}
+              <div className="mb-6 p-3 bg-blue-900/20 border border-blue-700/30 rounded-lg">
+                <div className="flex items-start gap-2">
+                  <Image className="w-4 h-4 text-blue-400 mt-0.5 flex-shrink-0" />
+                  <div className="text-xs text-blue-300">
+                    <span className="font-semibold">Visual Consistency:</span> Images will be generated using AI to maintain consistent characters, style, and visual continuity throughout your story.
+                  </div>
+                </div>
+              </div>
+
+              {/* Style Selector */}
+              <div className="mb-6">
+                <label className="block text-sm font-medium text-gray-300 mb-3">
+                  Image Style
+                </label>
+
+                {/* Cinematic & Realistic Styles */}
+                <div className="mb-4">
+                  <p className="text-xs font-semibold text-gray-400 mb-2 uppercase tracking-wider">Cinematic & Realistic</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    {[
+                      { value: "cinematic illustration", label: "Cinematic", desc: "Movie-like scenes" },
+                      { value: "realistic photo", label: "Photorealistic", desc: "Lifelike images" },
+                      { value: "dramatic cinematic", label: "Dramatic", desc: "High contrast lighting" },
+                      { value: "fantasy realism", label: "Fantasy Realism", desc: "Magical but realistic" }
+                    ].map((style) => (
+                      <button
+                        key={style.value}
+                        onClick={() => setSelectedImageStyle(style.value)}
+                        className={`px-3 py-2 text-left rounded-md transition-colors border ${
+                          selectedImageStyle === style.value
+                            ? "bg-purple-900/30 border-purple-500"
+                            : "bg-gray-800 border-gray-700 hover:bg-gray-750"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <div className={`text-sm font-medium ${selectedImageStyle === style.value ? "text-white" : "text-gray-300"}`}>
+                              {style.label}
+                            </div>
+                            <div className="text-xs text-gray-500">{style.desc}</div>
+                          </div>
+                          {selectedImageStyle === style.value && (
+                            <Check className="w-4 h-4 text-purple-400 flex-shrink-0" />
+                          )}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Artistic Styles */}
+                <div className="mb-4">
+                  <p className="text-xs font-semibold text-gray-400 mb-2 uppercase tracking-wider">Artistic Paintings</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    {[
+                      { value: "oil painting", label: "Oil Painting", desc: "Classic painted look" },
+                      { value: "watercolor", label: "Watercolor", desc: "Soft, flowing colors" },
+                      { value: "impressionist painting", label: "Impressionist", desc: "Dreamy brush strokes" },
+                      { value: "digital painting", label: "Digital Art", desc: "Modern digital style" }
+                    ].map((style) => (
+                      <button
+                        key={style.value}
+                        onClick={() => setSelectedImageStyle(style.value)}
+                        className={`px-3 py-2 text-left rounded-md transition-colors border ${
+                          selectedImageStyle === style.value
+                            ? "bg-purple-900/30 border-purple-500"
+                            : "bg-gray-800 border-gray-700 hover:bg-gray-750"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <div className={`text-sm font-medium ${selectedImageStyle === style.value ? "text-white" : "text-gray-300"}`}>
+                              {style.label}
+                            </div>
+                            <div className="text-xs text-gray-500">{style.desc}</div>
+                          </div>
+                          {selectedImageStyle === style.value && (
+                            <Check className="w-4 h-4 text-purple-400 flex-shrink-0" />
+                          )}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Animated Styles */}
+                <div className="mb-4">
+                  <p className="text-xs font-semibold text-gray-400 mb-2 uppercase tracking-wider">Animation & Comics</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    {[
+                      { value: "anime illustration", label: "Anime", desc: "Japanese animation style" },
+                      { value: "3d animation", label: "3D Animation", desc: "Pixar-like 3D style" },
+                      { value: "comic book art", label: "Comic Book", desc: "Bold comic style" },
+                      { value: "cartoon illustration", label: "Cartoon", desc: "Playful cartoon look" }
+                    ].map((style) => (
+                      <button
+                        key={style.value}
+                        onClick={() => setSelectedImageStyle(style.value)}
+                        className={`px-3 py-2 text-left rounded-md transition-colors border ${
+                          selectedImageStyle === style.value
+                            ? "bg-purple-900/30 border-purple-500"
+                            : "bg-gray-800 border-gray-700 hover:bg-gray-750"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <div className={`text-sm font-medium ${selectedImageStyle === style.value ? "text-white" : "text-gray-300"}`}>
+                              {style.label}
+                            </div>
+                            <div className="text-xs text-gray-500">{style.desc}</div>
+                          </div>
+                          {selectedImageStyle === style.value && (
+                            <Check className="w-4 h-4 text-purple-400 flex-shrink-0" />
+                          )}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Special Styles */}
+                <div className="mb-4">
+                  <p className="text-xs font-semibold text-gray-400 mb-2 uppercase tracking-wider">Special Effects</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    {[
+                      { value: "noir black and white", label: "Film Noir", desc: "Classic B&W style" },
+                      { value: "vintage photography", label: "Vintage Photo", desc: "Retro aged look" },
+                      { value: "minimalist illustration", label: "Minimalist", desc: "Simple, clean design" },
+                      { value: "storybook illustration", label: "Storybook", desc: "Children's book style" }
+                    ].map((style) => (
+                      <button
+                        key={style.value}
+                        onClick={() => setSelectedImageStyle(style.value)}
+                        className={`px-3 py-2 text-left rounded-md transition-colors border ${
+                          selectedImageStyle === style.value
+                            ? "bg-purple-900/30 border-purple-500"
+                            : "bg-gray-800 border-gray-700 hover:bg-gray-750"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <div className={`text-sm font-medium ${selectedImageStyle === style.value ? "text-white" : "text-gray-300"}`}>
+                              {style.label}
+                            </div>
+                            <div className="text-xs text-gray-500">{style.desc}</div>
+                          </div>
+                          {selectedImageStyle === style.value && (
+                            <Check className="w-4 h-4 text-purple-400 flex-shrink-0" />
+                          )}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {story?.default_image_style && (
+                  <p className="text-xs text-gray-500 mt-3 p-2 bg-gray-800 rounded">
+                    💡 Story default: <span className="text-gray-400 font-medium">{story.default_image_style}</span>
+                  </p>
+                )}
+              </div>
+
+              {/* Optional Instructions */}
+              <div className="mb-6">
+                <label className="block text-sm font-medium text-gray-300 mb-2">
+                  Additional Instructions (Optional)
+                </label>
+                <textarea
+                  value={imageInstructions}
+                  onChange={(e) => setImageInstructions(e.target.value)}
+                  placeholder="Add specific details or requirements for all images..."
+                  rows={3}
+                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-md text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent text-sm"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  These instructions will apply to all generated images
+                </p>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex gap-3">
+                <Button
+                  variant="outline"
+                  onClick={() => setBulkImageDrawerOpen(false)}
+                  className="flex-1 border-gray-700 text-gray-300 hover:bg-gray-800"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={async () => {
+                    await generateImages(selectedImageStyle, imageInstructions);
+                  }}
+                  disabled={generatingImages}
+                  className="flex-1 bg-blue-600 hover:bg-blue-700 text-white"
+                >
+                  {generatingImages ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Generating...
+                    </>
+                  ) : (
+                    <>
+                      <Image className="w-4 h-4 mr-2" />
+                      Generate All Images
+                    </>
+                  )}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Captions Settings Drawer */}
+      {captionsDrawerOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          {/* Background overlay */}
+          <div
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            onClick={() => setCaptionsDrawerOpen(false)}
+          />
+
+          {/* Drawer content */}
+          <div className="relative bg-gray-900 border border-gray-700 rounded-lg shadow-2xl max-w-2xl w-full mx-4 max-h-[85vh] overflow-y-auto">
+            <div className="p-6">
+              {/* Header */}
+              <div className="flex items-center justify-between mb-6">
+                <div>
+                  <h2 className="text-xl font-semibold text-white">Caption Settings</h2>
+                  <p className="text-sm text-gray-400 mt-1">
+                    Customize how captions appear in your video
+                  </p>
+                </div>
+                <button
+                  onClick={() => setCaptionsDrawerOpen(false)}
+                  className="text-gray-400 hover:text-white transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Enable/Disable Captions */}
+              <div className="mb-6 p-4 bg-gray-800 rounded-lg">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-sm font-medium text-white">Enable Captions</h3>
+                    <p className="text-xs text-gray-400 mt-1">Show text captions in exported video</p>
+                  </div>
+                  <button
+                    onClick={() => setCaptionsEnabled(!captionsEnabled)}
+                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                      captionsEnabled ? "bg-purple-600" : "bg-gray-700"
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                        captionsEnabled ? "translate-x-6" : "translate-x-1"
+                      }`}
+                    />
+                  </button>
+                </div>
+              </div>
+
+              {captionsEnabled && (
+                <>
+                  {/* Font Family */}
+                  <div className="mb-6">
+                    <label className="block text-sm font-medium text-gray-300 mb-3">
+                      Font Family
+                    </label>
+                    <select
+                      value={captionFontFamily}
+                      onChange={(e) => setCaptionFontFamily(e.target.value)}
+                      className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded text-gray-300 focus:outline-none focus:border-purple-500"
+                      style={{
+                        backgroundImage: `url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e")`,
+                        backgroundPosition: 'right 0.5rem center',
+                        backgroundRepeat: 'no-repeat',
+                        backgroundSize: '1.5em 1.5em',
+                        paddingRight: '2.5rem',
+                      }}
+                    >
+                      <optgroup label="Sans-Serif (Modern)" className="bg-gray-900 text-gray-400">
+                        <option value="Montserrat">Montserrat</option>
+                        <option value="Poppins">Poppins</option>
+                        <option value="Inter">Inter</option>
+                        <option value="Roboto">Roboto</option>
+                        <option value="Open Sans">Open Sans</option>
+                        <option value="Lato">Lato</option>
+                        <option value="Raleway">Raleway</option>
+                        <option value="Nunito">Nunito</option>
+                        <option value="Source Sans Pro">Source Sans Pro</option>
+                        <option value="Oswald">Oswald</option>
+                        <option value="Bebas Neue">Bebas Neue</option>
+                        <option value="Arial">Arial</option>
+                        <option value="Helvetica">Helvetica</option>
+                        <option value="Verdana">Verdana</option>
+                      </optgroup>
+                      <optgroup label="Serif (Classic)" className="bg-gray-900 text-gray-400">
+                        <option value="Playfair Display">Playfair Display</option>
+                        <option value="Merriweather">Merriweather</option>
+                        <option value="Lora">Lora</option>
+                        <option value="PT Serif">PT Serif</option>
+                        <option value="Times New Roman">Times New Roman</option>
+                        <option value="Georgia">Georgia</option>
+                      </optgroup>
+                      <optgroup label="Display & Handwriting" className="bg-gray-900 text-gray-400">
+                        <option value="Bangers">Bangers</option>
+                        <option value="Pacifico">Pacifico</option>
+                        <option value="Righteous">Righteous</option>
+                        <option value="Lobster">Lobster</option>
+                        <option value="Permanent Marker">Permanent Marker</option>
+                        <option value="Dancing Script">Dancing Script</option>
+                      </optgroup>
+                      <optgroup label="Monospace" className="bg-gray-900 text-gray-400">
+                        <option value="Courier New">Courier New</option>
+                        <option value="Roboto Mono">Roboto Mono</option>
+                        <option value="Source Code Pro">Source Code Pro</option>
+                      </optgroup>
+                    </select>
+                  </div>
+
+                  {/* Caption Position from Bottom */}
+                  <div className="mb-6">
+                    <label className="block text-sm font-medium text-gray-300 mb-3">
+                      Position from Bottom: <span className="text-purple-400 font-bold">{captionPositionFromBottom}%</span>
+                    </label>
+                    <Slider
+                      value={[captionPositionFromBottom]}
+                      onValueChange={(value) => setCaptionPositionFromBottom(value[0])}
+                      min={0}
+                      max={100}
+                      step={1}
+                      className="w-full"
+                    />
+                  </div>
+
+                  {/* Font Size */}
+                  <div className="mb-6">
+                    <label className="block text-sm font-medium text-gray-300 mb-3">
+                      Font Size: <span className="text-purple-400 font-bold">{captionFontSize}px</span>
+                    </label>
+                    <input
+                      type="range"
+                      min="16"
+                      max="32"
+                      value={captionFontSize}
+                      onChange={(e) => setCaptionFontSize(parseInt(e.target.value))}
+                      className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-purple-600"
+                    />
+                    <div className="flex justify-between text-xs text-gray-500 mt-1">
+                      <span>Small (16px)</span>
+                      <span>Large (32px)</span>
+                    </div>
+                  </div>
+
+                  {/* Font Weight */}
+                  <div className="mb-6">
+                    <label className="block text-sm font-medium text-gray-300 mb-3">
+                      Font Weight: <span className="text-purple-400 font-bold">{captionFontWeight}</span>
+                    </label>
+                    <input
+                      type="range"
+                      min="100"
+                      max="900"
+                      step="100"
+                      value={captionFontWeight}
+                      onChange={(e) => setCaptionFontWeight(parseInt(e.target.value))}
+                      className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-purple-600"
+                    />
+                    <div className="flex justify-between text-xs text-gray-500 mt-1">
+                      <span>Thin (100)</span>
+                      <span>Bold (900)</span>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {/* Action Buttons */}
+              <div className="flex gap-3 mt-8">
+                <Button
+                  variant="outline"
+                  onClick={() => setCaptionsDrawerOpen(false)}
+                  className="flex-1 border-gray-700 text-gray-300 hover:bg-gray-800"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={() => {
+                    setCaptionsDrawerOpen(false);
+                    // Settings are already saved in state
+                  }}
+                  className="flex-1 bg-purple-600 hover:bg-purple-700 text-white"
+                >
+                  <Check className="w-4 h-4 mr-2" />
+                  Save Settings
                 </Button>
               </div>
             </div>

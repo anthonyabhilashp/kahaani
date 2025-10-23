@@ -5,6 +5,7 @@ import fetch from "node-fetch";
 import ffmpeg from "fluent-ffmpeg";
 import { supabaseAdmin } from "../../lib/supabaseAdmin";
 import { JobLogger } from "../../lib/logger";
+import * as Echogarden from "echogarden";
 
 const ELEVENLABS_API = "https://api.elevenlabs.io/v1/text-to-speech";
 
@@ -71,31 +72,71 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const duration = info.format?.duration || 0;
     logger.log(`⏱ Audio duration: ${duration.toFixed(2)} seconds`);
 
-    // 6️⃣ Upload to Supabase
+    // 5.5️⃣ Generate word-level timestamps using forced alignment
+    logger.log(`🔍 Generating word-level timestamps with forced alignment...`);
+    let wordTimestamps = null;
+    try {
+      const alignmentResult = await Echogarden.align(audioPath, sceneText, {
+        engine: 'dtw',
+        language: 'en',
+      });
+
+      // Extract word timestamps from timeline
+      wordTimestamps = alignmentResult.wordTimeline.map((entry: any) => ({
+        word: entry.text,
+        start: entry.startTime,
+        end: entry.endTime
+      }));
+
+      logger.log(`✅ Generated ${wordTimestamps.length} word timestamps`);
+    } catch (alignErr: any) {
+      logger.error(`⚠️ Word alignment failed, continuing without timestamps`, alignErr);
+      // Continue without timestamps rather than failing completely
+    }
+
+    // 6️⃣ Delete old audio if exists and upload new one
     const fileName = `scene-${scene_id}.mp3`;
+
+    // Always delete first to avoid "resource already exists" error
+    logger.log(`🗑️ Removing any existing audio file: ${fileName}`);
+    await supabaseAdmin.storage.from("audio").remove([fileName]);
+    logger.log(`✅ Cleanup completed`);
+
+    // 7️⃣ Upload new audio to Supabase
+    logger.log(`☁️ Uploading new audio file: ${fileName}`);
     const { error: uploadErr } = await supabaseAdmin.storage
       .from("audio")
       .upload(fileName, fs.readFileSync(audioPath), {
         contentType: "audio/mpeg",
-        upsert: true,
+        upsert: false,
       });
     if (uploadErr) throw uploadErr;
+    logger.log(`✅ Audio uploaded successfully`);
 
     const audioUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/audio/${fileName}`;
 
-    // 7️⃣ Update scene with audio URL directly
+    // 8️⃣ Update scene with audio URL, voice_id, duration, and word timestamps
     const { error: updateErr } = await supabaseAdmin
       .from("scenes")
-      .update({ 
-        audio_url: audioUrl
-        // Note: We could also store voice_id and duration as additional columns if needed
+      .update({
+        audio_url: audioUrl,
+        voice_id: voiceId,
+        duration: duration,
+        word_timestamps: wordTimestamps
       })
       .eq("id", scene_id);
-      
+
     if (updateErr) throw updateErr;
-    
+
     logger.log(`✅ Audio saved to Supabase for scene: ${audioUrl}`);
-    res.status(200).json({ scene_id, story_id: scene.story_id, voice_id: voiceId, audio_url: audioUrl, duration });
+    res.status(200).json({
+      scene_id,
+      story_id: scene.story_id,
+      voice_id: voiceId,
+      audio_url: audioUrl,
+      duration,
+      word_timestamps: wordTimestamps
+    });
   } catch (err: any) {
     if (logger) logger.error("❌ Error during audio generation", err);
     res.status(500).json({ error: err.message });

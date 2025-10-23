@@ -6,11 +6,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!id) return res.status(400).json({ error: "Missing story id" });
 
   try {
-    // 🚀 Simplified: Only fetch story, scenes (with image_url & audio_url), and videos
+    // 🚀 Simplified: Only fetch story, scenes (with image_url, audio_url, voice_id), and videos
     const [{ data: story }, { data: scenes }, { data: videoRows, error: videoErr }] =
       await Promise.all([
         supabaseAdmin.from("stories").select("*").eq("id", id).single(),
-        supabaseAdmin.from("scenes").select("id, story_id, text, order, image_url, audio_url").eq("story_id", id).order("order"),
+        supabaseAdmin.from("scenes").select("id, story_id, text, order, image_url, audio_url, voice_id, duration, word_timestamps").eq("story_id", id).order("order"),
         supabaseAdmin
           .from("videos")
           .select("*")

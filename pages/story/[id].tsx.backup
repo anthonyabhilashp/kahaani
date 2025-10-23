@@ -1,0 +1,1130 @@
+import { useState, useEffect, useCallback, useRef } from "react";
+import { useRouter } from "next/router";
+import { Button } from "../../components/ui/button";
+import { Card } from "../../components/ui/card";
+import { ArrowLeft, Play, Pause, Download, Volume2, VolumeX, ChevronDown, Maximize, Loader2, ImageIcon, Image, Pencil, Trash2 } from "lucide-react";
+
+type Scene = {
+  id?: string;
+  text: string;
+  order: number;
+  image_url?: string;
+  audio_url?: string;
+};
+type Video = {
+  video_url: string;
+  is_valid?: boolean;
+  duration?: number;
+};
+
+// Placeholder component for missing images
+const ImagePlaceholder = ({ className = "", alt = "No image" }: { className?: string; alt?: string }) => (
+  <div className={`${className} bg-gray-100 border border-gray-200 flex flex-col items-center justify-center text-gray-400`}>
+    <ImageIcon size={16} />
+    <span className="text-[8px] mt-1 font-medium">No Image</span>
+  </div>
+);
+
+export default function StoryDetailsPage() {
+  const router = useRouter();
+  const { id } = router.query;
+
+  const [story, setStory] = useState<any>(null);
+  const [scenes, setScenes] = useState<Scene[]>([]);
+  const [video, setVideo] = useState<Video | null>(null);
+  const [selectedScene, setSelectedScene] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [generatingImages, setGeneratingImages] = useState(false);
+  const [generatingSceneAudio, setGeneratingSceneAudio] = useState<Set<number>>(new Set());
+  const [generatingVideo, setGeneratingVideo] = useState(false);
+  const [editingScene, setEditingScene] = useState<number | null>(null);
+  const [editText, setEditText] = useState("");
+  const [modifiedScenes, setModifiedScenes] = useState<Set<number>>(new Set());
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [sceneToDelete, setSceneToDelete] = useState<number | null>(null);
+  const [isPlayingPreview, setIsPlayingPreview] = useState(false);
+  const [volume, setVolume] = useState(0); // Start muted
+  const [isVolumeVisible, setIsVolumeVisible] = useState(false);
+  const [lastVolume, setLastVolume] = useState(0.7); // Remember last volume setting
+  const [mediaPreloaded, setMediaPreloaded] = useState(false);
+  const [preloadedAudio, setPreloadedAudio] = useState<{[key: number]: HTMLAudioElement}>({});
+  const [aspectRatio, setAspectRatio] = useState<"9:16" | "16:9" | "1:1">("9:16");
+  const [sceneProgress, setSceneProgress] = useState(0); // Current scene progress (0 to scene duration)
+  const [sceneDuration, setSceneDuration] = useState(0); // Current scene's audio duration
+  const [isSeeking, setIsSeeking] = useState(false);
+  const progressIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const currentAudioRef = useRef<HTMLAudioElement | null>(null); // Track currently playing audio
+
+  // Use ref for immediate cancellation without state delays
+  const previewCancelledRef = useRef(false);
+  const currentPreviewRef = useRef<Promise<void> | null>(null);
+  const volumeRef = useRef(volume); // Track current volume with ref
+
+  // Keep volumeRef in sync with volume state
+  useEffect(() => {
+    volumeRef.current = volume;
+  }, [volume]);
+
+  // Stop audio when navigating away or unmounting
+  useEffect(() => {
+    return () => {
+      console.log("🧹 Cleaning up: stopping all audio on unmount");
+      stopVideoPreview();
+    };
+  }, []);
+
+  // Update volume for all preloaded audio when volume changes
+  useEffect(() => {
+    console.log(`🔊 Updating volume to ${volume} for ${Object.keys(preloadedAudio).length} audio elements`);
+    Object.values(preloadedAudio).forEach(audio => {
+      audio.volume = volume;
+    });
+  }, [volume, preloadedAudio]);
+
+  // Get preview dimensions based on aspect ratio - Maximize screen usage
+  const getPreviewDimensions = () => {
+    switch (aspectRatio) {
+      case "9:16": // Portrait (mobile/vertical) - Use maximum vertical space
+        return { width: 450, height: 800 }; // 9:16 ratio, maximized
+      case "16:9": // Landscape (desktop/horizontal)
+        return { width: 720, height: 405 }; // 16:9 ratio
+      case "1:1": // Square
+        return { width: 540, height: 540 }; // 1:1 ratio
+      default:
+        return { width: 540, height: 540 };
+    }
+  };
+
+  // Preload images and audio for better performance
+  const preloadMedia = useCallback(async (scenes: Scene[]) => {
+    console.log("🚀 Preloading media assets...");
+    
+    try {
+      // Preload images from scenes
+      const imagePromises = scenes
+        .filter(scene => scene.image_url)
+        .map(scene => {
+          return new Promise((resolve) => {
+            const image = document.createElement('img');
+            image.onload = () => resolve(void 0);
+            image.onerror = () => resolve(void 0); // Continue even if image fails
+            image.src = scene.image_url!;
+          });
+        });
+      
+      // Preload audio files from scenes and store them
+      const audioCache: {[key: number]: HTMLAudioElement} = {};
+      const audioPromises = scenes
+        .filter((scene, index) => scene.audio_url)
+        .map((scene, sceneIndex) => {
+          return new Promise((resolve) => {
+            const actualIndex = scenes.findIndex(s => s === scene);
+            const audioElement = new Audio(scene.audio_url!);
+            audioElement.volume = volume; // Set initial volume
+            audioElement.oncanplaythrough = () => {
+              audioCache[actualIndex] = audioElement;
+              resolve(void 0);
+            };
+            audioElement.onerror = () => resolve(void 0); // Continue even if audio fails
+            audioElement.preload = 'metadata';
+          });
+        });
+      
+      // Wait for all media to preload
+      await Promise.all([...imagePromises, ...audioPromises]);
+      
+      // Save preloaded audio elements
+      setPreloadedAudio(audioCache);
+      setMediaPreloaded(true);
+      console.log("✅ Media preloading completed - cached", Object.keys(audioCache).length, "audio files");
+      
+    } catch (err) {
+      console.error("⚠️ Media preloading error:", err);
+      setMediaPreloaded(true); // Set as complete even if errors
+    }
+  }, []); // Remove mediaPreloaded dependency
+
+  const fetchStory = useCallback(async () => {
+    if (!id) return;
+    
+    console.log("📡 Fetching story details for ID:", id);
+    setLoading(true);
+    
+    try {
+      const res = await fetch(`/api/get_story_details?id=${id}`);
+      const data = await res.json();
+      console.log("📊 Story data received:", data);
+      
+      setStory(data.story);
+      setScenes(data.scenes || []);
+      setVideo(data.video);
+      
+      // Preload media assets after setting state - only if not already preloaded
+      if (data.scenes?.length > 0 && !mediaPreloaded) {
+        preloadMedia(data.scenes);
+      }
+      
+    } catch (err) {
+      console.error("❌ Error fetching story:", err);
+    } finally {
+      setLoading(false);
+    }
+  }, [id, preloadMedia, mediaPreloaded]);
+
+  // Fetch story only once when component mounts or id changes
+  useEffect(() => {
+    if (id) {
+      fetchStory();
+    }
+  }, [fetchStory]); // Now properly depend on fetchStory
+
+  // Video validity is now checked automatically via the is_valid flag
+  // No need for manual hash checking - database trigger handles it
+
+  // Debug state changes
+  useEffect(() => {
+    console.log("State updated:", {
+      scenesCount: scenes.length,
+      scenesWithImages: scenes.filter(s => s.image_url).length,
+      scenesWithAudio: scenes.filter(s => s.audio_url).length,
+      hasVideo: !!video?.video_url,
+      generatingImages,
+      generatingSceneAudio: generatingSceneAudio.size
+    });
+  }, [scenes.length, video?.video_url, generatingImages, generatingSceneAudio, scenes]);
+
+  const generateImages = async () => {
+    if (!id) return;
+    setGeneratingImages(true);
+    try {
+      console.log("Starting image generation for story:", id);
+      const res = await fetch("/api/generate_images", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ story_id: id }),
+      });
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || "Image generation failed");
+      }
+      const result = await res.json();
+      console.log("✅ Image generation completed:", result);
+      
+      // Instead of full refresh, just update images without losing audio cache
+      const res2 = await fetch(`/api/get_story_details?id=${id}`);
+      const data = await res2.json();
+      
+      // Update scenes while preserving existing audio cache
+      const updatedScenes = data.scenes || [];
+      setScenes(updatedScenes);
+      
+      // Don't reset media preload state or re-preload audio
+    } catch (err) {
+      console.error("Image generation error:", err);
+      alert(`Image generation failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      setGeneratingImages(false);
+    }
+  };
+
+  const generateSceneAudio = async (sceneIndex: number) => {
+    if (!scenes[sceneIndex]) return;
+
+    const newGenerating = new Set(generatingSceneAudio);
+    newGenerating.add(sceneIndex);
+    setGeneratingSceneAudio(newGenerating);
+
+    try {
+      console.log("Starting audio generation for scene:", sceneIndex);
+      const res = await fetch("/api/generate_audio", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          scene_id: scenes[sceneIndex].id
+        }),
+      });
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || "Scene audio generation failed");
+      }
+      const result = await res.json();
+      console.log("Scene audio generation completed:", result);
+
+      // Update the specific scene with the new audio URL
+      const updatedScenes = [...scenes];
+      updatedScenes[sceneIndex] = {
+        ...updatedScenes[sceneIndex],
+        audio_url: result.audio_url
+      };
+      setScenes(updatedScenes);
+
+      // Update preloaded audio cache with new audio
+      if (result.audio_url) {
+        const audioElement = new Audio(result.audio_url);
+        audioElement.preload = 'metadata';
+        audioElement.oncanplaythrough = () => {
+          setPreloadedAudio(prev => ({
+            ...prev,
+            [sceneIndex]: audioElement
+          }));
+          console.log(`✅ New audio preloaded for scene ${sceneIndex + 1}`);
+        };
+      }
+
+    } catch (err) {
+      console.error("Scene audio generation error:", err);
+      alert(`Scene audio generation failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      const newGenerating = new Set(generatingSceneAudio);
+      newGenerating.delete(sceneIndex);
+      setGeneratingSceneAudio(newGenerating);
+    }
+  };
+
+  const generateVideo = async () => {
+    if (!id) return;
+    setGeneratingVideo(true);
+    try {
+      console.log("🎬 Starting video export for story:", id, "with aspect ratio:", aspectRatio);
+      const res = await fetch("/api/generate_video", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ story_id: id, aspect_ratio: aspectRatio }),
+      });
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || "Video generation failed");
+      }
+      const result = await res.json();
+      console.log("✅ Video export completed:", result);
+
+      // Update video state
+      setVideo({
+        video_url: result.video_url,
+        is_valid: result.is_valid,
+        duration: result.duration
+      });
+
+      // Auto-download the video
+      const link = document.createElement('a');
+      link.href = result.video_url;
+      link.download = `${story?.title || 'story'}-${aspectRatio}.mp4`;
+      link.click();
+
+      alert(`✅ Video exported successfully! Duration: ${result.duration?.toFixed(1)}s`);
+    } catch (err) {
+      console.error("❌ Video export error:", err);
+      alert(`Video export failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      setGeneratingVideo(false);
+    }
+  };
+
+  const stopVideoPreview = () => {
+    console.log("🛑 Stopping video preview");
+    previewCancelledRef.current = true;
+    setIsPlayingPreview(false);
+    setIsSeeking(false);
+
+    // Stop preloaded audio elements
+    Object.values(preloadedAudio).forEach(audio => {
+      audio.pause();
+      audio.currentTime = 0;
+    });
+
+    // Also stop any other audio elements as fallback
+    const audios = document.querySelectorAll('audio');
+    audios.forEach(audio => {
+      audio.pause();
+      audio.currentTime = 0;
+    });
+
+    // Clear progress tracking
+    if (progressIntervalRef.current) {
+      clearInterval(progressIntervalRef.current);
+      progressIntervalRef.current = null;
+    }
+    setSceneProgress(0);
+    setSceneDuration(0);
+    currentAudioRef.current = null;
+  };
+
+  const seekToTime = async (targetTime: number) => {
+    if (!currentAudioRef.current) return;
+
+    console.log(`⏩ Seeking to ${targetTime.toFixed(1)}s in current scene`);
+    setIsSeeking(true);
+
+    const audio = currentAudioRef.current;
+    const wasPlaying = !audio.paused;
+
+    // Pause audio
+    audio.pause();
+
+    // Seek to target time
+    audio.currentTime = targetTime;
+    setSceneProgress(targetTime);
+
+    // Resume if was playing
+    if (wasPlaying) {
+      try {
+        await audio.play();
+      } catch (err) {
+        console.error("Resume play error:", err);
+      }
+    }
+
+    setIsSeeking(false);
+  };
+
+  const startVideoPreview = async () => {
+    console.log("🎬 Starting video preview from scene:", selectedScene);
+
+    // Stop any existing preview first
+    stopVideoPreview();
+
+    // Wait for cleanup
+    await new Promise(resolve => setTimeout(resolve, 50));
+
+    // Reset progress
+    setSceneProgress(0);
+
+    // Reset cancellation flag and start new preview
+    previewCancelledRef.current = false;
+    setIsPlayingPreview(true);
+    
+    const playScene = async (sceneIndex: number) => {
+      if (previewCancelledRef.current) return false;
+
+      console.log(`🎬 Playing scene ${sceneIndex + 1}`);
+      setSelectedScene(sceneIndex);
+
+      const scene = scenes[sceneIndex];
+      if (scene?.audio_url && preloadedAudio[sceneIndex]) {
+        const currentVol = volumeRef.current;
+        console.log(`🔊 Playing preloaded audio for scene ${sceneIndex + 1} with volume ${currentVol}`);
+        const audio = preloadedAudio[sceneIndex];
+        audio.volume = currentVol;
+        audio.currentTime = 0;
+        console.log(`🎵 Audio element volume set to: ${audio.volume}, muted: ${audio.muted}`);
+
+        // Set scene duration and reset progress
+        setSceneDuration(audio.duration);
+        setSceneProgress(0);
+        currentAudioRef.current = audio;
+
+        try {
+          // Start progress tracking for this scene
+          progressIntervalRef.current = setInterval(() => {
+            if (audio && !audio.paused) {
+              setSceneProgress(audio.currentTime);
+            }
+          }, 100);
+
+          await audio.play();
+          await new Promise<void>((resolve) => {
+            const checkCancellation = () => {
+              if (previewCancelledRef.current) {
+                audio.pause();
+                if (progressIntervalRef.current) {
+                  clearInterval(progressIntervalRef.current);
+                }
+                resolve();
+                return;
+              }
+              setTimeout(checkCancellation, 100);
+            };
+
+            audio.onended = () => {
+              if (progressIntervalRef.current) {
+                clearInterval(progressIntervalRef.current);
+              }
+              setSceneProgress(0); // Reset for next scene
+              resolve();
+            };
+            audio.onerror = () => {
+              if (progressIntervalRef.current) {
+                clearInterval(progressIntervalRef.current);
+              }
+              resolve();
+            };
+
+            checkCancellation();
+          });
+        } catch (err) {
+          console.error("Audio play error:", err);
+          if (progressIntervalRef.current) {
+            clearInterval(progressIntervalRef.current);
+          }
+          // Fallback timing with cancellation check
+          for (let i = 0; i < 30 && !previewCancelledRef.current; i++) {
+            await new Promise(resolve => setTimeout(resolve, 100));
+            setSceneProgress((i + 1) * 0.1);
+          }
+        }
+      } else {
+        console.log(`⏱️ No audio for scene ${sceneIndex + 1}, using 3s default`);
+        // Default 3 seconds with cancellation check
+        for (let i = 0; i < 30 && !previewCancelledRef.current; i++) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+      }
+      
+      return !previewCancelledRef.current;
+    };
+    
+    try {
+      // Play scenes starting from selected scene
+      for (let i = selectedScene; i < scenes.length; i++) {
+        const shouldContinue = await playScene(i);
+        if (!shouldContinue) {
+          console.log("🛑 Preview cancelled");
+          return;
+        }
+      }
+      
+      console.log("🎬 Preview completed!");
+    } catch (err) {
+      console.error("❌ Preview error:", err);
+    } finally {
+      if (!previewCancelledRef.current) {
+        setIsPlayingPreview(false);
+        console.log("🛑 Preview stopped naturally");
+      }
+    }
+  };
+
+  const editScene = async (sceneIndex: number, newText: string) => {
+    if (!id || !scenes[sceneIndex]) return;
+    
+    try {
+      const res = await fetch("/api/edit_scene", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+          story_id: id, 
+          scene_id: scenes[sceneIndex].id,
+          scene_order: sceneIndex,
+          text: newText 
+        }),
+      });
+      
+      if (!res.ok) throw new Error("Failed to edit scene");
+      
+      // Update local state immediately
+      const updatedScenes = [...scenes];
+      updatedScenes[sceneIndex] = { ...updatedScenes[sceneIndex], text: newText };
+      setScenes(updatedScenes);
+      
+      // Mark scene as modified
+      const newModified = new Set(modifiedScenes);
+      newModified.add(sceneIndex);
+      setModifiedScenes(newModified);
+      
+      setEditingScene(null);
+      setEditText("");
+    } catch (err) {
+      console.error("Scene edit error:", err);
+      alert(`Failed to edit scene: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    }
+  };
+
+  const handleDeleteClick = (sceneIndex: number) => {
+    setSceneToDelete(sceneIndex);
+    setDeleteDialogOpen(true);
+  };
+
+  const confirmDelete = async () => {
+    if (sceneToDelete === null || !id || !scenes[sceneToDelete]) return;
+    
+    try {
+      const res = await fetch("/api/delete_scene", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+          story_id: id, 
+          scene_id: scenes[sceneToDelete].id,
+          scene_order: sceneToDelete
+        }),
+      });
+      
+      if (!res.ok) throw new Error("Failed to delete scene");
+      
+      // Update local state immediately
+      const updatedScenes = scenes.filter((_, index) => index !== sceneToDelete);
+      setScenes(updatedScenes);
+      
+      // Update selected scene if necessary
+      if (selectedScene >= sceneToDelete && selectedScene > 0) {
+        setSelectedScene(selectedScene - 1);
+      }
+      
+      // Update modified scenes set
+      const newModified = new Set<number>();
+      modifiedScenes.forEach(index => {
+        if (index < sceneToDelete) {
+          newModified.add(index);
+        } else if (index > sceneToDelete) {
+          newModified.add(index - 1);
+        }
+      });
+      setModifiedScenes(newModified);
+      
+      // Close dialog and reset state
+      setDeleteDialogOpen(false);
+      setSceneToDelete(null);
+      
+    } catch (err) {
+      console.error("Scene delete error:", err);
+      alert(`Failed to delete scene: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      setDeleteDialogOpen(false);
+      setSceneToDelete(null);
+    }
+  };
+
+  const startEditing = (sceneIndex: number) => {
+    setEditingScene(sceneIndex);
+    setEditText(scenes[sceneIndex]?.text || "");
+  };
+
+  const cancelEditing = () => {
+    setEditingScene(null);
+    setEditText("");
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100">
+        <div className="text-center">
+          <Loader2 className="animate-spin h-12 w-12 text-purple-600 mx-auto mb-4" />
+          <p className="text-lg text-gray-700 font-medium">Loading your magical story...</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col h-screen bg-black">
+      {/* Top Header - Dark theme like StoryShort */}
+      <header className="bg-black border-b border-gray-800">
+        <div className="px-6 py-3 flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => router.push("/")}
+              className="text-gray-400 hover:text-white hover:bg-gray-800"
+            >
+              <ArrowLeft className="w-4 h-4 mr-1" />
+              Back to videos
+            </Button>
+            <h1 className="text-lg font-semibold text-white">
+              {story?.title || "Video Editor"}
+            </h1>
+          </div>
+
+          <div className="flex items-center gap-4">
+            {/* Aspect Ratio Selector */}
+            <select
+              value={aspectRatio}
+              onChange={(e) => setAspectRatio(e.target.value as "9:16" | "16:9" | "1:1")}
+              className="bg-gray-800 border border-gray-700 text-white text-sm rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500"
+            >
+              <option value="9:16">📱 9:16</option>
+              <option value="16:9">🖥️ 16:9</option>
+              <option value="1:1">⬛ 1:1</option>
+            </select>
+
+            {/* Export Button */}
+            <Button
+              onClick={generateVideo}
+              disabled={generatingVideo}
+              className="bg-orange-500 hover:bg-orange-600 text-white font-medium px-6"
+            >
+              {generatingVideo ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Exporting...
+                </>
+              ) : (
+                <>
+                  <Download className="w-4 h-4 mr-2" />
+                  Export / Share
+                </>
+              )}
+            </Button>
+          </div>
+        </div>
+      </header>
+
+      <div className="flex flex-1 overflow-hidden">
+        {/* Left Sidebar - Tool Icons - Narrow */}
+        <aside className="w-16 bg-black border-r border-gray-800 flex flex-col items-center py-6 gap-6">
+          {/* Frames Icon */}
+          <button
+            className="w-10 h-10 flex flex-col items-center justify-center text-gray-400 hover:text-white transition-colors"
+            title="Frames"
+          >
+            <ImageIcon className="w-5 h-5" />
+            <span className="text-[10px] mt-1">Frames</span>
+          </button>
+
+          {/* Captions Icon */}
+          <button
+            className="w-10 h-10 flex flex-col items-center justify-center text-gray-400 hover:text-white transition-colors"
+            title="Captions"
+          >
+            <span className="text-xs font-bold">CC</span>
+            <span className="text-[10px] mt-1">Captions</span>
+          </button>
+
+          {/* Audio Icon */}
+          <button
+            className="w-10 h-10 flex flex-col items-center justify-center text-gray-400 hover:text-white transition-colors"
+            title="Audio"
+          >
+            <Volume2 className="w-5 h-5" />
+            <span className="text-[10px] mt-1">Audio</span>
+          </button>
+        </aside>
+
+        {/* Main Content - Optimized space usage */}
+        <main className="flex-1 flex flex-col items-center justify-center bg-gradient-to-br from-gray-900 via-purple-900 to-violet-900 relative overflow-hidden py-2">
+          {/* Minimal Background Elements */}
+          <div className="absolute inset-0 bg-[url('/grid.svg')] bg-center [mask-image:linear-gradient(180deg,white,rgba(255,255,255,0))] opacity-20"></div>
+          <div className="absolute top-1/4 left-1/4 w-20 h-20 bg-purple-500 rounded-full mix-blend-multiply filter blur-xl opacity-10 animate-blob"></div>
+          <div className="absolute top-1/3 right-1/4 w-20 h-20 bg-yellow-500 rounded-full mix-blend-multiply filter blur-xl opacity-10 animate-blob animation-delay-2000"></div>
+          <div className="absolute bottom-1/4 left-1/3 w-20 h-20 bg-pink-500 rounded-full mix-blend-multiply filter blur-xl opacity-10 animate-blob animation-delay-4000"></div>
+
+          {/* Main Preview Area - Centered and compact */}
+          <div className="relative z-10 flex flex-col items-center justify-center w-full h-full">
+            {/* Aspect Ratio Controls - Top */}
+            <div className="mb-2 flex items-center gap-2">
+              <label className="text-white text-sm font-medium">Aspect Ratio:</label>
+              <select
+                value={aspectRatio}
+                onChange={(e) => setAspectRatio(e.target.value as "9:16" | "16:9" | "1:1")}
+                className="bg-white/20 backdrop-blur-sm border border-white/30 rounded-lg px-3 py-1.5 text-white text-sm focus:outline-none focus:ring-2 focus:ring-purple-400"
+              >
+                <option value="9:16" className="text-gray-900">📱 9:16 Portrait</option>
+                <option value="16:9" className="text-gray-900">🖥️ 16:9 Landscape</option>
+                <option value="1:1" className="text-gray-900">⬛ 1:1 Square</option>
+              </select>
+            </div>
+
+            {/* Always show scene preview mode */}
+            <div className="flex flex-col items-center justify-center video-preview-container">
+              {scenes[selectedScene]?.image_url ? (
+                  <div className="relative group w-full flex flex-col items-center">
+                    {/* Main Preview Container */}
+                    <div
+                      className="rounded-xl shadow-2xl border-2 border-white/20 overflow-hidden bg-gray-900 relative"
+                      style={{
+                        width: `${getPreviewDimensions().width}px`,
+                        height: `${getPreviewDimensions().height}px`
+                      }}
+                    >
+                      <img
+                        src={scenes[selectedScene].image_url}
+                        alt="Scene preview"
+                        className="w-full h-full object-cover"
+                      />
+
+                      {/* Scene Navigation Arrows - Always Visible */}
+                      {selectedScene > 0 && (
+                        <button
+                          onClick={() => {
+                            stopVideoPreview();
+                            setSelectedScene(selectedScene - 1);
+                          }}
+                          className="absolute left-4 top-1/2 -translate-y-1/2 w-12 h-12 bg-black/70 hover:bg-black/90 backdrop-blur-md rounded-full flex items-center justify-center transition-all duration-300 border border-white/30 shadow-xl hover:scale-110 z-20"
+                          title="Previous scene"
+                        >
+                          <ChevronDown className="w-6 h-6 text-white rotate-90" />
+                        </button>
+                      )}
+
+                      {selectedScene < scenes.length - 1 && (
+                        <button
+                          onClick={() => {
+                            stopVideoPreview();
+                            setSelectedScene(selectedScene + 1);
+                          }}
+                          className="absolute right-4 top-1/2 -translate-y-1/2 w-12 h-12 bg-black/70 hover:bg-black/90 backdrop-blur-md rounded-full flex items-center justify-center transition-all duration-300 border border-white/30 shadow-xl hover:scale-110 z-20"
+                          title="Next scene"
+                        >
+                          <ChevronDown className="w-6 h-6 text-white -rotate-90" />
+                        </button>
+                      )}
+
+                      {/* Scene Counter Badge - Top Center */}
+                      <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-black/80 backdrop-blur-md px-4 py-2 rounded-full border border-white/30 shadow-xl z-20">
+                        <span className="text-white text-sm font-semibold">
+                          Scene {selectedScene + 1} / {scenes.length}
+                        </span>
+                      </div>
+
+                      {/* Video Controls Overlay - Enhanced & Bigger */}
+                      <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 via-black/60 to-transparent p-6 opacity-0 group-hover:opacity-100 transition-all duration-500">
+                        {/* Progress Bar - Per Scene */}
+                        {isPlayingPreview && sceneDuration > 0 && (
+                          <div className="mb-4">
+                            <div className="flex items-center justify-between text-white/70 text-xs mb-1">
+                              <span>{sceneProgress.toFixed(1)}s</span>
+                              <span>{sceneDuration.toFixed(1)}s</span>
+                            </div>
+                            <input
+                              type="range"
+                              min="0"
+                              max={sceneDuration}
+                              step="0.1"
+                              value={sceneProgress}
+                              onChange={(e) => {
+                                const newTime = parseFloat(e.target.value);
+                                seekToTime(newTime);
+                              }}
+                              disabled={isSeeking}
+                              className="w-full h-2 bg-white/20 rounded-full appearance-none cursor-pointer disabled:opacity-50 hover:h-3 transition-all"
+                              style={{
+                                background: `linear-gradient(to right, #10b981 ${(sceneProgress / sceneDuration) * 100}%, rgba(255,255,255,0.2) ${(sceneProgress / sceneDuration) * 100}%)`
+                              }}
+                            />
+                          </div>
+                        )}
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-4">
+                            {/* Play/Pause Button - Bigger & Smoother */}
+                            <Button
+                              size="lg"
+                              onClick={isPlayingPreview ? stopVideoPreview : startVideoPreview}
+                              className="w-14 h-14 bg-white/20 hover:bg-white/30 backdrop-blur-md rounded-2xl flex items-center justify-center transition-all duration-300 border border-white/40 shadow-2xl hover:scale-110 hover:shadow-white/20"
+                            >
+                              {isPlayingPreview ? (
+                                <Pause className="w-6 h-6 text-white" />
+                              ) : (
+                                <Play className="w-6 h-6 text-white ml-1" />
+                              )}
+                            </Button>
+
+                            {/* Volume Control - Enhanced with better hover */}
+                            <div
+                              className="relative"
+                              onMouseEnter={() => setIsVolumeVisible(true)}
+                              onMouseLeave={() => setIsVolumeVisible(false)}
+                            >
+                              <Button
+                                size="lg"
+                                onClick={() => {
+                                  if (volume === 0) {
+                                    setVolume(lastVolume);
+                                  } else {
+                                    setLastVolume(volume);
+                                    setVolume(0);
+                                  }
+                                }}
+                                className="w-12 h-12 bg-white/15 hover:bg-white/25 backdrop-blur-md rounded-xl flex items-center justify-center transition-all duration-300 border border-white/30 shadow-xl hover:scale-110"
+                              >
+                                {volume === 0 ? (
+                                  <VolumeX className="w-5 h-5 text-white" />
+                                ) : (
+                                  <Volume2 className="w-5 h-5 text-white" />
+                                )}
+                              </Button>
+
+                              {/* Volume Slider - Enhanced with better positioning */}
+                              {isVolumeVisible && (
+                                <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-3 bg-black/95 backdrop-blur-md rounded-xl p-4 border border-white/20 shadow-2xl">
+                                  <input
+                                    type="range"
+                                    min="0"
+                                    max="1"
+                                    step="0.1"
+                                    value={volume}
+                                    onChange={(e) => {
+                                      const newVolume = parseFloat(e.target.value);
+                                      setVolume(newVolume);
+                                      if (newVolume > 0) {
+                                        setLastVolume(newVolume);
+                                      }
+                                    }}
+                                    className="w-20 h-2 bg-white/20 rounded-full appearance-none cursor-pointer slider hover:bg-white/30 transition-all duration-300"
+                                    style={{
+                                      background: `linear-gradient(to right, #ffffff ${volume * 100}%, rgba(255,255,255,0.2) ${volume * 100}%)`
+                                    }}
+                                  />
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Right side controls - Enhanced */}
+                          <div className="flex items-center gap-3">
+                            {/* Fullscreen Button - Bigger */}
+                            <Button
+                              size="lg"
+                              onClick={() => {
+                                const element = document.querySelector('.video-preview-container');
+                                if (element) {
+                                  if (document.fullscreenElement) {
+                                    document.exitFullscreen();
+                                  } else {
+                                    element.requestFullscreen();
+                                  }
+                                }
+                              }}
+                              className="w-12 h-12 bg-white/15 hover:bg-white/25 backdrop-blur-md rounded-xl flex items-center justify-center transition-all duration-300 border border-white/30 shadow-xl hover:scale-110"
+                            >
+                              <Maximize className="w-5 h-5 text-white" />
+                            </Button>
+                          </div>
+                        </div>
+
+                      </div>
+                    </div>
+
+                    {/* Scene Thumbnails Carousel - Below Preview - Compact */}
+                    <div className="mt-3 w-full max-w-xl">
+                      <div className="flex items-center justify-center gap-2 overflow-x-auto pb-2 px-2 scrollbar-thin scrollbar-thumb-white/20 scrollbar-track-transparent">
+                        {scenes.map((scene, index) => (
+                          <button
+                            key={scene.id}
+                            onClick={() => {
+                              stopVideoPreview();
+                              setSelectedScene(index);
+                            }}
+                            className={`relative flex-shrink-0 rounded-md overflow-hidden transition-all duration-300 ${
+                              index === selectedScene
+                                ? 'ring-3 ring-purple-400 scale-105 shadow-xl shadow-purple-500/50'
+                                : 'ring-2 ring-white/20 hover:ring-white/40 hover:scale-100 opacity-60 hover:opacity-100'
+                            }`}
+                            style={{ width: '60px', height: '90px' }}
+                          >
+                            {scene.image_url ? (
+                              <img
+                                src={scene.image_url}
+                                alt={`Scene ${index + 1}`}
+                                className="w-full h-full object-cover"
+                              />
+                            ) : (
+                              <div className="w-full h-full bg-white/10 flex items-center justify-center">
+                                <ImageIcon className="w-5 h-5 text-white/50" />
+                              </div>
+                            )}
+                            {/* Scene number badge */}
+                            <div className="absolute bottom-0.5 right-0.5 bg-black/90 backdrop-blur-sm px-1.5 py-0.5 rounded text-white text-[10px] font-bold">
+                              {index + 1}
+                            </div>
+                            {/* Audio indicator */}
+                            {scene.audio_url && (
+                              <div className="absolute top-0.5 left-0.5 bg-green-500/95 backdrop-blur-sm p-0.5 rounded">
+                                <Volume2 className="w-2.5 h-2.5 text-white" />
+                              </div>
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div 
+                    className="rounded-xl bg-white/10 backdrop-blur-md border-2 border-white/20 flex flex-col items-center justify-center text-white/70 shadow-2xl"
+                    style={{
+                      width: `${getPreviewDimensions().width}px`,
+                      height: `${getPreviewDimensions().height}px`
+                    }}
+                  >
+                    <div className="w-24 h-24 mb-6 bg-white/10 rounded-full flex items-center justify-center">
+                      <span className="text-4xl">�</span>
+                    </div>
+                    <h3 className="text-xl font-semibold mb-4">Story Ready to Visualize</h3>
+                    <div className="text-center max-w-sm space-y-2">
+                      <p className="text-white/60 text-sm">
+                        Your scenes are ready! Follow the steps below to create:
+                      </p>
+                      <div className="text-white/40 text-xs space-y-1">
+                        <div className="flex items-center justify-center gap-2">
+                          <span className="w-4 h-4 rounded-full bg-white/20 flex items-center justify-center text-[10px]">1</span>
+                          <span>Generate Images (uses AI credits)</span>
+                        </div>
+                        <div className="flex items-center justify-center gap-2">
+                          <span className="w-4 h-4 rounded-full bg-white/20 flex items-center justify-center text-[10px]">2</span>
+                          <span>Add Audio narration</span>
+                        </div>
+                        <div className="flex items-center justify-center gap-2">
+                          <span className="w-4 h-4 rounded-full bg-white/20 flex items-center justify-center text-[10px]">3</span>
+                          <span>Create final video</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+        </main>
+
+        {/* Right Sidebar - Controls - Compact */}
+        <aside className="w-72 border-l border-white/20 bg-white/90 backdrop-blur-sm shadow-lg overflow-y-auto">
+          <div className="p-4 space-y-5">
+            
+            {/* Generation Controls Section */}
+            <div className="space-y-4">
+              <div className="flex items-center gap-2 pb-2 border-b border-gray-200">
+                <div className="w-8 h-8 bg-gradient-to-r from-blue-500 to-purple-500 rounded-lg flex items-center justify-center">
+                  <span className="text-white text-sm">⚡</span>
+                </div>
+                <h3 className="text-lg font-semibold text-gray-800">Generation</h3>
+              </div>
+              
+              <div className="space-y-3">
+                {/* Images Button - restore proper size */}
+                <Button
+                  onClick={generateImages}
+                  disabled={generatingImages}
+                  className={`w-full px-4 py-3 rounded-lg text-sm font-medium transition-all ${
+                    scenes.some(s => s.image_url) 
+                      ? 'bg-green-600 hover:bg-green-700 text-white' 
+                      : 'bg-blue-600 hover:bg-blue-700 text-white'
+                  }`}
+                >
+                  {generatingImages ? (
+                    <div className="flex items-center justify-center gap-2">
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Creating Images...
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-center gap-2">
+                      <Image className="w-4 h-4" />
+                      {scenes.some(s => s.image_url) ? `Regenerate Images (${scenes.filter(s => s.image_url).length})` : 'Generate Images'}
+                    </div>
+                  )}
+                </Button>
+
+                {/* Video Export - restore proper size */}
+                {scenes.some(s => s.image_url) && scenes.some(s => s.audio_url) && (
+                  <div className="space-y-2">
+                    <Button
+                      onClick={generateVideo}
+                      disabled={generatingVideo || !scenes.some(s => s.image_url) || !scenes.some(s => s.audio_url)}
+                      className="w-full px-4 py-3 rounded-lg text-sm font-medium transition-all bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white"
+                    >
+                      {generatingVideo ? (
+                        <div className="flex items-center justify-center gap-2">
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          Exporting Video... (This may take a few minutes)
+                        </div>
+                      ) : (
+                        <div className="flex items-center justify-center gap-2">
+                          <Download className="w-4 h-4" />
+                          Export Video ({aspectRatio})
+                        </div>
+                      )}
+                    </Button>
+                    <p className="text-xs text-gray-500 text-center">
+                      Video will be downloaded automatically
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Captions Section - restore proper spacing */}
+            <div className="space-y-4">
+              <div className="flex items-center gap-2 pb-2 border-b border-gray-200">
+                <div className="w-8 h-8 bg-gradient-to-r from-yellow-500 to-orange-500 rounded-lg flex items-center justify-center">
+                  <span className="text-white text-sm">CC</span>
+                </div>
+                <h3 className="text-lg font-semibold text-gray-800">Captions</h3>
+              </div>
+              
+              <div className="space-y-2">
+                <Button 
+                  variant="outline" 
+                  className="w-full text-sm" 
+                  disabled
+                >
+                  Generate Captions
+                </Button>
+                <p className="text-xs text-gray-500">Coming soon - Auto-generate captions</p>
+              </div>
+            </div>
+
+            {/* Background Section - restore proper spacing */}
+            <div className="space-y-4">
+              <div className="flex items-center gap-2 pb-2 border-b border-gray-200">
+                <div className="w-8 h-8 bg-gradient-to-r from-pink-500 to-red-500 rounded-lg flex items-center justify-center">
+                  <span className="text-white text-sm">🎨</span>
+                </div>
+                <h3 className="text-lg font-semibold text-gray-800">Background</h3>
+              </div>
+              
+              <div className="space-y-2">
+                <Button 
+                  variant="outline" 
+                  className="w-full text-sm" 
+                  disabled
+                >
+                  Customize Background
+                </Button>
+                <p className="text-xs text-gray-500">Coming soon - Add custom backgrounds</p>
+              </div>
+            </div>
+
+          </div>
+        </aside>
+      </div>
+
+      {/* Delete Confirmation Dialog */}
+      {deleteDialogOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          {/* Background Overlay */}
+          <div 
+            className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+            onClick={() => {
+              setDeleteDialogOpen(false);
+              setSceneToDelete(null);
+            }}
+          />
+          
+          {/* Dialog Content */}
+          <div className="relative bg-white rounded-2xl shadow-2xl border border-gray-200 max-w-md w-full mx-4 transform transition-all">
+            <div className="p-6">
+              <div className="flex items-center gap-4 mb-4">
+                <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center">
+                  <Trash2 className="w-6 h-6 text-red-600" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-900">Delete Scene</h3>
+                  <p className="text-sm text-gray-500">This action cannot be undone</p>
+                </div>
+              </div>
+              
+              <p className="text-gray-700 mb-6">
+                Are you sure you want to delete Scene {sceneToDelete !== null ? sceneToDelete + 1 : 1}? 
+                This will permanently remove the scene and any associated images.
+              </p>
+              
+              <div className="flex gap-3 justify-end">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setDeleteDialogOpen(false);
+                    setSceneToDelete(null);
+                  }}
+                  className="px-4 py-2"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={confirmDelete}
+                  className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white"
+                >
+                  Delete Scene
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
