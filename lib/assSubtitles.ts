@@ -49,9 +49,25 @@ function formatTime(seconds: number): string {
 export function generateWordByWordASS(
   wordTimestamps: WordTimestamp[],
   style: ASSStyle,
-  highlightColor?: string
+  highlightColor?: string,
+  wordsPerBatch: number = 0, // 0 = show all words, >0 = show N words at a time
+  textTransform: 'none' | 'uppercase' | 'lowercase' | 'capitalize' = 'none'
 ): string {
   if (!wordTimestamps.length) return '';
+
+  // Apply text transformation to all words
+  const transformWord = (word: string): string => {
+    switch (textTransform) {
+      case 'uppercase':
+        return word.toUpperCase();
+      case 'lowercase':
+        return word.toLowerCase();
+      case 'capitalize':
+        return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+      default:
+        return word;
+    }
+  };
 
   // Build ASS header
   const header = `[Script Info]
@@ -71,7 +87,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 `;
 
   // Generate dialogue events with word-by-word highlighting
-  // Show full sentence and highlight current word
   const events: string[] = [];
   const totalDuration = wordTimestamps[wordTimestamps.length - 1].end;
 
@@ -80,25 +95,37 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     const start = formatTime(currentWord.start);
     const end = formatTime(i + 1 < wordTimestamps.length ? wordTimestamps[i + 1].start : totalDuration);
 
-    // Build text with full sentence, highlighting current word
+    // Determine which words to show based on wordsPerBatch
+    let startIndex = 0;
+    let endIndex = wordTimestamps.length;
+
+    if (wordsPerBatch > 0) {
+      // Calculate which batch the current word belongs to
+      const batchIndex = Math.floor(i / wordsPerBatch);
+      startIndex = batchIndex * wordsPerBatch;
+      endIndex = Math.min(wordTimestamps.length, startIndex + wordsPerBatch);
+    }
+
+    // Build text with only visible words
     let text = '';
 
-    for (let j = 0; j < wordTimestamps.length; j++) {
-      const word = wordTimestamps[j].word;
+    for (let j = startIndex; j < endIndex; j++) {
+      const word = transformWord(wordTimestamps[j].word);
 
       if (j < i) {
         // Past words - normal (already spoken)
         text += word + ' ';
       } else if (j === i) {
-        // Current word - highlighted with bold, color, and underline
+        // Current word - highlighted with bold, color, and scale (matches preview scale(1.1))
         if (highlightColor) {
-          text += `{\\b1\\c${highlightColor}\\u1}${word}{\\b0\\c${style.primaryColour}\\u0} `;
+          text += `{\\b1\\c${highlightColor}\\fscx110\\fscy110}${word}{\\b0\\c${style.primaryColour}\\fscx100\\fscy100} `;
         } else {
-          text += `{\\b1\\u1}${word}{\\b0\\u0} `;
+          text += `{\\b1\\fscx110\\fscy110}${word}{\\b0\\fscx100\\fscy100} `;
         }
       } else {
-        // Future words - dimmed (not yet spoken)
-        text += `{\\alpha&H99}${word}{\\alpha&H00} `;
+        // Future words - dimmed to 60% opacity (matches preview dimmedOpacity=0.6)
+        // ASS alpha: 0=opaque, 255=transparent. 40% transparent = 0x66
+        text += `{\\alpha&H66}${word}{\\alpha&H00} `;
       }
     }
 

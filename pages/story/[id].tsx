@@ -4,7 +4,7 @@ import { Button } from "../../components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "../../components/ui/popover";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../components/ui/alert-dialog";
 import { Slider } from "../../components/ui/slider";
-import { ArrowLeft, Play, Pause, Download, Volume2, VolumeX, Maximize, Loader2, ImageIcon, Image, Pencil, Trash2, Check, X, PlayCircle, ChevronDown, Plus, Type } from "lucide-react";
+import { ArrowLeft, Play, Pause, Download, Volume2, VolumeX, Maximize, Loader2, ImageIcon, Image, Pencil, Trash2, Check, X, PlayCircle, ChevronDown, Plus, Type, Music, Upload } from "lucide-react";
 import { WordByWordCaption, SimpleCaption, type WordTimestamp } from "../../components/WordByWordCaption";
 
 type Scene = {
@@ -52,7 +52,6 @@ export default function StoryDetailsPage() {
   const [sceneToDelete, setSceneToDelete] = useState<number | null>(null);
   const [isPlayingPreview, setIsPlayingPreview] = useState(false);
   const [volume, setVolume] = useState(0); // Start muted
-  const [isVolumeVisible, setIsVolumeVisible] = useState(false);
   const [lastVolume, setLastVolume] = useState(0.7); // Remember last volume setting
   const [mediaPreloaded, setMediaPreloaded] = useState(false);
   const [preloadedAudio, setPreloadedAudio] = useState<{[key: number]: HTMLAudioElement}>({});
@@ -64,6 +63,10 @@ export default function StoryDetailsPage() {
   const [currentTime, setCurrentTime] = useState(0); // Current playback time for word-by-word captions
   const progressIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const currentAudioRef = useRef<HTMLAudioElement | null>(null); // Track currently playing audio
+  const captionSettingsLoadedRef = useRef(false); // Track if caption settings have been loaded from DB
+  const bgMusicSettingsLoadedRef = useRef(false); // Track if background music settings have been loaded from DB
+  const hasFetchedRef = useRef(false); // Track if story has been fetched to prevent duplicates
+  const currentStoryIdRef = useRef<string | null>(null); // Track current story ID
 
   // Helper function to calculate total video duration
   const getTotalDuration = () => {
@@ -131,7 +134,22 @@ export default function StoryDetailsPage() {
   const [captionInactiveColor, setCaptionInactiveColor] = useState("#FFFFFF"); // White
   const [captionWordsPerBatch, setCaptionWordsPerBatch] = useState(3); // Default 3 words at a time
   const [captionTextTransform, setCaptionTextTransform] = useState<"none" | "uppercase" | "lowercase" | "capitalize">("none");
-  const [leftPanelView, setLeftPanelView] = useState<"scenes" | "captions">("scenes");
+  const [leftPanelView, setLeftPanelView] = useState<"scenes" | "captions" | "background_music">("scenes");
+
+  // Background Music State
+  const [bgMusicEnabled, setBgMusicEnabled] = useState(false);
+  const [bgMusicId, setBgMusicId] = useState<string | null>(null);
+  const [bgMusicUrl, setBgMusicUrl] = useState<string | null>(null);
+  const [bgMusicName, setBgMusicName] = useState<string | null>(null);
+  const [bgMusicVolume, setBgMusicVolume] = useState(30); // Default 30% volume
+  const [bgMusicUploading, setBgMusicUploading] = useState(false);
+  const [bgMusicPlaying, setBgMusicPlaying] = useState(false);
+  const bgMusicAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  // Music Library State
+  const [musicLibrary, setMusicLibrary] = useState<any[]>([]);
+  const [musicLibraryLoading, setMusicLibraryLoading] = useState(false);
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
 
   // Use ref for immediate cancellation without state delays
   const previewCancelledRef = useRef(false);
@@ -258,6 +276,32 @@ export default function StoryDetailsPage() {
       setScenes(scenesWithTimestamp);
       setVideo(data.video);
 
+      // Load caption settings from database if available
+      if (data.story?.caption_settings) {
+        const settings = data.story.caption_settings;
+        setCaptionsEnabled(settings.enabled ?? true);
+        setCaptionFontFamily(settings.fontFamily ?? "Montserrat");
+        setCaptionFontSize(settings.fontSize ?? 20);
+        setCaptionFontWeight(settings.fontWeight ?? 700);
+        setCaptionPositionFromBottom(settings.positionFromBottom ?? 20);
+        setCaptionActiveColor(settings.activeColor ?? "#FFEB3B");
+        setCaptionInactiveColor(settings.inactiveColor ?? "#FFFFFF");
+        setCaptionWordsPerBatch(settings.wordsPerBatch ?? 3);
+        setCaptionTextTransform(settings.textTransform ?? "none");
+        console.log("📝 Loaded caption settings from database:", settings);
+      }
+
+      // Load background music settings from database if available
+      if (data.story?.background_music_settings) {
+        const bgSettings = data.story.background_music_settings;
+        setBgMusicEnabled(bgSettings.enabled ?? false);
+        setBgMusicId(bgSettings.music_id ?? null);
+        setBgMusicUrl(bgSettings.music_url ?? null);
+        setBgMusicName(bgSettings.music_name ?? null);
+        setBgMusicVolume(bgSettings.volume ?? 30);
+        console.log("🎵 Loaded background music settings from database:", bgSettings);
+      }
+
       // Load voices if not already loaded (for story voice selector)
       if (voices.length === 0) {
         fetchVoices();
@@ -267,23 +311,270 @@ export default function StoryDetailsPage() {
       if (data.scenes?.length > 0 && !mediaPreloaded) {
         preloadMedia(data.scenes);
       }
-      
+
     } catch (err) {
       console.error("❌ Error fetching story:", err);
     } finally {
       setLoading(false);
     }
-  }, [id]); // Removed preloadMedia and mediaPreloaded to prevent multiple fetches
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]); // Only depend on id to prevent infinite loops
 
   // Fetch story only once when component mounts or id changes
   useEffect(() => {
-    if (id) {
-      fetchStory();
+    // Wait for router to be ready to avoid multiple fetches during hydration
+    if (!router.isReady || !id) return;
+
+    // Check if we've already fetched this story ID
+    if (hasFetchedRef.current && currentStoryIdRef.current === id) {
+      console.log("⏭️ Skipping duplicate fetch for story:", id);
+      return;
     }
-  }, [id, fetchStory]); // fetchStory is now stable since we removed changing deps
+
+    // Mark as fetched and store current ID
+    hasFetchedRef.current = true;
+    currentStoryIdRef.current = id as string;
+
+    // Reset refs when changing stories
+    if (currentStoryIdRef.current !== id) {
+      captionSettingsLoadedRef.current = false;
+      bgMusicSettingsLoadedRef.current = false;
+    }
+
+    fetchStory();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [router.isReady, id]); // Only depend on router.isReady and id
+
+  // Enable auto-save AFTER initial data has been loaded (prevents auto-save on mount)
+  useEffect(() => {
+    if (story && !captionSettingsLoadedRef.current && !bgMusicSettingsLoadedRef.current) {
+      // Wait for next tick to ensure all state updates from fetchStory have completed
+      const timer = setTimeout(() => {
+        captionSettingsLoadedRef.current = true;
+        bgMusicSettingsLoadedRef.current = true;
+      }, 0);
+      return () => clearTimeout(timer);
+    }
+  }, [story]);
 
   // Video validity is now checked automatically via the is_valid flag
   // No need for manual hash checking - database trigger handles it
+
+  // Save caption settings to database
+  const saveCaptionSettings = useCallback(async () => {
+    if (!id) return;
+
+    const captionSettings = {
+      enabled: captionsEnabled,
+      fontFamily: captionFontFamily,
+      fontSize: captionFontSize,
+      fontWeight: captionFontWeight,
+      positionFromBottom: captionPositionFromBottom,
+      activeColor: captionActiveColor,
+      inactiveColor: captionInactiveColor,
+      wordsPerBatch: captionWordsPerBatch,
+      textTransform: captionTextTransform,
+    };
+
+    try {
+      const res = await fetch("/api/save_caption_settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          story_id: id,
+          caption_settings: captionSettings,
+        }),
+      });
+
+      if (res.ok) {
+        console.log("💾 Caption settings saved successfully");
+      } else {
+        console.error("❌ Failed to save caption settings");
+      }
+    } catch (err) {
+      console.error("❌ Error saving caption settings:", err);
+    }
+  }, [
+    id,
+    captionsEnabled,
+    captionFontFamily,
+    captionFontSize,
+    captionFontWeight,
+    captionPositionFromBottom,
+    captionActiveColor,
+    captionInactiveColor,
+    captionWordsPerBatch,
+    captionTextTransform,
+  ]);
+
+  // Auto-save caption settings when they change (with debouncing)
+  useEffect(() => {
+    // Don't save on initial load - only save when settings change after initial load
+    if (!story || !captionSettingsLoadedRef.current) return;
+
+    const timeoutId = setTimeout(() => {
+      saveCaptionSettings();
+    }, 1000); // Debounce for 1 second
+
+    return () => clearTimeout(timeoutId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    captionsEnabled,
+    captionFontFamily,
+    captionFontSize,
+    captionFontWeight,
+    captionPositionFromBottom,
+    captionActiveColor,
+    captionInactiveColor,
+    captionWordsPerBatch,
+    captionTextTransform,
+    story,
+  ]);
+
+  // Fetch music library
+  const fetchMusicLibrary = useCallback(async (category?: string) => {
+    setMusicLibraryLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (category) params.append("category", category);
+
+      const res = await fetch(`/api/get_music_library?${params.toString()}`);
+      if (res.ok) {
+        const data = await res.json();
+        setMusicLibrary(data.music_library || []);
+        console.log("🎵 Loaded music library:", data.music_library?.length, "tracks");
+      } else {
+        console.error("❌ Failed to fetch music library");
+      }
+    } catch (err) {
+      console.error("❌ Error fetching music library:", err);
+    } finally {
+      setMusicLibraryLoading(false);
+    }
+  }, []);
+
+  // Save background music settings to database
+  const saveBgMusicSettings = useCallback(async () => {
+    if (!id) return;
+
+    try {
+      const res = await fetch("/api/save_background_music_settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          story_id: id,
+          music_id: bgMusicId,
+          volume: bgMusicVolume,
+          enabled: bgMusicEnabled,
+        }),
+      });
+
+      if (res.ok) {
+        console.log("💾 Background music settings saved successfully");
+      } else {
+        console.error("❌ Failed to save background music settings");
+      }
+    } catch (err) {
+      console.error("❌ Error saving background music settings:", err);
+    }
+  }, [id, bgMusicId, bgMusicVolume, bgMusicEnabled]);
+
+  // Load music library when background music panel opens
+  useEffect(() => {
+    if (leftPanelView === "background_music" && musicLibrary.length === 0) {
+      fetchMusicLibrary();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leftPanelView, musicLibrary.length]);
+
+  // Auto-save background music settings when they change
+  useEffect(() => {
+    // Don't save on initial load - only save when settings change after initial load
+    if (!story || !bgMusicSettingsLoadedRef.current) return;
+
+    const timeoutId = setTimeout(() => {
+      saveBgMusicSettings();
+    }, 1000);
+
+    return () => clearTimeout(timeoutId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bgMusicEnabled, bgMusicVolume, bgMusicId, story]);
+
+  // Handle selecting music from library
+  const handleSelectMusicFromLibrary = useCallback((music: any) => {
+    setBgMusicId(music.id);
+    setBgMusicUrl(music.file_url);
+    setBgMusicName(music.name);
+    setBgMusicEnabled(true);
+    console.log("🎵 Selected music from library:", music.name);
+  }, []);
+
+  // Handle background music file upload to library
+  const handleBgMusicUpload = async (file: File) => {
+    if (!id) return;
+
+    const musicName = prompt("Enter a name for this music track:");
+    if (!musicName) return;
+
+    setBgMusicUploading(true);
+
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("name", musicName);
+      formData.append("category", "other");
+      formData.append("uploaded_by", "user");
+
+      const res = await fetch("/api/upload_music_to_library", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        console.log("✅ Background music uploaded to library successfully");
+
+        // Refresh library and select the new music
+        await fetchMusicLibrary();
+        handleSelectMusicFromLibrary(data.music);
+      } else {
+        const error = await res.json();
+        console.error("❌ Failed to upload background music:", error);
+        alert("Failed to upload background music: " + error.error);
+      }
+    } catch (err) {
+      console.error("❌ Error uploading background music:", err);
+      alert("Error uploading background music");
+    } finally {
+      setBgMusicUploading(false);
+    }
+  };
+
+  // Handle background music playback toggle
+  const toggleBgMusicPlayback = () => {
+    if (!bgMusicUrl) return;
+
+    if (!bgMusicAudioRef.current) {
+      bgMusicAudioRef.current = new Audio(bgMusicUrl);
+      bgMusicAudioRef.current.loop = true;
+      bgMusicAudioRef.current.volume = bgMusicVolume / 100;
+    }
+
+    if (bgMusicPlaying) {
+      bgMusicAudioRef.current.pause();
+      setBgMusicPlaying(false);
+    } else {
+      bgMusicAudioRef.current.play();
+      setBgMusicPlaying(true);
+    }
+  };
+
+  // Update bg music volume
+  useEffect(() => {
+    if (bgMusicAudioRef.current) {
+      bgMusicAudioRef.current.volume = bgMusicVolume / 100;
+    }
+  }, [bgMusicVolume]);
 
   // Debug state changes
   useEffect(() => {
@@ -608,6 +899,11 @@ export default function StoryDetailsPage() {
             inactiveColor: captionInactiveColor,
             wordsPerBatch: captionWordsPerBatch,
             textTransform: captionTextTransform
+          } : { enabled: false },
+          background_music: bgMusicEnabled && bgMusicUrl ? {
+            enabled: true,
+            music_url: bgMusicUrl,
+            volume: bgMusicVolume
           } : { enabled: false }
         }),
       });
@@ -1223,19 +1519,6 @@ export default function StoryDetailsPage() {
               </PopoverContent>
             </Popover>
 
-            {/* Captions Button */}
-            <Button
-              onClick={() => setCaptionsDrawerOpen(true)}
-              variant="outline"
-              className="bg-gray-800 border-gray-700 text-white hover:bg-gray-700 hover:text-white"
-            >
-              <Type className="w-4 h-4 mr-2" />
-              Captions
-              {captionsEnabled && (
-                <div className="ml-2 w-2 h-2 rounded-full bg-green-500"></div>
-              )}
-            </Button>
-
             {/* Export Button */}
             <Button
               onClick={generateVideo}
@@ -1285,13 +1568,19 @@ export default function StoryDetailsPage() {
             <span className="text-[10px] mt-1">Captions</span>
           </button>
 
-          {/* Audio Icon */}
+          {/* Background Music Icon */}
           <button
-            className="w-10 h-10 flex flex-col items-center justify-center text-gray-400 hover:text-white transition-colors"
-            title="Audio"
+            onClick={() => setLeftPanelView("background_music")}
+            className={`w-10 h-10 flex flex-col items-center justify-center transition-colors ${
+              leftPanelView === "background_music" ? "text-purple-400 bg-purple-900/20" : "text-gray-400 hover:text-white"
+            }`}
+            title="Background Music"
           >
-            <Volume2 className="w-5 h-5" />
-            <span className="text-[10px] mt-1">Audio</span>
+            <Music className="w-5 h-5" />
+            <span className="text-[10px] mt-1">Music</span>
+            {bgMusicEnabled && bgMusicUrl && (
+              <div className="absolute top-1 right-1 w-2 h-2 rounded-full bg-green-500"></div>
+            )}
           </button>
         </aside>
 
@@ -1521,7 +1810,7 @@ export default function StoryDetailsPage() {
                 </div>
               </div>
             </div>
-            ) : (
+            ) : leftPanelView === "captions" ? (
               /* Captions Settings View */
               <div className="p-6 space-y-6">
                 <h2 className="text-xl font-semibold text-white mb-4">Caption Settings</h2>
@@ -1736,6 +2025,184 @@ export default function StoryDetailsPage() {
                   </>
                 )}
               </div>
+            ) : (
+              /* Background Music Settings View */
+              <div className="p-6 space-y-6">
+                <h2 className="text-xl font-semibold text-white mb-4">Background Music</h2>
+
+                {/* Enable/Disable Background Music */}
+                <div className="p-4 bg-gray-800 rounded-lg">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="text-sm font-medium text-white">Enable Background Music</h3>
+                      <p className="text-xs text-gray-400 mt-1">Add background music to your video</p>
+                    </div>
+                    <button
+                      onClick={() => setBgMusicEnabled(!bgMusicEnabled)}
+                      disabled={!bgMusicUrl}
+                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                        bgMusicEnabled ? "bg-purple-600" : "bg-gray-700"
+                      } ${!bgMusicUrl ? "opacity-50 cursor-not-allowed" : ""}`}
+                    >
+                      <span
+                        className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                          bgMusicEnabled ? "translate-x-6" : "translate-x-1"
+                        }`}
+                      />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Selected Music */}
+                {bgMusicUrl && (
+                  <div className="p-4 bg-gray-800 rounded-lg">
+                    <h3 className="text-sm font-medium text-white mb-3">Selected Music</h3>
+                    <div className="flex items-center gap-3 p-3 bg-gray-900 rounded-lg">
+                      <Music className="w-5 h-5 text-purple-400" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm text-white truncate">{bgMusicName || "Background music"}</p>
+                        <p className="text-xs text-gray-400">Click play to preview</p>
+                      </div>
+                      <Button
+                        size="sm"
+                        onClick={toggleBgMusicPlayback}
+                        className="bg-purple-600 hover:bg-purple-700"
+                      >
+                        {bgMusicPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Music Library Browser */}
+                <div className="p-4 bg-gray-800 rounded-lg">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-sm font-medium text-white">Music Library</h3>
+                    <label className="block">
+                      <input
+                        type="file"
+                        accept="audio/*"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) handleBgMusicUpload(file);
+                        }}
+                        className="hidden"
+                        disabled={bgMusicUploading}
+                      />
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="bg-purple-600 hover:bg-purple-700 text-white border-none"
+                        disabled={bgMusicUploading}
+                      >
+                        {bgMusicUploading ? (
+                          <>
+                            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                            Uploading...
+                          </>
+                        ) : (
+                          <>
+                            <Upload className="w-4 h-4 mr-2" />
+                            Upload New
+                          </>
+                        )}
+                      </Button>
+                    </label>
+                  </div>
+
+                  {/* Category Filter */}
+                  <div className="flex flex-wrap gap-2 mb-4">
+                    {["upbeat", "calm", "cinematic", "dramatic", "ambient", "other"].map((category) => (
+                      <button
+                        key={category}
+                        onClick={() => {
+                          const newCategory = selectedCategory === category ? null : category;
+                          setSelectedCategory(newCategory);
+                          fetchMusicLibrary(newCategory || undefined);
+                        }}
+                        className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
+                          selectedCategory === category
+                            ? "bg-purple-600 text-white"
+                            : "bg-gray-700 text-gray-300 hover:bg-gray-600"
+                        }`}
+                      >
+                        {category.charAt(0).toUpperCase() + category.slice(1)}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Music List */}
+                  <div className="space-y-2 max-h-96 overflow-y-auto">
+                    {musicLibraryLoading ? (
+                      <div className="flex items-center justify-center py-8">
+                        <Loader2 className="w-6 h-6 animate-spin text-purple-400" />
+                      </div>
+                    ) : musicLibrary.length === 0 ? (
+                      <p className="text-sm text-gray-400 text-center py-8">
+                        No music tracks available. Upload your first track!
+                      </p>
+                    ) : (
+                      musicLibrary.map((music) => (
+                        <div
+                          key={music.id}
+                          onClick={() => music.file_url && handleSelectMusicFromLibrary(music)}
+                          className={`p-3 rounded-lg cursor-pointer transition-colors ${
+                            bgMusicId === music.id
+                              ? "bg-purple-900/40 border border-purple-500"
+                              : music.file_url
+                              ? "bg-gray-900 hover:bg-gray-800"
+                              : "bg-gray-900/50 opacity-50 cursor-not-allowed"
+                          }`}
+                        >
+                          <div className="flex items-center gap-3">
+                            <Music className={`w-4 h-4 ${bgMusicId === music.id ? "text-purple-400" : "text-gray-500"}`} />
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm text-white truncate font-medium">{music.name}</p>
+                              {music.description && (
+                                <p className="text-xs text-gray-400 truncate">{music.description}</p>
+                              )}
+                              <div className="flex items-center gap-2 mt-1">
+                                {music.is_preset && (
+                                  <span className="px-2 py-0.5 bg-blue-900/50 text-blue-300 text-xs rounded">Preset</span>
+                                )}
+                                {music.category && (
+                                  <span className="px-2 py-0.5 bg-gray-700 text-gray-300 text-xs rounded">{music.category}</span>
+                                )}
+                                {!music.file_url && (
+                                  <span className="px-2 py-0.5 bg-red-900/50 text-red-300 text-xs rounded">No file</span>
+                                )}
+                              </div>
+                            </div>
+                            {bgMusicId === music.id && (
+                              <div className="w-2 h-2 bg-purple-500 rounded-full"></div>
+                            )}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+
+                {/* Volume Control */}
+                {bgMusicUrl && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-300 mb-3">
+                      Volume: <span className="text-purple-400 font-bold">{bgMusicVolume}%</span>
+                    </label>
+                    <p className="text-xs text-gray-400 mb-3">
+                      Adjust background music volume relative to narration
+                    </p>
+                    <Slider
+                      value={[bgMusicVolume]}
+                      onValueChange={(value) => setBgMusicVolume(value[0])}
+                      min={0}
+                      max={100}
+                      step={1}
+                      className="w-full"
+                    />
+                  </div>
+                )}
+              </div>
             )}
           </div>
 
@@ -1743,10 +2210,10 @@ export default function StoryDetailsPage() {
           <div className="w-[60%] flex items-center justify-center p-8 bg-black">
             <div className="video-preview-container">
               {scenes[selectedScene]?.image_url ? (
-                <div className="relative group">
+                <div className="relative">
                   {/* Main Preview Container */}
                   <div
-                    className="rounded-lg shadow-2xl overflow-hidden bg-gray-900 relative"
+                    className="rounded-lg shadow-2xl overflow-hidden bg-black relative"
                     style={{
                       width: `${getPreviewDimensions().width}px`,
                       height: `${getPreviewDimensions().height}px`
@@ -1796,129 +2263,98 @@ export default function StoryDetailsPage() {
                       );
                     })()}
 
-                    {/* Video Controls Overlay - Only on Hover */}
-                    <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 via-black/60 to-transparent p-6 opacity-0 group-hover:opacity-100 transition-all duration-300">
-                      {/* Progress Bar */}
-                      {isPlayingPreview && getTotalDuration() > 0 && (
-                        <div className="mb-4">
-                          <div className="flex items-center justify-between text-white/70 text-xs mb-1">
-                            <span>{totalProgress.toFixed(1)}s</span>
-                            <span>{getTotalDuration().toFixed(1)}s</span>
-                          </div>
-                          <input
-                            type="range"
-                            min="0"
-                            max={getTotalDuration()}
-                            step="0.1"
-                            value={totalProgress}
-                            onChange={(e) => {
-                              const newTime = parseFloat(e.target.value);
-                              seekToTotalTime(newTime);
-                            }}
-                            disabled={isSeeking}
-                            className="w-full h-2 bg-white/20 rounded-full appearance-none cursor-pointer disabled:opacity-50"
-                            style={{
-                              background: `linear-gradient(to right, #10b981 ${(totalProgress / getTotalDuration()) * 100}%, rgba(255,255,255,0.2) ${(totalProgress / getTotalDuration()) * 100}%)`
-                            }}
-                          />
-                          {/* Scene markers on timeline */}
-                          <div className="relative w-full h-1 mt-1">
-                            {getSceneStartTimes().slice(1).map((startTime, index) => (
-                              <div
-                                key={index}
-                                className="absolute top-0 w-0.5 h-full bg-white/30"
-                                style={{
-                                  left: `${(startTime / getTotalDuration()) * 100}%`
-                                }}
-                                title={`Scene ${index + 2} starts at ${startTime.toFixed(1)}s`}
-                              />
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-4">
-                          {/* Play/Pause Button */}
-                          <Button
-                            size="lg"
-                            onClick={isPlayingPreview ? stopVideoPreview : startVideoPreview}
-                            className="w-12 h-12 bg-white/20 hover:bg-white/30 backdrop-blur-md rounded-xl flex items-center justify-center transition-all"
-                          >
-                            {isPlayingPreview ? (
-                              <Pause className="w-5 h-5 text-white" />
-                            ) : (
-                              <Play className="w-5 h-5 text-white ml-1" />
-                            )}
-                          </Button>
-
-                          {/* Volume Control */}
-                          <div
-                            className="relative"
-                            onMouseEnter={() => setIsVolumeVisible(true)}
-                            onMouseLeave={() => setIsVolumeVisible(false)}
-                          >
-                            <Button
-                              size="lg"
-                              onClick={() => {
-                                if (volume === 0) {
-                                  setVolume(lastVolume);
-                                } else {
-                                  setLastVolume(volume);
-                                  setVolume(0);
-                                }
+                    {/* Video Controls Overlay */}
+                    <div className="absolute inset-0 opacity-100 transition-opacity duration-300">
+                      <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 via-transparent to-transparent pb-3 pt-16">
+                        {/* Progress Bar */}
+                        {getTotalDuration() > 0 && (
+                          <div className="px-3 pb-2 group/seek">
+                            <Slider
+                              value={[totalProgress]}
+                              max={getTotalDuration()}
+                              step={0.1}
+                              disabled={isSeeking}
+                              onValueChange={(value) => {
+                                seekToTotalTime(value[0]);
                               }}
-                              className="w-10 h-10 bg-white/15 hover:bg-white/25 backdrop-blur-md rounded-lg flex items-center justify-center transition-all"
-                            >
-                              {volume === 0 ? (
-                                <VolumeX className="w-4 h-4 text-white" />
-                              ) : (
-                                <Volume2 className="w-4 h-4 text-white" />
-                              )}
-                            </Button>
+                              className="[&_[role=slider]]:opacity-0 group-hover/seek:[&_[role=slider]]:opacity-100"
+                            />
+                          </div>
+                        )}
 
-                            {/* Volume Slider */}
-                            {isVolumeVisible && (
-                              <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 bg-black/95 backdrop-blur-md rounded-lg p-3 border border-white/20">
-                                <input
-                                  type="range"
-                                  min="0"
-                                  max="1"
-                                  step="0.1"
-                                  value={volume}
-                                  onChange={(e) => {
-                                    const newVolume = parseFloat(e.target.value);
-                                    setVolume(newVolume);
-                                    if (newVolume > 0) {
-                                      setLastVolume(newVolume);
-                                    }
-                                  }}
-                                  className="w-20 h-2 bg-white/20 rounded-full appearance-none cursor-pointer"
-                                  style={{
-                                    background: `linear-gradient(to right, #ffffff ${volume * 100}%, rgba(255,255,255,0.2) ${volume * 100}%)`
+                        {/* Control Bar */}
+                        <div className="flex items-center justify-between px-3">
+                          <div className="flex items-center gap-1">
+                            {/* Play/Pause */}
+                            <button
+                              onClick={isPlayingPreview ? stopVideoPreview : startVideoPreview}
+                              className="w-8 h-8 flex items-center justify-center hover:bg-white/10 text-white rounded"
+                            >
+                              {isPlayingPreview ? (
+                                <Pause className="w-6 h-6 fill-current" />
+                              ) : (
+                                <Play className="w-6 h-6 fill-current" />
+                              )}
+                            </button>
+
+                            {/* Volume Group - Shows slider on hover */}
+                            <div className="flex items-center gap-1 group/volume">
+                              <button
+                                onClick={() => {
+                                  if (volume === 0) {
+                                    setVolume(lastVolume);
+                                  } else {
+                                    setLastVolume(volume);
+                                    setVolume(0);
+                                  }
+                                }}
+                                className="w-8 h-8 flex items-center justify-center hover:bg-white/10 text-white rounded"
+                              >
+                                {volume === 0 ? (
+                                  <VolumeX className="w-6 h-6" />
+                                ) : (
+                                  <Volume2 className="w-6 h-6" />
+                                )}
+                              </button>
+
+                              <div className="overflow-hidden transition-all duration-200 w-0 group-hover/volume:w-16">
+                                <Slider
+                                  value={[volume]}
+                                  max={1}
+                                  step={0.01}
+                                  onValueChange={(value) => {
+                                    setVolume(value[0]);
+                                    if (value[0] > 0) setLastVolume(value[0]);
                                   }}
                                 />
                               </div>
+                            </div>
+
+                            {/* Time */}
+                            {getTotalDuration() > 0 && (
+                              <div className="text-white text-sm font-medium ml-2 tabular-nums">
+                                {Math.floor(totalProgress / 60)}:{String(Math.floor(totalProgress % 60)).padStart(2, '0')} / {Math.floor(getTotalDuration() / 60)}:{String(Math.floor(getTotalDuration() % 60)).padStart(2, '0')}
+                              </div>
                             )}
                           </div>
-                        </div>
 
-                        {/* Fullscreen Button */}
-                        <Button
-                          size="lg"
-                          onClick={() => {
-                            const element = document.querySelector('.video-preview-container');
-                            if (element) {
-                              if (document.fullscreenElement) {
-                                document.exitFullscreen();
-                              } else {
-                                element.requestFullscreen();
+                          {/* Fullscreen */}
+                          <button
+                            onClick={() => {
+                              const element = document.querySelector('.video-preview-container');
+                              if (element) {
+                                if (document.fullscreenElement) {
+                                  document.exitFullscreen();
+                                } else {
+                                  element.requestFullscreen();
+                                }
                               }
-                            }
-                          }}
-                          className="w-10 h-10 bg-white/15 hover:bg-white/25 backdrop-blur-md rounded-lg flex items-center justify-center transition-all"
-                        >
-                          <Maximize className="w-4 h-4 text-white" />
-                        </Button>
+                            }}
+                            className="w-8 h-8 flex items-center justify-center hover:bg-white/10 text-white rounded"
+                          >
+                            <Maximize className="w-6 h-6" />
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </div>

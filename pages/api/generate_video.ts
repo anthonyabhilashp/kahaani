@@ -66,7 +66,7 @@ function generateSRTFile(
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const { story_id, aspect_ratio, captions } = req.body;
+  const { story_id, aspect_ratio, captions, background_music } = req.body;
   if (!story_id) return res.status(400).json({ error: "story_id required" });
 
   let logger: JobLogger | null = null;
@@ -74,6 +74,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     logger = new JobLogger(story_id, "generate_video");
     logger.log(`🎬 Starting video generation for story: ${story_id} with aspect ratio: ${aspect_ratio || '9:16'}`);
+    if (background_music?.enabled) {
+      logger.log(`🎵 Background music enabled at ${background_music.volume}% volume`);
+    }
 
     const tmpDir = path.join(process.cwd(), "tmp", story_id);
     fs.mkdirSync(tmpDir, { recursive: true });
@@ -157,12 +160,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       "1:1": { width: 1080, height: 1080 }    // Square (Instagram)
     };
 
+    // Preview dimensions (from getPreviewDimensions in [id].tsx)
+    const previewDimensionsMap: { [key: string]: { width: number; height: number } } = {
+      "9:16": { width: 280, height: 498 },
+      "16:9": { width: 498, height: 280 },
+      "1:1": { width: 400, height: 400 }
+    };
+
     const selectedAspect = aspect_ratio || "9:16";
     const dimensions = aspectRatioMap[selectedAspect] || aspectRatioMap["9:16"];
+    const previewDimensions = previewDimensionsMap[selectedAspect] || previewDimensionsMap["9:16"];
     const width = dimensions.width;
     const height = dimensions.height;
 
-    logger.log(`🎞️ Rendering video at ${width}x${height} (${selectedAspect})`);
+    // Calculate font size scaling factor based on video width vs preview width
+    const fontSizeScalingFactor = width / previewDimensions.width;
+
+    logger.log(`🎞️ Rendering video at ${width}x${height} (${selectedAspect}), font scale: ${fontSizeScalingFactor.toFixed(2)}x`);
 
     // 8️⃣ Generate individual scene clips with precise timing
     const videoClips: string[] = [];
@@ -243,10 +257,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const videoHeight = height; // Use actual video height
         const marginV = Math.round((positionFromBottom / 100) * videoHeight);
 
+        // Scale font size to match preview appearance
+        const previewFontSize = captions.fontSize || 20;
+        const scaledFontSize = Math.round(previewFontSize * fontSizeScalingFactor);
+
         const assStyle: any = {
           name: 'Custom',
           fontName: captions.fontFamily || 'Montserrat',
-          fontSize: captions.fontSize || 20,
+          fontSize: scaledFontSize,
           primaryColour: convertHexToASSColor(captions.inactiveColor || '#FFFFFF'),
           bold: captions.fontWeight >= 600 ? 1 : 0,
           italic: 0,
@@ -256,11 +274,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           marginV: marginV,
         };
 
+        logger.log(`📏 Font size: ${previewFontSize}px (preview) → ${scaledFontSize}pt (video) [${fontSizeScalingFactor.toFixed(2)}x scale]`);
+
         // Generate ASS with word-by-word animation and custom highlight color
         const highlightColor = convertHexToASSColor(captions.activeColor || '#FFEB3B');
-        const assContent = generateWordByWordASS(allWordTimestamps, assStyle, highlightColor);
+        const wordsPerBatch = captions.wordsPerBatch || 0; // 0 = show all words
+        const textTransform = captions.textTransform || 'none';
+
+        const assContent = generateWordByWordASS(
+          allWordTimestamps,
+          assStyle,
+          highlightColor,
+          wordsPerBatch,
+          textTransform
+        );
         fs.writeFileSync(assPath, assContent);
-        logger.log(`✅ Generated word-by-word ASS subtitles: ${assPath}`);
+        logger.log(`✅ Generated word-by-word ASS subtitles with ${wordsPerBatch > 0 ? wordsPerBatch + ' words per batch' : 'all words'}, transform: ${textTransform}`);
       } else {
         // Fallback to simple SRT if no word timestamps
         logger.log(`⚠️ No word timestamps available, using simple scene-level captions`);
@@ -317,25 +346,80 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .map(p => `file '${p}'`);
       fs.writeFileSync(audioConcat, audioFiles.join("\n"));
 
-      // Concat audio files
-      const mergedAudio = path.join(tmpDir, "merged-audio.m4a");
+      // Concat audio files (narration)
+      const mergedNarrationAudio = path.join(tmpDir, "merged-narration.m4a");
       await new Promise<void>((resolve, reject) => {
         ffmpeg()
           .input(audioConcat)
           .inputOptions(["-f concat", "-safe 0"])
           .audioCodec("aac")
-          .save(mergedAudio)
+          .save(mergedNarrationAudio)
           .on("end", resolve)
           .on("error", reject);
       });
 
       logger.log("🎵 Concatenated all scene audio files");
 
-      // Combine video with concatenated audio
+      let finalAudioTrack = mergedNarrationAudio;
+
+      // Mix background music if enabled
+      if (background_music?.enabled && background_music?.music_url) {
+        logger.log("🎵 Downloading background music...");
+
+        const bgMusicPath = path.join(tmpDir, "background-music.mp3");
+        const bgRes = await fetch(background_music.music_url);
+        const bgBuffer = Buffer.from(await bgRes.arrayBuffer());
+        fs.writeFileSync(bgMusicPath, bgBuffer);
+
+        // Get total video duration
+        const totalDuration = mediaPaths.reduce((sum, scene) => sum + scene.duration, 0);
+        const bgVolume = (background_music.volume || 30) / 100; // Convert percentage to 0-1 scale
+        const narrationVolume = 1.0; // Keep narration at full volume
+
+        logger.log(`🎵 Mixing background music (${background_music.volume}% volume) with narration for ${totalDuration.toFixed(2)}s`);
+
+        // Mix background music with narration
+        const mixedAudio = path.join(tmpDir, "mixed-audio.m4a");
+        await new Promise<void>((resolve, reject) => {
+          const cmd = ffmpeg()
+            .input(mergedNarrationAudio) // Input 0: Narration
+            .input(bgMusicPath) // Input 1: Background music
+            .complexFilter([
+              // Loop background music to match video duration
+              `[1:a]aloop=loop=-1:size=2e+09[bg]`,
+              // Adjust volumes
+              `[0:a]volume=${narrationVolume}[narration]`,
+              `[bg]volume=${bgVolume}[bgadjusted]`,
+              // Mix both audios
+              `[narration][bgadjusted]amix=inputs=2:duration=first:dropout_transition=2[mixed]`
+            ])
+            .outputOptions([
+              "-map [mixed]",
+              `-t ${totalDuration}`, // Trim to video duration
+              "-c:a aac",
+              "-b:a 192k"
+            ])
+            .save(mixedAudio);
+
+          cmd.on("start", (cmdLine) => logger?.log(`🚀 FFmpeg mixing: ${cmdLine}`));
+          cmd.on("end", () => {
+            logger?.log("✅ Background music mixed with narration");
+            resolve();
+          });
+          cmd.on("error", (err) => {
+            logger?.error("❌ FFmpeg mixing failed", err);
+            reject(err);
+          });
+        });
+
+        finalAudioTrack = mixedAudio;
+      }
+
+      // Combine video with final audio track
       await new Promise<void>((resolve, reject) => {
         ffmpeg()
           .input(videoOnlyPath)
-          .input(mergedAudio)
+          .input(finalAudioTrack)
           .outputOptions([
             "-c:v copy",  // Copy video without re-encoding
             "-c:a aac",
@@ -345,7 +429,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             "-movflags +faststart"
           ])
           .save(finalVideo)
-          .on("start", (cmd: any) => logger?.log(`🚀 FFmpeg merging: ${cmd}`))
+          .on("start", (cmd: any) => logger?.log(`🚀 FFmpeg final merge: ${cmd}`))
           .on("end", () => {
             logger?.log("✅ Final video with audio track created");
             resolve();

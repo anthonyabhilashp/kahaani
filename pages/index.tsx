@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/router";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -20,17 +20,36 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [newPrompt, setNewPrompt] = useState("");
   const [creating, setCreating] = useState(false);
+  const hasFetchedRef = useRef(false);
 
   useEffect(() => {
+    // Prevent duplicate fetches (React Strict Mode calls useEffect twice)
+    if (hasFetchedRef.current) {
+      console.log("⏭️ Skipping duplicate stories fetch");
+      return;
+    }
+    hasFetchedRef.current = true;
     fetchStories();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function fetchStories() {
     setLoading(true);
-    const res = await fetch("/api/get_stories");
-    const data = await res.json();
-    setStories(data || []);
-    setLoading(false);
+    try {
+      const res = await fetch("/api/get_stories");
+      if (!res.ok) {
+        console.error("Failed to fetch stories:", res.status);
+        setStories([]);
+        return;
+      }
+      const data = await res.json();
+      setStories(data || []);
+    } catch (err) {
+      console.error("Error fetching stories:", err);
+      setStories([]);
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function createStory() {
