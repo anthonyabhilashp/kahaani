@@ -123,3 +123,103 @@
     transform: translate(0px, 0px) scale(1);
   }
 }
+
+/* Video Effect Animations */
+@keyframes float {
+  0%, 100% {
+    transform: translate(0, 0) scale(1);
+  }
+  50% {
+    transform: translate(2px, -3px) scale(1.02);
+  }
+}
+
+@keyframes zoom-in {
+  0% {
+    transform: scale(1);
+  }
+  100% {
+    transform: scale(1.15);
+  }
+}
+
+@keyframes zoom-out {
+  0% {
+    transform: scale(1.15);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes pan-left {
+  0% {
+    transform: translateX(0) scale(1.1);
+  }
+  100% {
+    transform: translateX(-10%) scale(1.1);
+  }
+}
+
+@keyframes pan-right {
+  0% {
+    transform: translateX(0) scale(1.1);
+  }
+  100% {
+    transform: translateX(10%) scale(1.1);
+  }
+}
+
+@keyframes zoom-pan {
+  0% {
+    transform: translateX(0) scale(1);
+  }
+  100% {
+    transform: translateX(10%) scale(1.2);
+  }
+}
+
+@keyframes zoom-out-pan {
+  0% {
+    transform: translateX(0) scale(1.2);
+  }
+  100% {
+    transform: translateX(-10%) scale(1);
+  }
+}
+
+/* Animation utility classes - outside @layer for direct application */
+.animate-float {
+  animation: float ease-in-out forwards;
+  animation-iteration-count: 1;
+}
+
+.animate-zoom-in {
+  animation: zoom-in linear forwards;
+  animation-iteration-count: 1;
+}
+
+.animate-zoom-out {
+  animation: zoom-out linear forwards;
+  animation-iteration-count: 1;
+}
+
+.animate-pan-left {
+  animation: pan-left linear forwards;
+  animation-iteration-count: 1;
+}
+
+.animate-pan-right {
+  animation: pan-right linear forwards;
+  animation-iteration-count: 1;
+}
+
+.animate-zoom-pan {
+  animation: zoom-pan linear forwards;
+  animation-iteration-count: 1;
+}
+
+.animate-zoom-out-pan {
+  animation: zoom-out-pan linear forwards;
+  animation-iteration-count: 1;
+}

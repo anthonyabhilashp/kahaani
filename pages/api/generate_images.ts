@@ -4,6 +4,7 @@ import fetch from "node-fetch";
 import fs from "fs";
 import path from "path";
 import { JobLogger } from "../../lib/logger";
+import { updateStoryMetadata } from "../../lib/updateStoryMetadata";
 
 export const config = { api: { bodyParser: { sizeLimit: "4mb" } } };
 
@@ -79,11 +80,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const finalStyle = style || "cinematic illustration";
     const extraNotes = instructions ? `\nInstructions: ${instructions}\n` : "";
-    
+
     // 🎯 Extract character information for consistency
     const allScenesText = scenes.map(s => s.text).join(' ');
     const characterInfo = extractCharacterInfo(allScenesText);
-    
+
     const characterConsistencyNote = characterInfo ? `
 🎭 CHARACTER REFERENCE FOR CONSISTENCY:
 ${characterInfo}
@@ -92,34 +93,38 @@ ${characterInfo}
 - Character must be visually identical across all images
 ` : "";
 
-    // 4️⃣ Build prompt - requesting multiple separate images in one call for consistency
-    const prompt = `
-You are a cinematic illustrator. Generate exactly ${scenes.length} separate, distinct images.
+    // 4️⃣ Generate ALL images in a single API call with full story context
+    logger.log(`🚀 Generating ${scenes.length} images in one batch request...`);
+    logger.log(`📝 Using model: ${model}`);
 
-CRITICAL INSTRUCTIONS:
-- Generate EXACTLY ${scenes.length} SEPARATE IMAGES (one image per scene)
-- Each image should be ONE STANDALONE IMAGE (not multiple panels, not a comic strip, not a storyboard)
-- DO NOT combine multiple scenes into one image
-- DO NOT create split-screen or multi-panel layouts
-- Each image represents only ONE scene
+    // Build the complete story context
+    const scenesText = scenes.map((s, i) => `Scene ${i + 1}: ${s.text}`).join('\n\n');
 
-Each image should represent the visual description of that specific scene,
-while keeping characters, art style, environment, and lighting consistent throughout all images.
+    const batchPrompt = `You are a professional cinematic illustrator. Generate ${scenes.length} separate images for this complete story.
 
-Style: ${finalStyle}.
+FULL STORY:
+${scenesText}
+
+Style: ${finalStyle}
 ${extraNotes}
 
 ${characterConsistencyNote}
 
-Scenes (generate ONE separate image for each):
-${scenes.map((s, i) => `${i + 1}. ${s.text}`).join("\n\n")}
+🚨 CRITICAL REQUIREMENTS:
+- Generate ${scenes.length} SEPARATE, INDIVIDUAL images (one for each scene listed above)
+- Each image should be a STANDALONE image that fills the ENTIRE frame (${videoWidth}x${videoHeight})
+- DO NOT stack, tile, grid, or combine multiple scenes into one image
+- DO NOT create a sequence, montage, storyboard, or comic-style layout
+- Each image represents ONLY its corresponding scene
+- Maintain consistent character designs, art style, and color palette across ALL images
+- Characters should look identical in all images (same face, clothing, proportions)
+- High quality, cinematic composition for each individual image
 
-IMPORTANT: Return ${scenes.length} separate images (one for each scene, in the same order). Each image should be a standalone image, not multiple scenes combined.
-Each image must correspond to the matching numbered scene.
+Return ${scenes.length} individual images in order.
 `;
 
-    // 5️⃣ Generate via model
-    logger.log(`🚀 Requesting ${provider} API...`);
+    logger.log(`📤 Sending batch request for all ${scenes.length} scenes...`);
+
     const resp = await fetch(OPENROUTER_URL, {
       method: "POST",
       headers: {
@@ -128,36 +133,65 @@ Each image must correspond to the matching numbered scene.
       },
       body: JSON.stringify({
         model,
-        messages: [{ role: "user", content: prompt }],
+        messages: [{ role: "user", content: batchPrompt }],
         modalities: ["image", "text"],
         image_config: { aspect_ratio: aspect },
       }),
     });
 
-    const data: any = await resp.json();
+    const responseText = await resp.text();
+    logger.log(`📦 Response status: ${resp.status}`);
+
     if (!resp.ok) {
-      logger.error("❌ API error response", data);
-      throw new Error(`Image generation failed: ${JSON.stringify(data)}`);
+      logger.error(`❌ API error:`, responseText.substring(0, 500));
+      throw new Error(`Batch image generation failed (${resp.status}): ${responseText.substring(0, 500)}`);
     }
 
-    // 6️⃣ Extract image URLs
-    const images: string[] = [];
+    let data: any;
+    try {
+      data = JSON.parse(responseText);
+    } catch (parseErr) {
+      logger.error("❌ Failed to parse response as JSON", responseText.substring(0, 500));
+      throw new Error(`Invalid JSON response: ${responseText.substring(0, 200)}`);
+    }
+
+    // Extract ALL images from the response
     const choices = data?.choices || [];
+    const images: string[] = [];
 
     for (const choice of choices) {
       const imgs = choice?.message?.images ||
                    choice?.message?.content?.filter((c: any) => c.type === "image" || c.image_url);
-      if (imgs) {
+
+      if (imgs && imgs.length > 0) {
         for (const img of imgs) {
-          const url = img?.image_url?.url || img?.image_url;
-          if (url) images.push(url);
+          const imageUrl = img?.image_url?.url || img?.image_url;
+          if (imageUrl) {
+            images.push(imageUrl);
+          }
         }
       }
     }
 
-    if (!images.length) throw new Error("No images returned by model");
+    logger.log(`📥 Received ${images.length} images from batch generation`);
 
-    logger.log(`🖼️ Received ${images.length} images`);
+    if (images.length === 0) {
+      throw new Error(`No images returned from batch generation`);
+    }
+
+    // If we got fewer images than scenes, pad with the last image
+    // If we got more images than scenes, take only what we need
+    if (images.length < scenes.length) {
+      logger.log(`⚠️ Warning: Expected ${scenes.length} images, got ${images.length}. Padding with last image.`);
+      while (images.length < scenes.length) {
+        images.push(images[images.length - 1]);
+      }
+    } else if (images.length > scenes.length) {
+      logger.log(`⚠️ Warning: Expected ${scenes.length} images, got ${images.length}. Using first ${scenes.length} images.`);
+      images.splice(scenes.length);
+    }
+
+    logger.log(`\n🖼️ Successfully prepared ${images.length} images for ${scenes.length} scenes`);
 
     // 7️⃣ Save new images
     const tmpDir = path.join(process.cwd(), "tmp", story_id);
@@ -205,6 +239,12 @@ Each image must correspond to the matching numbered scene.
     }
 
     logger.log(`📸 Updated ${uploads.length} scenes with image URLs`);
+
+    // Update story metadata (completion status)
+    logger.log(`📊 Updating story metadata...`);
+    await updateStoryMetadata(story_id);
+    logger.log(`✅ Story metadata updated`);
+
     res.status(200).json({ story_id, updated_scenes: uploads });
 
   } catch (err: any) {

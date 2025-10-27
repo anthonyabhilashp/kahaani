@@ -38,11 +38,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           .limit(1)
           .single();
 
+        // Use stored total_duration from story, fallback to video duration or 0
+        const totalDuration = story.total_duration || video?.duration || 0;
+
         return {
           ...story,
           first_scene_image: firstScene?.image_url || null,
           scene_count: sceneCount || 0,
-          video_duration: video?.duration || null,
+          video_duration: totalDuration,
           video_url: video?.video_url || null,
           video_created_at: video?.created_at || null,
         };

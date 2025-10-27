@@ -1,6 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { supabaseAdmin } from "../../lib/supabaseAdmin";
 import { JobLogger } from "../../lib/logger";
+import { updateStoryMetadata } from "../../lib/updateStoryMetadata";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") {
@@ -85,6 +86,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (fetchUpdatedError) {
       logger.log(`⚠️ Warning: Could not fetch updated scenes: ${fetchUpdatedError.message}`);
     }
+
+    // Update story metadata (completion status - new scene won't have audio/images)
+    logger.log(`📊 Updating story metadata...`);
+    await updateStoryMetadata(story_id);
+    logger.log(`✅ Story metadata updated`);
 
     res.status(200).json({
       success: true,

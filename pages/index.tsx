@@ -4,8 +4,14 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Plus, Loader2, PlayCircle, Clock, Film, Image as ImageIcon, Video, Settings, User, LogOut, Trash2 } from "lucide-react";
+import { Plus, Loader2, PlayCircle, Clock, Film, Image as ImageIcon, Video, Settings, User, LogOut, Trash2, MoreHorizontal } from "lucide-react";
 import { Slider } from "@/components/ui/slider";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 type Story = {
   id: string;
@@ -445,54 +451,62 @@ export default function Dashboard() {
                       </div>
                     )}
 
-                    {/* Duration Badge */}
-                    {story.video_duration && (
-                      <div className="absolute bottom-2 right-2 bg-black/80 backdrop-blur-sm text-white px-2 py-1 rounded text-xs font-medium flex items-center gap-1">
-                        <Clock className="w-3 h-3" />
-                        {formatDuration(story.video_duration)}
-                      </div>
-                    )}
+                    {/* Story Info Overlay at Bottom */}
+                    <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 via-black/70 to-transparent p-3 pt-8">
+                      <h3 className="text-sm font-semibold text-white line-clamp-2 mb-2 group-hover:text-orange-400 transition-colors">
+                        {story.title || "Untitled Story"}
+                      </h3>
 
-                    {/* Video Ready Indicator */}
-                    {story.video_url && (
-                      <div className="absolute top-2 right-2 bg-green-600/90 backdrop-blur-sm text-white p-1.5 rounded-full">
-                        <Film className="w-3 h-3" />
+                      {/* Metrics */}
+                      <div className="flex items-center justify-between text-xs text-gray-300">
+                        <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-1">
+                            <ImageIcon className="w-3 h-3" />
+                            <span>{story.scene_count}</span>
+                          </div>
+                          {story.video_duration && (
+                            <div className="flex items-center gap-1">
+                              <Clock className="w-3 h-3" />
+                              <span>{formatDuration(story.video_duration)}</span>
+                            </div>
+                          )}
+                        </div>
+                        {story.video_url && (
+                          <div className="bg-green-600/90 text-white px-1.5 py-0.5 rounded text-xs flex items-center gap-1">
+                            <Film className="w-2.5 h-2.5" />
+                          </div>
+                        )}
                       </div>
-                    )}
+                    </div>
 
-                    {/* Delete Button */}
-                    <button
-                      onClick={(e) => handleDeleteClick(e, story.id)}
-                      className="absolute top-2 left-2 bg-red-600/90 hover:bg-red-700 backdrop-blur-sm text-white p-1.5 rounded-full opacity-0 group-hover:opacity-100 transition-opacity duration-200 z-10"
-                      title="Delete story"
-                    >
-                      <Trash2 className="w-3 h-3" />
-                    </button>
+                    {/* Three-dot Menu */}
+                    <div className="absolute top-2 right-2 z-10">
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <button
+                            onClick={(e) => e.stopPropagation()}
+                            className="bg-black/70 hover:bg-black/90 backdrop-blur-sm text-white p-1 rounded-full transition-colors"
+                          >
+                            <MoreHorizontal className="w-3.5 h-3.5" />
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-48">
+                          <DropdownMenuItem
+                            onClick={(e) => handleDeleteClick(e, story.id)}
+                            className="text-red-400 focus:text-red-400 focus:bg-red-950/50 cursor-pointer"
+                          >
+                            <Trash2 className="w-4 h-4 mr-2" />
+                            Delete Story
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
                   </div>
 
                   {/* Hover Overlay with Play Button */}
                   <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex items-center justify-center">
                     <div className="bg-orange-600 p-3 rounded-full">
                       <PlayCircle className="w-6 h-6 text-white" />
-                    </div>
-                  </div>
-                </div>
-
-                {/* Story Info */}
-                <div className="mt-3 px-1">
-                  <h3 className="text-sm font-semibold text-white line-clamp-2 mb-1 group-hover:text-orange-400 transition-colors">
-                    {story.title || "Untitled Story"}
-                  </h3>
-
-                  {/* Metrics */}
-                  <div className="flex items-center gap-3 text-xs text-gray-400">
-                    <div className="flex items-center gap-1">
-                      <ImageIcon className="w-3 h-3" />
-                      <span>{story.scene_count}</span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <Clock className="w-3 h-3" />
-                      <span>{new Date(story.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
                     </div>
                   </div>
                 </div>

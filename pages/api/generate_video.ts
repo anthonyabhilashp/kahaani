@@ -6,6 +6,8 @@ import path from "path";
 import ffmpeg from "fluent-ffmpeg";
 import { JobLogger } from "../../lib/logger";
 import { generateWordByWordASS, type WordTimestamp } from "../../lib/assSubtitles";
+import { updateStoryMetadata } from "../../lib/updateStoryMetadata";
+import { getEffect } from "../../lib/videoEffects";
 
 export const config = { api: { bodyParser: { sizeLimit: "4mb" } } };
 
@@ -81,10 +83,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const tmpDir = path.join(process.cwd(), "tmp", story_id);
     fs.mkdirSync(tmpDir, { recursive: true });
 
-    // 1️⃣ Fetch scenes with images, audio, and word timestamps
+    // 1️⃣ Fetch scenes with images, audio, word timestamps, and effects
     const { data: scenes, error: sceneErr } = await supabaseAdmin
       .from("scenes")
-      .select("id, order, text, image_url, audio_url, word_timestamps")
+      .select("id, order, text, image_url, audio_url, word_timestamps, effects")
       .eq("story_id", story_id)
       .order("order", { ascending: true });
 
@@ -178,15 +180,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     logger.log(`🎞️ Rendering video at ${width}x${height} (${selectedAspect}), font scale: ${fontSizeScalingFactor.toFixed(2)}x`);
 
-    // 8️⃣ Generate individual scene clips with precise timing
+    // 8️⃣ Generate individual scene clips with precise timing and effects
     const videoClips: string[] = [];
     const audioClips: string[] = [];
-    
+
     for (const scene of mediaPaths) {
       if (!scene.imagePath) continue; // Skip scenes without images
-      
+
       const clipPath = path.join(tmpDir, `clip-${scene.sceneIndex}.mp4`);
-      
+
+      // Get effect for this scene
+      const sceneData = scenes[scene.sceneIndex];
+      const effectId = sceneData.effects?.motion || "none";
+      const effect = getEffect(effectId);
+
+      logger.log(`🎬 Scene ${scene.sceneIndex + 1}: Applying "${effect.name}" effect`);
+
+      // Build video filter chain
+      let videoFilter = `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black`;
+
+      // Add effect filter if not "none"
+      const effectFilter = effect.getFilter(width, height, scene.duration);
+      if (effectFilter) {
+        videoFilter += `,${effectFilter}`;
+      }
+
       // Create video clip for this scene duration
       await new Promise<void>((resolve, reject) => {
         ffmpeg()
@@ -196,16 +214,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           .noAudio()
           .outputOptions([
             "-pix_fmt yuv420p",
-            `-vf scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black,zoompan=z='min(zoom+0.0015,1.1)':s=${width}x${height}`,
+            `-vf ${videoFilter}`,
             `-t ${scene.duration}`,  // Duration of the clip
           ])
           .save(clipPath)
-          .on("end", resolve)
-          .on("error", reject);
+          .on("end", () => resolve())
+          .on("error", (err: any) => reject(err));
       });
-      
+
       videoClips.push(`file '${clipPath}'`);
-      
+
       // If scene has audio, add it to audio clips list
       if (scene.audioPath) {
         audioClips.push(scene.audioPath);
@@ -479,6 +497,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (upsertErr) throw upsertErr;
 
     logger.log(`☁️ Uploaded video → ${publicUrl} (${totalDuration.toFixed(1)}s total)`);
+
+    // Update story metadata (completion status)
+    logger.log(`📊 Updating story metadata...`);
+    await updateStoryMetadata(story_id);
+    logger.log(`✅ Story metadata updated`);
+
     res.status(200).json({ story_id, video_url: publicUrl, duration: totalDuration, is_valid: true });
   } catch (err: any) {
     if (logger) logger.error("❌ Error generating video", err);

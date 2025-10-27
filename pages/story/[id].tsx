@@ -5,8 +5,11 @@ import { Popover, PopoverContent, PopoverTrigger } from "../../components/ui/pop
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../components/ui/alert-dialog";
 import { Slider } from "../../components/ui/slider";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../components/ui/tooltip";
-import { ArrowLeft, Play, Pause, Download, Volume2, VolumeX, Maximize, Loader2, ImageIcon, Image, Pencil, Trash2, Check, X, PlayCircle, ChevronDown, Plus, Type, Music, Upload } from "lucide-react";
+import { ArrowLeft, Play, Pause, Download, Volume2, VolumeX, Maximize, Loader2, ImageIcon, Image, Pencil, Trash2, Check, X, PlayCircle, ChevronDown, Plus, Type, Music, Upload, Sparkles } from "lucide-react";
 import { WordByWordCaption, SimpleCaption, type WordTimestamp } from "../../components/WordByWordCaption";
+import { EffectSelectionModal } from "../../components/EffectSelectionModal";
+import type { EffectType } from "../../lib/videoEffects";
+import { getEffectAnimationClass } from "../../lib/videoEffects";
 
 type Scene = {
   id?: string;
@@ -22,6 +25,7 @@ type Scene = {
   image_generated_at?: string;
   audio_generated_at?: string;
   scene_text_modified_at?: string;
+  effects?: { motion?: string };
 };
 type Video = {
   video_url: string;
@@ -54,6 +58,9 @@ export default function StoryDetailsPage() {
   const [imageStyle, setImageStyle] = useState<string>("cinematic illustration");
   const [editingScene, setEditingScene] = useState<number | null>(null);
   const [editText, setEditText] = useState("");
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [editTitleText, setEditTitleText] = useState("");
+  const [savingTitle, setSavingTitle] = useState(false);
   const [modifiedScenes, setModifiedScenes] = useState<Set<number>>(new Set());
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [sceneToDelete, setSceneToDelete] = useState<number | null>(null);
@@ -74,6 +81,10 @@ export default function StoryDetailsPage() {
   const bgMusicSettingsLoadedRef = useRef(false); // Track if background music settings have been loaded from DB
   const hasFetchedRef = useRef(false); // Track if story has been fetched to prevent duplicates
   const currentStoryIdRef = useRef<string | null>(null); // Track current story ID
+
+  // Effect selection modal state
+  const [effectModalOpen, setEffectModalOpen] = useState(false);
+  const [selectedEffectScene, setSelectedEffectScene] = useState<number | null>(null);
 
   // Helper function to calculate total video duration
   const getTotalDuration = () => {
@@ -1515,37 +1526,106 @@ export default function StoryDetailsPage() {
 
   const editScene = async (sceneIndex: number, newText: string) => {
     if (!id || !scenes[sceneIndex]) return;
-    
+
     try {
       const res = await fetch("/api/edit_scene", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
-          story_id: id, 
+        body: JSON.stringify({
+          story_id: id,
           scene_id: scenes[sceneIndex].id,
           scene_order: sceneIndex,
-          text: newText 
+          text: newText
         }),
       });
-      
+
       if (!res.ok) throw new Error("Failed to edit scene");
-      
+
       // Update local state immediately
       const updatedScenes = [...scenes];
       updatedScenes[sceneIndex] = { ...updatedScenes[sceneIndex], text: newText };
       setScenes(updatedScenes);
-      
+
       // Mark scene as modified
       const newModified = new Set(modifiedScenes);
       newModified.add(sceneIndex);
       setModifiedScenes(newModified);
-      
+
       setEditingScene(null);
       setEditText("");
     } catch (err) {
       console.error("Scene edit error:", err);
       alert(`Failed to edit scene: ${err instanceof Error ? err.message : 'Unknown error'}`);
     }
+  };
+
+  const updateSceneEffect = async (sceneIndex: number, effectId: EffectType) => {
+    if (!scenes[sceneIndex]?.id) return;
+
+    try {
+      const res = await fetch("/api/update_scene_effect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          scene_id: scenes[sceneIndex].id,
+          effect_id: effectId,
+        }),
+      });
+
+      if (!res.ok) throw new Error("Failed to update effect");
+
+      // Update local state immediately
+      const updatedScenes = [...scenes];
+      updatedScenes[sceneIndex] = {
+        ...updatedScenes[sceneIndex],
+        effects: { motion: effectId }
+      };
+      setScenes(updatedScenes);
+
+      console.log(`✅ Effect updated for scene ${sceneIndex + 1}: ${effectId}`);
+    } catch (err) {
+      console.error("Effect update error:", err);
+      alert(`Failed to update effect: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    }
+  };
+
+  const saveStoryTitle = async () => {
+    if (!id || !editTitleText.trim()) return;
+
+    setSavingTitle(true);
+
+    try {
+      const res = await fetch("/api/update_story_title", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          story_id: id,
+          title: editTitleText.trim()
+        }),
+      });
+
+      if (!res.ok) throw new Error("Failed to update story title");
+
+      // Update local state immediately
+      setStory({ ...story, title: editTitleText.trim() });
+      setEditingTitle(false);
+      setEditTitleText("");
+    } catch (err) {
+      console.error("Title edit error:", err);
+      alert(`Failed to update title: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      setSavingTitle(false);
+    }
+  };
+
+  const startEditingTitle = () => {
+    setEditTitleText(story?.title || "");
+    setEditingTitle(true);
+  };
+
+  const cancelEditingTitle = () => {
+    setEditingTitle(false);
+    setEditTitleText("");
   };
 
   const handleDeleteClick = (sceneIndex: number) => {
@@ -1680,9 +1760,54 @@ export default function StoryDetailsPage() {
               <ArrowLeft className="w-4 h-4 mr-1" />
               Back to videos
             </Button>
-            <h1 className="text-lg font-semibold text-white">
-              {story?.title || "Video Editor"}
-            </h1>
+            {editingTitle ? (
+              <div className="flex items-center gap-2 flex-1 max-w-2xl">
+                <input
+                  type="text"
+                  value={editTitleText}
+                  onChange={(e) => setEditTitleText(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') saveStoryTitle();
+                    if (e.key === 'Escape') cancelEditingTitle();
+                  }}
+                  className="flex-1 text-lg font-semibold text-white bg-gray-800 border border-gray-700 rounded px-3 py-1.5 focus:outline-none focus:border-orange-500 min-w-[300px]"
+                  autoFocus
+                  disabled={savingTitle}
+                />
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={saveStoryTitle}
+                  disabled={savingTitle || !editTitleText.trim()}
+                  className="text-green-400 hover:text-green-300 hover:bg-gray-800 flex-shrink-0"
+                >
+                  {savingTitle ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={cancelEditingTitle}
+                  disabled={savingTitle}
+                  className="text-red-400 hover:text-red-300 hover:bg-gray-800 flex-shrink-0"
+                >
+                  <X className="w-4 h-4" />
+                </Button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <h1 className="text-lg font-semibold text-white">
+                  {story?.title || "Video Editor"}
+                </h1>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={startEditingTitle}
+                  className="text-gray-400 hover:text-white hover:bg-gray-800"
+                >
+                  <Pencil className="w-3 h-3" />
+                </Button>
+              </div>
+            )}
           </div>
 
           <div className="flex items-center gap-4">
@@ -2146,6 +2271,28 @@ export default function StoryDetailsPage() {
                             <p>{getImageButtonTooltip(scene)}</p>
                           </TooltipContent>
                         </Tooltip>
+
+                        {/* Effect Button */}
+                        {scene.image_url && (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSelectedEffectScene(index);
+                                  setEffectModalOpen(true);
+                                }}
+                                className="px-3 py-1.5 bg-purple-700 hover:bg-purple-600 text-white text-xs rounded transition-colors flex items-center gap-1.5"
+                              >
+                                <Sparkles className="w-3 h-3" />
+                                Effect
+                              </button>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              <p>Add video effect ({scene.effects?.motion || 'none'})</p>
+                            </TooltipContent>
+                          </Tooltip>
+                        )}
                       </div>
                       <div className="flex gap-2">
                         <button
@@ -2680,7 +2827,11 @@ export default function StoryDetailsPage() {
                     <img
                       src={scenes[selectedScene].image_url}
                       alt="Scene preview"
-                      className="w-full h-full object-cover"
+                      className={`w-full h-full object-cover ${getEffectAnimationClass(scenes[selectedScene]?.effects?.motion || "none")}`}
+                      style={{
+                        transformOrigin: "center center",
+                        animationDuration: `${scenes[selectedScene]?.duration || 5}s`
+                      }}
                       loading="eager"
                       decoding="async"
                     />
@@ -3849,6 +4000,22 @@ export default function StoryDetailsPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Effect Selection Modal */}
+      {selectedEffectScene !== null && (
+        <EffectSelectionModal
+          isOpen={effectModalOpen}
+          onClose={() => {
+            setEffectModalOpen(false);
+            setSelectedEffectScene(null);
+          }}
+          currentEffect={(scenes[selectedEffectScene]?.effects?.motion as EffectType) || "none"}
+          sceneImageUrl={scenes[selectedEffectScene]?.image_url || ""}
+          onSelectEffect={(effectId) => {
+            updateSceneEffect(selectedEffectScene, effectId);
+          }}
+        />
       )}
     </div>
   );

@@ -5,6 +5,7 @@ import fetch from "node-fetch";
 import ffmpeg from "fluent-ffmpeg";
 import { supabaseAdmin } from "../../lib/supabaseAdmin";
 import { JobLogger } from "../../lib/logger";
+import { updateStoryMetadata } from "../../lib/updateStoryMetadata";
 import * as Echogarden from "echogarden";
 
 const ELEVENLABS_API = "https://api.elevenlabs.io/v1/text-to-speech";
@@ -159,6 +160,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     logger.log(`\n✅ Bulk audio generation completed. ${updatedScenes.filter(s => !('error' in s)).length}/${scenes.length} scenes successful`);
+
+    // Update story metadata (duration and completion status)
+    logger.log(`📊 Updating story metadata...`);
+    await updateStoryMetadata(story_id);
+    logger.log(`✅ Story metadata updated`);
 
     res.status(200).json({
       story_id,

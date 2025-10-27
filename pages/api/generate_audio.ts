@@ -5,6 +5,7 @@ import fetch from "node-fetch";
 import ffmpeg from "fluent-ffmpeg";
 import { supabaseAdmin } from "../../lib/supabaseAdmin";
 import { JobLogger } from "../../lib/logger";
+import { updateStoryMetadata } from "../../lib/updateStoryMetadata";
 import * as Echogarden from "echogarden";
 
 const ELEVENLABS_API = "https://api.elevenlabs.io/v1/text-to-speech";
@@ -128,6 +129,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .eq("id", scene_id);
 
     if (updateErr) throw updateErr;
+
+    // 9️⃣ Update story metadata (duration and completion status)
+    logger.log(`📊 Updating story metadata...`);
+    await updateStoryMetadata(scene.story_id);
+    logger.log(`✅ Story metadata updated`);
 
     logger.log(`✅ Audio saved to Supabase for scene: ${audioUrl}`);
     res.status(200).json({

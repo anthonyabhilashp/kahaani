@@ -1,6 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { supabaseAdmin } from "../../lib/supabaseAdmin";
 import { JobLogger } from "../../lib/logger";
+import { updateStoryMetadata } from "../../lib/updateStoryMetadata";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") {
@@ -193,9 +194,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     logger.log("✅ Scene deleted and remaining scenes reordered successfully");
 
-    res.status(200).json({ 
-      success: true, 
-      message: "Scene deleted successfully" 
+    // Update story metadata (duration and completion status)
+    logger.log(`📊 Updating story metadata...`);
+    await updateStoryMetadata(story_id);
+    logger.log(`✅ Story metadata updated`);
+
+    res.status(200).json({
+      success: true,
+      message: "Scene deleted successfully"
     });
 
   } catch (error) {

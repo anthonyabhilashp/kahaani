@@ -48,8 +48,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       console.log(`\n🎨 [${i + 1}/${IMAGE_STYLES.length}] Generating ${style.label}...`);
 
       try {
-        // Construct full prompt
-        const fullPrompt = `${SAMPLE_SCENE}, ${style.prompt}. Aspect ratio: ${ASPECT_RATIO}, ${VIDEO_WIDTH}x${VIDEO_HEIGHT}`;
+        // Construct full prompt with explicit single image instruction
+        const fullPrompt = `Generate ONE SINGLE IMAGE ONLY (not multiple images, not a stack, not a grid).
+
+Scene: ${SAMPLE_SCENE}
+
+Style: ${style.prompt}
+
+CRITICAL: Create ONE STANDALONE IMAGE that fills the entire frame. DO NOT create multiple images, stacked images, tiled grids, or panels.
+
+Aspect ratio: ${ASPECT_RATIO}, ${VIDEO_WIDTH}x${VIDEO_HEIGHT}`;
 
         console.log(`📝 Prompt: ${fullPrompt}`);
 
