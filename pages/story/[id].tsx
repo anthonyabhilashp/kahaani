@@ -4,6 +4,7 @@ import { Button } from "../../components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "../../components/ui/popover";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../components/ui/alert-dialog";
 import { Slider } from "../../components/ui/slider";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../components/ui/tooltip";
 import { ArrowLeft, Play, Pause, Download, Volume2, VolumeX, Maximize, Loader2, ImageIcon, Image, Pencil, Trash2, Check, X, PlayCircle, ChevronDown, Plus, Type, Music, Upload } from "lucide-react";
 import { WordByWordCaption, SimpleCaption, type WordTimestamp } from "../../components/WordByWordCaption";
 
@@ -16,6 +17,11 @@ type Scene = {
   voice_id?: string;
   duration?: number;
   word_timestamps?: WordTimestamp[] | null;
+  last_modified_at?: string;
+  created_at?: string;
+  image_generated_at?: string;
+  audio_generated_at?: string;
+  scene_text_modified_at?: string;
 };
 type Video = {
   video_url: string;
@@ -41,6 +47,7 @@ export default function StoryDetailsPage() {
   const [selectedScene, setSelectedScene] = useState(0);
   const [loading, setLoading] = useState(true);
   const [generatingImages, setGeneratingImages] = useState(false);
+  const [generatingAudios, setGeneratingAudios] = useState(false);
   const [generatingSceneImage, setGeneratingSceneImage] = useState<Set<number>>(new Set());
   const [generatingSceneAudio, setGeneratingSceneAudio] = useState<Set<number>>(new Set());
   const [generatingVideo, setGeneratingVideo] = useState(false);
@@ -99,6 +106,66 @@ export default function StoryDetailsPage() {
     return { sceneIndex: lastIndex, sceneTime: scenes[lastIndex]?.duration || 0 };
   };
 
+  // Helper function to get regeneration message for a scene
+  const getRegenerationMessage = (scene: Scene): string => {
+    if (!scene.scene_text_modified_at) return "";
+
+    const textModified = new Date(scene.scene_text_modified_at).getTime();
+    const imageGenerated = scene.image_generated_at ? new Date(scene.image_generated_at).getTime() : 0;
+    const audioGenerated = scene.audio_generated_at ? new Date(scene.audio_generated_at).getTime() : 0;
+
+    const imageOutdated = scene.image_url && textModified > imageGenerated;
+    const audioOutdated = scene.audio_url && textModified > audioGenerated;
+
+    if (imageOutdated && audioOutdated) {
+      return "Scene updated. Consider regenerating image and audio, if needed.";
+    } else if (imageOutdated) {
+      return "Scene updated. Consider regenerating image, if needed.";
+    } else if (audioOutdated) {
+      return "Scene updated. Consider regenerating audio, if needed.";
+    }
+
+    return "";
+  };
+
+  // Helper function to check if image is outdated
+  const isImageOutdated = (scene: Scene): boolean => {
+    if (!scene.scene_text_modified_at || !scene.image_url) return false;
+    const textModified = new Date(scene.scene_text_modified_at).getTime();
+    const imageGenerated = scene.image_generated_at ? new Date(scene.image_generated_at).getTime() : 0;
+    return textModified > imageGenerated;
+  };
+
+  // Helper function to check if audio is outdated
+  const isAudioOutdated = (scene: Scene): boolean => {
+    if (!scene.scene_text_modified_at || !scene.audio_url) return false;
+    const textModified = new Date(scene.scene_text_modified_at).getTime();
+    const audioGenerated = scene.audio_generated_at ? new Date(scene.audio_generated_at).getTime() : 0;
+    return textModified > audioGenerated;
+  };
+
+  // Helper function to get audio button tooltip
+  const getAudioButtonTooltip = (scene: Scene): string => {
+    if (!scene.audio_url) {
+      return "Click to generate audio narration for this scene";
+    } else if (isAudioOutdated(scene)) {
+      return "Audio generated, but scene text was updated since then. Consider regenerating.";
+    } else {
+      return "Audio is up-to-date. Click to regenerate with a different voice.";
+    }
+  };
+
+  // Helper function to get image button tooltip
+  const getImageButtonTooltip = (scene: Scene): string => {
+    if (!scene.image_url) {
+      return "Click to generate an AI image for this scene";
+    } else if (isImageOutdated(scene)) {
+      return "Image generated, but scene text was updated since then. Consider regenerating.";
+    } else {
+      return "Image is up-to-date. Click to regenerate with different settings.";
+    }
+  };
+
   // Audio drawer state
   const [audioDrawerOpen, setAudioDrawerOpen] = useState(false);
   const [audioDrawerScene, setAudioDrawerScene] = useState<number | null>(null);
@@ -109,12 +176,19 @@ export default function StoryDetailsPage() {
   const voicePreviewAudioRef = useRef<HTMLAudioElement | null>(null);
   const voiceListRef = useRef<HTMLDivElement | null>(null);
 
+  // Scene thumbnail audio playback
+  const [playingThumbnailAudio, setPlayingThumbnailAudio] = useState<number | null>(null);
+  const thumbnailAudioRef = useRef<HTMLAudioElement | null>(null);
+
   // Image drawer state
   const [imageDrawerOpen, setImageDrawerOpen] = useState(false);
   const [imageDrawerScene, setImageDrawerScene] = useState<number | null>(null);
-  const [selectedImageStyle, setSelectedImageStyle] = useState<string>("cinematic illustration");
+  const [selectedImageStyle, setSelectedImageStyle] = useState<string>("cinematic movie still, dramatic lighting, film grain");
   const [imageInstructions, setImageInstructions] = useState<string>("");
   const [bulkImageDrawerOpen, setBulkImageDrawerOpen] = useState(false);
+  const [bulkAudioDrawerOpen, setBulkAudioDrawerOpen] = useState(false);
+  const [loadingSampleImages, setLoadingSampleImages] = useState(false);
+  const [sampleImagesLoaded, setSampleImagesLoaded] = useState(false);
   const [storyVoicePopoverOpen, setStoryVoicePopoverOpen] = useState(false);
   const [voiceUpdateConfirmOpen, setVoiceUpdateConfirmOpen] = useState(false);
   const [pendingVoiceId, setPendingVoiceId] = useState<string>("");
@@ -161,7 +235,7 @@ export default function StoryDetailsPage() {
     volumeRef.current = volume;
   }, [volume]);
 
-  // Scroll to selected voice when drawer opens
+  // Scroll to selected voice when drawer opens (for individual scene)
   useEffect(() => {
     if (audioDrawerOpen && voiceListRef.current && selectedVoiceId) {
       // Small delay to ensure DOM is rendered
@@ -173,6 +247,20 @@ export default function StoryDetailsPage() {
       }, 100);
     }
   }, [audioDrawerOpen, selectedVoiceId]);
+
+  // Pre-select voice from story when bulk audio drawer opens
+  useEffect(() => {
+    if (bulkAudioDrawerOpen && story?.voice_id) {
+      setSelectedVoiceId(story.voice_id);
+      // Scroll to selected voice
+      setTimeout(() => {
+        const selectedElement = voiceListRef.current?.querySelector(`[data-voice-id="${story.voice_id}"]`);
+        if (selectedElement) {
+          selectedElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      }, 100);
+    }
+  }, [bulkAudioDrawerOpen, story?.voice_id]);
 
   // Stop audio when navigating away or unmounting
   useEffect(() => {
@@ -275,6 +363,24 @@ export default function StoryDetailsPage() {
       setStory(data.story);
       setScenes(scenesWithTimestamp);
       setVideo(data.video);
+
+      // Initialize modifiedScenes from database - scenes where scene_text_modified_at is newer than generation timestamps
+      const initialModifiedScenes = new Set<number>();
+      scenesWithTimestamp.forEach((scene: any, index: number) => {
+        if (scene.scene_text_modified_at) {
+          const textModified = new Date(scene.scene_text_modified_at).getTime();
+          const imageGenerated = scene.image_generated_at ? new Date(scene.image_generated_at).getTime() : 0;
+          const audioGenerated = scene.audio_generated_at ? new Date(scene.audio_generated_at).getTime() : 0;
+
+          // Show modified badge if scene text was edited after image or audio was generated
+          if ((scene.image_url && textModified > imageGenerated) ||
+              (scene.audio_url && textModified > audioGenerated)) {
+            initialModifiedScenes.add(index);
+          }
+        }
+      });
+      setModifiedScenes(initialModifiedScenes);
+      console.log("📝 Initialized modified scenes:", Array.from(initialModifiedScenes));
 
       // Load caption settings from database if available
       if (data.story?.caption_settings) {
@@ -613,18 +719,41 @@ export default function StoryDetailsPage() {
 
       // Update scenes with new images, using cache-busting timestamp
       const timestamp = Date.now();
+      const generatedTimestamp = new Date().toISOString();
       const updatedScenes = scenes.map((scene) => {
         // Find the matching updated scene from API response
         const updatedScene = result.updated_scenes?.find((s: any) => s.id === scene.id);
         if (updatedScene && updatedScene.image_url) {
           return {
             ...scene,
-            image_url: `${updatedScene.image_url}?t=${timestamp}`
+            image_url: `${updatedScene.image_url}?t=${timestamp}`,
+            image_generated_at: generatedTimestamp
           };
         }
         return scene;
       });
       setScenes(updatedScenes);
+
+      // Recalculate modified scenes for all updated scenes
+      const updatedModifiedScenes = new Set(modifiedScenes);
+      updatedScenes.forEach((scene, index) => {
+        if (scene.scene_text_modified_at && scene.image_url) {
+          const textModified = new Date(scene.scene_text_modified_at).getTime();
+          const imageGenerated = scene.image_generated_at ? new Date(scene.image_generated_at).getTime() : 0;
+          const audioGenerated = scene.audio_generated_at ? new Date(scene.audio_generated_at).getTime() : 0;
+
+          // Check if still needs regeneration
+          const needsRegen = (scene.audio_url && textModified > audioGenerated);
+          if (needsRegen) {
+            updatedModifiedScenes.add(index);
+          } else {
+            updatedModifiedScenes.delete(index);
+          }
+        } else if (scene.image_url) {
+          updatedModifiedScenes.delete(index);
+        }
+      });
+      setModifiedScenes(updatedModifiedScenes);
 
       // Don't reset media preload state or re-preload audio
     } catch (err) {
@@ -632,6 +761,113 @@ export default function StoryDetailsPage() {
       alert(`Image generation failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
     } finally {
       setGeneratingImages(false);
+    }
+  };
+
+  const generateAllAudio = async (voiceId?: string) => {
+    if (!id) return;
+    setGeneratingAudios(true);
+    setBulkAudioDrawerOpen(false); // Close drawer when generation starts
+
+    try {
+      const finalVoiceId = voiceId || story?.voice_id || "21m00Tcm4TlvDq8ikWAM";
+      console.log("🎙️ Starting bulk audio generation");
+      console.log("  Story ID:", id);
+      console.log("  Selected Voice ID:", voiceId);
+      console.log("  Story Voice ID:", story?.voice_id);
+      console.log("  Final Voice ID:", finalVoiceId);
+
+      const res = await fetch("/api/generate_all_audio", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          story_id: id,
+          voice_id: finalVoiceId
+        }),
+      });
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || "Audio generation failed");
+      }
+      const result = await res.json();
+      console.log("✅ Bulk audio generation completed:", result);
+
+      // Update scenes with new audio, using cache-busting timestamp
+      const timestamp = Date.now();
+      const generatedTimestamp = new Date().toISOString();
+      const updatedScenes = scenes.map((scene) => {
+        // Find the matching updated scene from API response
+        const updatedScene = result.updated_scenes?.find((s: any) => s.id === scene.id);
+        if (updatedScene && updatedScene.audio_url && !updatedScene.error) {
+          return {
+            ...scene,
+            audio_url: `${updatedScene.audio_url}?t=${timestamp}`,
+            voice_id: updatedScene.voice_id,
+            duration: updatedScene.duration,
+            word_timestamps: updatedScene.word_timestamps,
+            audio_generated_at: generatedTimestamp
+          };
+        }
+        return scene;
+      });
+      setScenes(updatedScenes);
+
+      // Recalculate modified scenes
+      const updatedModifiedScenes = new Set(modifiedScenes);
+      updatedScenes.forEach((scene, index) => {
+        if (scene.scene_text_modified_at && scene.audio_url) {
+          const textModified = new Date(scene.scene_text_modified_at).getTime();
+          const audioGenerated = scene.audio_generated_at ? new Date(scene.audio_generated_at).getTime() : 0;
+
+          // Check if still needs regeneration
+          const needsRegen = textModified > audioGenerated;
+          if (needsRegen) {
+            updatedModifiedScenes.add(index);
+          } else {
+            updatedModifiedScenes.delete(index);
+          }
+        } else if (scene.audio_url) {
+          updatedModifiedScenes.delete(index);
+        }
+      });
+      setModifiedScenes(updatedModifiedScenes);
+
+      // Preload all new audio files
+      await preloadMedia(updatedScenes);
+    } catch (err) {
+      console.error("Bulk audio generation error:", err);
+      alert(`Bulk audio generation failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      setGeneratingAudios(false);
+    }
+  };
+
+  const loadSampleImages = async () => {
+    setLoadingSampleImages(true);
+    console.log("🎨 Loading sample images for all styles...");
+
+    try {
+      const res = await fetch("/api/generate_sample_images", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || "Failed to generate sample images");
+      }
+
+      const result = await res.json();
+      console.log("✅ Sample images loaded:", result);
+
+      setSampleImagesLoaded(true);
+      alert(`Successfully generated ${result.successful}/${result.total} sample images!`);
+
+    } catch (err) {
+      console.error("❌ Sample image generation error:", err);
+      alert(`Failed to load sample images: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      setLoadingSampleImages(false);
     }
   };
 
@@ -663,17 +899,38 @@ export default function StoryDetailsPage() {
       const result = await res.json();
       console.log("Scene image generation completed:", result);
 
-      // Update the specific scene with the new image URL
+      // Update the specific scene with the new image URL and timestamp
       // Add cache-busting timestamp to force browser to reload the image
       const imageUrlWithTimestamp = result.image_url ? `${result.image_url}?t=${Date.now()}` : result.image_url;
       console.log("🔄 Updating scene", sceneIndex, "with cache-busted URL:", imageUrlWithTimestamp);
       const updatedScenes = [...scenes];
       updatedScenes[sceneIndex] = {
         ...updatedScenes[sceneIndex],
-        image_url: imageUrlWithTimestamp
+        image_url: imageUrlWithTimestamp,
+        image_generated_at: new Date().toISOString()
       };
       setScenes(updatedScenes);
       console.log("✅ Scenes state updated, thumbnail should refresh now");
+
+      // Recalculate modified scenes without full reload
+      const updatedModifiedScenes = new Set(modifiedScenes);
+      const scene = updatedScenes[sceneIndex];
+      if (scene.scene_text_modified_at) {
+        const textModified = new Date(scene.scene_text_modified_at).getTime();
+        const imageGenerated = new Date().getTime(); // Just generated now
+        const audioGenerated = scene.audio_generated_at ? new Date(scene.audio_generated_at).getTime() : 0;
+
+        // Check if still needs regeneration
+        const needsRegen = (scene.audio_url && textModified > audioGenerated);
+        if (needsRegen) {
+          updatedModifiedScenes.add(sceneIndex);
+        } else {
+          updatedModifiedScenes.delete(sceneIndex);
+        }
+      } else {
+        updatedModifiedScenes.delete(sceneIndex);
+      }
+      setModifiedScenes(updatedModifiedScenes);
 
     } catch (err) {
       console.error("Scene image generation error:", err);
@@ -816,6 +1073,40 @@ export default function StoryDetailsPage() {
     };
   };
 
+  // Toggle thumbnail audio playback
+  const toggleThumbnailAudio = (sceneIndex: number, audioUrl: string, e: React.MouseEvent) => {
+    e.stopPropagation(); // Prevent scene selection
+
+    // If clicking the same audio, stop it
+    if (playingThumbnailAudio === sceneIndex && thumbnailAudioRef.current) {
+      thumbnailAudioRef.current.pause();
+      thumbnailAudioRef.current = null;
+      setPlayingThumbnailAudio(null);
+      return;
+    }
+
+    // Stop any currently playing thumbnail audio
+    if (thumbnailAudioRef.current) {
+      thumbnailAudioRef.current.pause();
+      thumbnailAudioRef.current = null;
+    }
+
+    // Play new audio
+    const audio = new Audio(audioUrl);
+    thumbnailAudioRef.current = audio;
+    setPlayingThumbnailAudio(sceneIndex);
+
+    audio.play();
+    audio.onended = () => {
+      setPlayingThumbnailAudio(null);
+      thumbnailAudioRef.current = null;
+    };
+    audio.onerror = () => {
+      setPlayingThumbnailAudio(null);
+      thumbnailAudioRef.current = null;
+    };
+  };
+
   const generateSceneAudio = async (sceneIndex: number, voiceId?: string) => {
     if (!scenes[sceneIndex]) return;
 
@@ -840,7 +1131,7 @@ export default function StoryDetailsPage() {
       const result = await res.json();
       console.log("Scene audio generation completed:", result);
 
-      // Update the specific scene with the new audio URL, voice_id, duration, and word_timestamps
+      // Update the specific scene with the new audio URL, voice_id, duration, word_timestamps, and timestamp
       // Add cache-busting timestamp to force browser to reload the audio
       const audioUrlWithTimestamp = result.audio_url ? `${result.audio_url}?t=${Date.now()}` : result.audio_url;
       const updatedScenes = [...scenes];
@@ -849,7 +1140,8 @@ export default function StoryDetailsPage() {
         audio_url: audioUrlWithTimestamp,
         voice_id: result.voice_id || voiceId || selectedVoiceId,
         duration: result.duration,
-        word_timestamps: result.word_timestamps || null
+        word_timestamps: result.word_timestamps || null,
+        audio_generated_at: new Date().toISOString()
       };
       setScenes(updatedScenes);
 
@@ -867,6 +1159,26 @@ export default function StoryDetailsPage() {
         };
         audioElement.load(); // Force load the new audio
       }
+
+      // Recalculate modified scenes without full reload
+      const updatedModifiedScenes = new Set(modifiedScenes);
+      const scene = updatedScenes[sceneIndex];
+      if (scene.scene_text_modified_at) {
+        const textModified = new Date(scene.scene_text_modified_at).getTime();
+        const imageGenerated = scene.image_generated_at ? new Date(scene.image_generated_at).getTime() : 0;
+        const audioGenerated = new Date().getTime(); // Just generated now
+
+        // Check if still needs regeneration
+        const needsRegen = (scene.image_url && textModified > imageGenerated);
+        if (needsRegen) {
+          updatedModifiedScenes.add(sceneIndex);
+        } else {
+          updatedModifiedScenes.delete(sceneIndex);
+        }
+      } else {
+        updatedModifiedScenes.delete(sceneIndex);
+      }
+      setModifiedScenes(updatedModifiedScenes);
 
     } catch (err) {
       console.error("Scene audio generation error:", err);
@@ -1590,21 +1902,28 @@ export default function StoryDetailsPage() {
           <div className="w-[40%] border-r border-gray-800 bg-black overflow-y-auto">
             {leftPanelView === "scenes" ? (
               /* Scenes Timeline View */
-              <div className="p-4 space-y-3">
-                {scenes.map((scene, index) => (
+              <TooltipProvider delayDuration={300}>
+                <div className="p-4 space-y-3">
+                  {scenes.map((scene, index) => (
                 <div key={`scene-wrapper-${scene.id}`}>
                   {/* Add Scene Button - appears before each scene */}
                   <div className="flex justify-center my-2">
-                    <button
-                      onClick={() => {
-                        setAddScenePosition(index);
-                        setAddSceneDialogOpen(true);
-                      }}
-                      className="flex items-center gap-2 px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white text-xs rounded-full transition-colors border border-gray-700 hover:border-gray-600"
-                    >
-                      <Plus className="w-3 h-3" />
-                      Add Scene
-                    </button>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          onClick={() => {
+                            setAddScenePosition(index);
+                            setAddSceneDialogOpen(true);
+                          }}
+                          className="flex items-center justify-center w-7 h-7 bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white rounded-full transition-colors border border-gray-700 hover:border-gray-600"
+                        >
+                          <Plus className="w-4 h-4" />
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>Add a new scene at this position</p>
+                      </TooltipContent>
+                    </Tooltip>
                   </div>
 
                   {/* Scene Tile */}
@@ -1641,22 +1960,82 @@ export default function StoryDetailsPage() {
                         <div className="absolute top-1 left-1 bg-black/80 px-2 py-0.5 rounded text-white text-xs font-bold">
                           #{index}
                         </div>
-                        {/* Audio indicator */}
+                        {/* Audio indicator - clickable to play/pause */}
                         {scene.audio_url && (
-                          <div className="absolute bottom-1 right-1 bg-green-500 p-1 rounded">
-                            <Volume2 className="w-3 h-3 text-white" />
-                          </div>
+                          <button
+                            onClick={(e) => toggleThumbnailAudio(index, scene.audio_url!, e)}
+                            className="absolute bottom-1 right-1 bg-green-500 hover:bg-green-600 p-1 rounded transition-colors cursor-pointer"
+                          >
+                            {playingThumbnailAudio === index ? (
+                              <Pause className="w-3 h-3 text-white" />
+                            ) : (
+                              <Volume2 className="w-3 h-3 text-white" />
+                            )}
+                          </button>
                         )}
                       </div>
 
                       {/* Scene Info */}
                       <div className="flex-1 flex flex-col min-w-0">
-                        <div className="text-orange-500 text-xs font-medium mb-1 flex items-center gap-1">
-                          <span>🎤</span> Voice caption
+                        <div className="flex items-center justify-between mb-1">
+                          <div className="text-orange-500 text-xs font-medium flex items-center gap-1">
+                            <span>🎤</span> Voice caption
+                          </div>
+                          {/* Modified indicator - show when scene was edited and has existing media */}
+                          {modifiedScenes.has(index) && (scene.image_url || scene.audio_url) && (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <div className="px-2 py-0.5 bg-yellow-900/30 border border-yellow-700/50 rounded text-yellow-400 text-[10px] font-medium">
+                                  Modified
+                                </div>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                <p>{getRegenerationMessage(scene)}</p>
+                              </TooltipContent>
+                            </Tooltip>
+                          )}
                         </div>
-                        <div className="text-gray-400 text-xs line-clamp-4 mb-2">
-                          {scene.text}
-                        </div>
+                        {/* Inline editing or text display */}
+                        {editingScene === index ? (
+                          <div className="flex flex-col gap-2 mb-2">
+                            <textarea
+                              value={editText}
+                              onChange={(e) => setEditText(e.target.value)}
+                              onClick={(e) => e.stopPropagation()}
+                              className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-gray-300 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+                              rows={4}
+                              autoFocus
+                            />
+                            <div className="flex gap-1">
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  editScene(index, editText);
+                                }}
+                                disabled={!editText.trim() || editText === scene.text}
+                                className="px-2 py-1 bg-blue-600 hover:bg-blue-700 text-white text-xs rounded transition-colors flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                              >
+                                <Check className="w-3 h-3" />
+                                Save
+                              </button>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setEditingScene(null);
+                                  setEditText("");
+                                }}
+                                className="px-2 py-1 bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs rounded transition-colors flex items-center gap-1"
+                              >
+                                <X className="w-3 h-3" />
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="text-gray-400 text-xs line-clamp-4 mb-2">
+                            {scene.text}
+                          </div>
+                        )}
                         <div className="text-gray-500 text-xs mt-auto flex items-center gap-1">
                           <span>⏱️</span> {scene.duration ? `${Math.round(scene.duration)}s` : '--'}
                         </div>
@@ -1667,87 +2046,116 @@ export default function StoryDetailsPage() {
                     <div className="flex items-center justify-between gap-2 pt-3 border-t border-gray-800">
                       <div className="flex gap-2">
                         {/* Audio Button or Status */}
-                        {scene.audio_url ? (
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              openAudioDrawer(index);
-                            }}
-                            className="px-3 py-1.5 bg-green-800 hover:bg-green-700 text-white text-xs rounded transition-colors flex items-center gap-1.5"
-                          >
-                            <Check className="w-3 h-3" />
-                            Audio
-                          </button>
-                        ) : (
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              openAudioDrawer(index);
-                            }}
-                            disabled={generatingSceneAudio.has(index)}
-                            className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-400 text-xs rounded transition-colors flex items-center gap-1.5 disabled:opacity-50"
-                          >
-                            {generatingSceneAudio.has(index) ? (
-                              <>
-                                <Loader2 className="w-3 h-3 animate-spin" />
-                                Audio...
-                              </>
-                            ) : (
-                              <>
-                                <X className="w-3 h-3" />
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            {scene.audio_url ? (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openAudioDrawer(index);
+                                }}
+                                className={`px-3 py-1.5 text-xs rounded transition-colors flex items-center gap-1.5 ${
+                                  isAudioOutdated(scene)
+                                    ? 'bg-yellow-900/50 hover:bg-yellow-800/60 border border-yellow-700/50 text-yellow-400'
+                                    : 'bg-green-800 hover:bg-green-700 text-white'
+                                }`}
+                              >
+                                <Check className="w-3 h-3" />
                                 Audio
-                              </>
+                              </button>
+                            ) : (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openAudioDrawer(index);
+                                }}
+                                disabled={generatingSceneAudio.has(index)}
+                                className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-400 text-xs rounded transition-colors flex items-center gap-1.5 disabled:opacity-50"
+                              >
+                                {generatingSceneAudio.has(index) ? (
+                                  <>
+                                    <Loader2 className="w-3 h-3 animate-spin" />
+                                    Audio...
+                                  </>
+                                ) : (
+                                  <>
+                                    <X className="w-3 h-3" />
+                                    Audio
+                                  </>
+                                )}
+                              </button>
                             )}
-                          </button>
-                        )}
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <p>{getAudioButtonTooltip(scene)}</p>
+                          </TooltipContent>
+                        </Tooltip>
 
                         {/* Image Button or Status */}
-                        {scene.image_url ? (
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              openImageDrawer(index);
-                            }}
-                            disabled={generatingSceneImage.has(index)}
-                            className="px-3 py-1.5 bg-green-800 hover:bg-green-700 text-white text-xs rounded transition-colors flex items-center gap-1.5 disabled:opacity-50"
-                          >
-                            {generatingSceneImage.has(index) ? (
-                              <>
-                                <Loader2 className="w-3 h-3 animate-spin" />
-                                Regen...
-                              </>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            {scene.image_url ? (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openImageDrawer(index);
+                                }}
+                                disabled={generatingSceneImage.has(index)}
+                                className={`px-3 py-1.5 text-xs rounded transition-colors flex items-center gap-1.5 disabled:opacity-50 ${
+                                  isImageOutdated(scene)
+                                    ? 'bg-yellow-900/50 hover:bg-yellow-800/60 border border-yellow-700/50 text-yellow-400'
+                                    : 'bg-green-800 hover:bg-green-700 text-white'
+                                }`}
+                              >
+                                {generatingSceneImage.has(index) ? (
+                                  <>
+                                    <Loader2 className="w-3 h-3 animate-spin" />
+                                    Regen...
+                                  </>
+                                ) : (
+                                  <>
+                                    <Check className="w-3 h-3" />
+                                    Image
+                                  </>
+                                )}
+                              </button>
                             ) : (
-                              <>
-                                <Check className="w-3 h-3" />
-                                Image
-                              </>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openImageDrawer(index);
+                                }}
+                                disabled={generatingSceneImage.has(index)}
+                                className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-400 text-xs rounded transition-colors flex items-center gap-1.5 disabled:opacity-50"
+                              >
+                                {generatingSceneImage.has(index) ? (
+                                  <>
+                                    <Loader2 className="w-3 h-3 animate-spin" />
+                                    Image...
+                                  </>
+                                ) : (
+                                  <>
+                                    <X className="w-3 h-3" />
+                                    Image
+                                  </>
+                                )}
+                              </button>
                             )}
-                          </button>
-                        ) : (
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              openImageDrawer(index);
-                            }}
-                            disabled={generatingSceneImage.has(index)}
-                            className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-400 text-xs rounded transition-colors flex items-center gap-1.5 disabled:opacity-50"
-                          >
-                            {generatingSceneImage.has(index) ? (
-                              <>
-                                <Loader2 className="w-3 h-3 animate-spin" />
-                                Image...
-                              </>
-                            ) : (
-                              <>
-                                <X className="w-3 h-3" />
-                                Image
-                              </>
-                            )}
-                          </button>
-                        )}
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <p>{getImageButtonTooltip(scene)}</p>
+                          </TooltipContent>
+                        </Tooltip>
                       </div>
                       <div className="flex gap-2">
-                        <button className="p-2 bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white rounded transition-colors">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setEditingScene(index);
+                            setEditText(scene.text);
+                          }}
+                          className="p-2 bg-gray-800 hover:bg-blue-600 text-gray-400 hover:text-white rounded transition-colors"
+                        >
                           <Pencil className="w-4 h-4" />
                         </button>
                         <button
@@ -1769,38 +2177,51 @@ export default function StoryDetailsPage() {
 
               {/* Add Scene Button - appears after all scenes */}
               <div className="flex justify-center my-2">
-                <button
-                  onClick={() => {
-                    setAddScenePosition(scenes.length);
-                    setAddSceneDialogOpen(true);
-                  }}
-                  className="flex items-center gap-2 px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white text-xs rounded-full transition-colors border border-gray-700 hover:border-gray-600"
-                >
-                  <Plus className="w-3 h-3" />
-                  Add Scene
-                </button>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      onClick={() => {
+                        setAddScenePosition(scenes.length);
+                        setAddSceneDialogOpen(true);
+                      }}
+                      className="flex items-center justify-center w-7 h-7 bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white rounded-full transition-colors border border-gray-700 hover:border-gray-600"
+                    >
+                      <Plus className="w-4 h-4" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>Add a new scene at the end</p>
+                  </TooltipContent>
+                </Tooltip>
               </div>
 
               {/* Generate Images Button */}
               <div className="bg-gray-900 rounded-lg border-2 border-dashed border-gray-700 hover:border-gray-600 transition-all">
                 <div className="p-4 flex flex-col items-center justify-center gap-3">
-                  <Button
-                    onClick={() => setBulkImageDrawerOpen(true)}
-                    disabled={generatingImages}
-                    className="w-full bg-blue-600 hover:bg-blue-700 text-white"
-                  >
-                    {generatingImages ? (
-                      <>
-                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                        Generating All...
-                      </>
-                    ) : (
-                      <>
-                        <Image className="w-4 h-4 mr-2" />
-                        Generate All Images
-                      </>
-                    )}
-                  </Button>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        onClick={() => setBulkImageDrawerOpen(true)}
+                        disabled={generatingImages}
+                        className="w-full bg-blue-600 hover:bg-blue-700 text-white"
+                      >
+                        {generatingImages ? (
+                          <>
+                            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                            Generating All...
+                          </>
+                        ) : (
+                          <>
+                            <Image className="w-4 h-4 mr-2" />
+                            Generate All Images
+                          </>
+                        )}
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>Generate images for all scenes at once using AI</p>
+                    </TooltipContent>
+                  </Tooltip>
                   <div className="text-xs text-gray-400 text-center">
                     {scenes.filter(s => s.image_url).length} / {scenes.length} scenes with images
                   </div>
@@ -1809,7 +2230,44 @@ export default function StoryDetailsPage() {
                   </div>
                 </div>
               </div>
+
+              {/* Generate All Audio Button */}
+              <div className="bg-gray-900 rounded-lg border-2 border-dashed border-gray-700 hover:border-gray-600 transition-all">
+                <div className="p-4 flex flex-col items-center justify-center gap-3">
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        onClick={() => setBulkAudioDrawerOpen(true)}
+                        disabled={generatingAudios}
+                        className="w-full bg-purple-600 hover:bg-purple-700 text-white"
+                      >
+                        {generatingAudios ? (
+                          <>
+                            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                            Generating All...
+                          </>
+                        ) : (
+                          <>
+                            <Volume2 className="w-4 h-4 mr-2" />
+                            Generate All Audio
+                          </>
+                        )}
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>Generate audio narration for all scenes at once</p>
+                    </TooltipContent>
+                  </Tooltip>
+                  <div className="text-xs text-gray-400 text-center">
+                    {scenes.filter(s => s.audio_url).length} / {scenes.length} scenes with audio
+                  </div>
+                  <div className="text-xs text-gray-500 text-center">
+                    Tip: Click "Audio" on each scene to generate individually
+                  </div>
+                </div>
+              </div>
             </div>
+          </TooltipProvider>
             ) : leftPanelView === "captions" ? (
               /* Captions Settings View */
               <div className="p-6 space-y-6">
@@ -2574,7 +3032,7 @@ export default function StoryDetailsPage() {
 
       {/* Audio Generation Drawer */}
       {audioDrawerOpen && audioDrawerScene !== null && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           {/* Background Overlay */}
           <div
             className="absolute inset-0 bg-black/60 backdrop-blur-sm"
@@ -2590,8 +3048,8 @@ export default function StoryDetailsPage() {
           />
 
           {/* Drawer Content */}
-          <div className="relative bg-gray-900 rounded-2xl shadow-2xl border border-gray-700 max-w-md w-full mx-4 transform transition-all">
-            <div className="p-6">
+          <div className="relative bg-gray-900 rounded-2xl shadow-2xl border border-gray-700 max-w-md w-full max-h-[90vh] overflow-y-auto transform transition-all">
+            <div className="p-5">
               {/* Header */}
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-lg font-semibold text-white">
@@ -2737,7 +3195,7 @@ export default function StoryDetailsPage() {
 
       {/* Image Generation Drawer */}
       {imageDrawerOpen && imageDrawerScene !== null && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           {/* Background overlay */}
           <div
             className="absolute inset-0 bg-black/60 backdrop-blur-sm"
@@ -2745,10 +3203,10 @@ export default function StoryDetailsPage() {
           />
 
           {/* Drawer content */}
-          <div className="relative bg-gray-900 border border-gray-700 rounded-lg shadow-2xl max-w-2xl w-full mx-4 max-h-[80vh] overflow-y-auto">
-            <div className="p-6">
+          <div className="relative bg-gray-900 rounded-2xl shadow-2xl border border-gray-700 max-w-2xl w-full max-h-[90vh] overflow-y-auto transform transition-all">
+            <div className="p-5">
               {/* Header */}
-              <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center justify-between mb-4">
                 <div>
                   <h2 className="text-xl font-semibold text-white">Generate Image</h2>
                   <p className="text-sm text-gray-400 mt-1">
@@ -2859,7 +3317,7 @@ export default function StoryDetailsPage() {
 
       {/* Bulk Image Generation Drawer */}
       {bulkImageDrawerOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           {/* Background overlay */}
           <div
             className="absolute inset-0 bg-black/60 backdrop-blur-sm"
@@ -2867,10 +3325,10 @@ export default function StoryDetailsPage() {
           />
 
           {/* Drawer content */}
-          <div className="relative bg-gray-900 border border-gray-700 rounded-lg shadow-2xl max-w-2xl w-full mx-4 max-h-[80vh] overflow-y-auto">
-            <div className="p-6">
+          <div className="relative bg-gray-900 rounded-2xl shadow-2xl border border-gray-700 max-w-2xl w-full max-h-[90vh] overflow-y-auto transform transition-all">
+            <div className="p-5">
               {/* Header */}
-              <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center justify-between mb-4">
                 <div>
                   <h2 className="text-xl font-semibold text-white">Generate All Images</h2>
                   <p className="text-sm text-gray-400 mt-1">
@@ -2885,196 +3343,123 @@ export default function StoryDetailsPage() {
                 </button>
               </div>
 
-              {/* Warning about regeneration */}
+              {/* Load Sample Images Button */}
+              <div className="mb-4">
+                <Button
+                  onClick={loadSampleImages}
+                  disabled={loadingSampleImages}
+                  size="sm"
+                  className="w-full bg-gray-700 hover:bg-gray-600 text-white"
+                >
+                  {loadingSampleImages ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Loading Sample Images...
+                    </>
+                  ) : sampleImagesLoaded ? (
+                    <>
+                      <Check className="w-4 h-4 mr-2" />
+                      Sample Images Loaded
+                    </>
+                  ) : (
+                    <>
+                      <Image className="w-4 h-4 mr-2" />
+                      Load Sample Images for Style Reference
+                    </>
+                  )}
+                </Button>
+                <p className="text-xs text-gray-500 mt-2 text-center">
+                  Generate example images for each style to see how they look
+                </p>
+              </div>
+
+              {/* Info Cards */}
               {scenes.filter(s => s.image_url).length > 0 && (
-                <div className="mb-6 p-3 bg-orange-900/20 border border-orange-700/30 rounded-lg">
+                <div className="mb-4 p-3 bg-orange-900/20 border border-orange-700/30 rounded-lg">
                   <div className="flex items-start gap-2">
                     <Image className="w-4 h-4 text-orange-400 mt-0.5 flex-shrink-0" />
                     <div className="text-xs text-orange-300">
-                      <span className="font-semibold">Note:</span> This will regenerate ALL scene images, including existing ones. Use individual scene generation if you only want to create missing images.
+                      <span className="font-semibold">Note:</span> This will regenerate ALL scene images, including existing ones.
                     </div>
                   </div>
                 </div>
               )}
 
-              {/* Visual Consistency Info */}
-              <div className="mb-6 p-3 bg-blue-900/20 border border-blue-700/30 rounded-lg">
-                <div className="flex items-start gap-2">
-                  <Image className="w-4 h-4 text-blue-400 mt-0.5 flex-shrink-0" />
-                  <div className="text-xs text-blue-300">
-                    <span className="font-semibold">Visual Consistency:</span> Images will be generated using AI to maintain consistent characters, style, and visual continuity throughout your story.
-                  </div>
-                </div>
-              </div>
-
               {/* Style Selector */}
-              <div className="mb-6">
+              <div className="mb-4">
                 <label className="block text-sm font-medium text-gray-300 mb-3">
-                  Image Style
+                  Select Image Style
                 </label>
 
-                {/* Cinematic & Realistic Styles */}
-                <div className="mb-4">
-                  <p className="text-xs font-semibold text-gray-400 mb-2 uppercase tracking-wider">Cinematic & Realistic</p>
-                  <div className="grid grid-cols-2 gap-2">
-                    {[
-                      { value: "cinematic illustration", label: "Cinematic", desc: "Movie-like scenes" },
-                      { value: "realistic photo", label: "Photorealistic", desc: "Lifelike images" },
-                      { value: "dramatic cinematic", label: "Dramatic", desc: "High contrast lighting" },
-                      { value: "fantasy realism", label: "Fantasy Realism", desc: "Magical but realistic" }
-                    ].map((style) => (
-                      <button
-                        key={style.value}
-                        onClick={() => setSelectedImageStyle(style.value)}
-                        className={`px-3 py-2 text-left rounded-md transition-colors border ${
-                          selectedImageStyle === style.value
-                            ? "bg-purple-900/30 border-purple-500"
-                            : "bg-gray-800 border-gray-700 hover:bg-gray-750"
-                        }`}
-                      >
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <div className={`text-sm font-medium ${selectedImageStyle === style.value ? "text-white" : "text-gray-300"}`}>
-                              {style.label}
-                            </div>
-                            <div className="text-xs text-gray-500">{style.desc}</div>
-                          </div>
-                          {selectedImageStyle === style.value && (
-                            <Check className="w-4 h-4 text-purple-400 flex-shrink-0" />
-                          )}
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                </div>
+                <div className="flex gap-3 overflow-x-auto pb-3 scrollbar-thin scrollbar-thumb-gray-700 scrollbar-track-gray-800">
+                  {[
+                    { id: "hyper-realistic", value: "hyper realistic photo, 4k, ultra detailed", label: "Hyper Realistic", visual: "📸" },
+                    { id: "cinematic", value: "cinematic movie still, dramatic lighting, film grain", label: "Cinematic", visual: "🎬" },
+                    { id: "black-and-white", value: "black and white photography, film noir, high contrast", label: "Black & White", visual: "🎞️" },
+                    { id: "anime", value: "anime illustration, high quality", label: "Anime", visual: "🎌" },
+                    { id: "3d-animation", value: "3d pixar style animation, rendered", label: "3D Animation", visual: "🎭" },
+                    { id: "cartoon", value: "cartoon illustration, bold outlines", label: "Cartoon", visual: "🎪" },
+                    { id: "oil-painting", value: "oil painting, brushstrokes, classical art", label: "Oil Painting", visual: "🖼️" },
+                    { id: "watercolor", value: "watercolor painting, soft, artistic", label: "Watercolor", visual: "🎨" },
+                    { id: "pencil-sketch", value: "pencil sketch drawing, detailed shading", label: "Pencil Sketch", visual: "✏️" },
+                    { id: "comic-book", value: "comic book art style, bold lines, vibrant colors", label: "Comic Book", visual: "💥" },
+                    { id: "pixel-art", value: "pixel art, retro 16-bit game style", label: "Pixel Art", visual: "🎮" },
+                    { id: "vaporwave", value: "vaporwave aesthetic, neon colors, retrowave, cyberpunk", label: "Vaporwave", visual: "🌃" }
+                  ].map((style) => {
+                    const sampleImageUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/samples/sample-${style.id}.png`;
+                    return (
+                    <button
+                      key={style.value}
+                      onClick={() => setSelectedImageStyle(style.value)}
+                      className={`flex-shrink-0 rounded-lg transition-all border-2 overflow-hidden ${
+                        selectedImageStyle === style.value
+                          ? "border-blue-500 shadow-lg shadow-blue-500/20"
+                          : "border-gray-700 hover:border-gray-600"
+                      }`}
+                    >
+                      {/* 9:16 Image Container */}
+                      <div className="relative w-32 aspect-[9/16] bg-gradient-to-br from-gray-800 to-gray-900 flex items-center justify-center overflow-hidden">
+                        {/* Sample image */}
+                        <img
+                          src={sampleImageUrl}
+                          alt={style.label}
+                          className="absolute inset-0 w-full h-full object-cover"
+                        />
 
-                {/* Artistic Styles */}
-                <div className="mb-4">
-                  <p className="text-xs font-semibold text-gray-400 mb-2 uppercase tracking-wider">Artistic Paintings</p>
-                  <div className="grid grid-cols-2 gap-2">
-                    {[
-                      { value: "oil painting", label: "Oil Painting", desc: "Classic painted look" },
-                      { value: "watercolor", label: "Watercolor", desc: "Soft, flowing colors" },
-                      { value: "impressionist painting", label: "Impressionist", desc: "Dreamy brush strokes" },
-                      { value: "digital painting", label: "Digital Art", desc: "Modern digital style" }
-                    ].map((style) => (
-                      <button
-                        key={style.value}
-                        onClick={() => setSelectedImageStyle(style.value)}
-                        className={`px-3 py-2 text-left rounded-md transition-colors border ${
-                          selectedImageStyle === style.value
-                            ? "bg-purple-900/30 border-purple-500"
-                            : "bg-gray-800 border-gray-700 hover:bg-gray-750"
-                        }`}
-                      >
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <div className={`text-sm font-medium ${selectedImageStyle === style.value ? "text-white" : "text-gray-300"}`}>
-                              {style.label}
-                            </div>
-                            <div className="text-xs text-gray-500">{style.desc}</div>
+                        {/* Selected checkmark - top right corner */}
+                        {selectedImageStyle === style.value && (
+                          <div className="absolute top-2 right-2 bg-blue-500 rounded-full p-1 shadow-lg z-20">
+                            <Check className="w-4 h-4 text-white" />
                           </div>
-                          {selectedImageStyle === style.value && (
-                            <Check className="w-4 h-4 text-purple-400 flex-shrink-0" />
-                          )}
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                </div>
+                        )}
+                      </div>
 
-                {/* Animated Styles */}
-                <div className="mb-4">
-                  <p className="text-xs font-semibold text-gray-400 mb-2 uppercase tracking-wider">Animation & Comics</p>
-                  <div className="grid grid-cols-2 gap-2">
-                    {[
-                      { value: "anime illustration", label: "Anime", desc: "Japanese animation style" },
-                      { value: "3d animation", label: "3D Animation", desc: "Pixar-like 3D style" },
-                      { value: "comic book art", label: "Comic Book", desc: "Bold comic style" },
-                      { value: "cartoon illustration", label: "Cartoon", desc: "Playful cartoon look" }
-                    ].map((style) => (
-                      <button
-                        key={style.value}
-                        onClick={() => setSelectedImageStyle(style.value)}
-                        className={`px-3 py-2 text-left rounded-md transition-colors border ${
-                          selectedImageStyle === style.value
-                            ? "bg-purple-900/30 border-purple-500"
-                            : "bg-gray-800 border-gray-700 hover:bg-gray-750"
-                        }`}
-                      >
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <div className={`text-sm font-medium ${selectedImageStyle === style.value ? "text-white" : "text-gray-300"}`}>
-                              {style.label}
-                            </div>
-                            <div className="text-xs text-gray-500">{style.desc}</div>
-                          </div>
-                          {selectedImageStyle === style.value && (
-                            <Check className="w-4 h-4 text-purple-400 flex-shrink-0" />
-                          )}
-                        </div>
-                      </button>
-                    ))}
-                  </div>
+                      {/* Label */}
+                      <div className={`p-2 text-center ${
+                        selectedImageStyle === style.value
+                          ? "bg-blue-900/40 text-white"
+                          : "bg-gray-800 text-gray-300"
+                      }`}>
+                        <div className="text-xs font-medium">{style.label}</div>
+                      </div>
+                    </button>
+                  );
+                })}
                 </div>
-
-                {/* Special Styles */}
-                <div className="mb-4">
-                  <p className="text-xs font-semibold text-gray-400 mb-2 uppercase tracking-wider">Special Effects</p>
-                  <div className="grid grid-cols-2 gap-2">
-                    {[
-                      { value: "noir black and white", label: "Film Noir", desc: "Classic B&W style" },
-                      { value: "vintage photography", label: "Vintage Photo", desc: "Retro aged look" },
-                      { value: "minimalist illustration", label: "Minimalist", desc: "Simple, clean design" },
-                      { value: "storybook illustration", label: "Storybook", desc: "Children's book style" }
-                    ].map((style) => (
-                      <button
-                        key={style.value}
-                        onClick={() => setSelectedImageStyle(style.value)}
-                        className={`px-3 py-2 text-left rounded-md transition-colors border ${
-                          selectedImageStyle === style.value
-                            ? "bg-purple-900/30 border-purple-500"
-                            : "bg-gray-800 border-gray-700 hover:bg-gray-750"
-                        }`}
-                      >
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <div className={`text-sm font-medium ${selectedImageStyle === style.value ? "text-white" : "text-gray-300"}`}>
-                              {style.label}
-                            </div>
-                            <div className="text-xs text-gray-500">{style.desc}</div>
-                          </div>
-                          {selectedImageStyle === style.value && (
-                            <Check className="w-4 h-4 text-purple-400 flex-shrink-0" />
-                          )}
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {story?.default_image_style && (
-                  <p className="text-xs text-gray-500 mt-3 p-2 bg-gray-800 rounded">
-                    💡 Story default: <span className="text-gray-400 font-medium">{story.default_image_style}</span>
-                  </p>
-                )}
               </div>
 
               {/* Optional Instructions */}
-              <div className="mb-6">
+              <div className="mb-4">
                 <label className="block text-sm font-medium text-gray-300 mb-2">
                   Additional Instructions (Optional)
                 </label>
                 <textarea
                   value={imageInstructions}
                   onChange={(e) => setImageInstructions(e.target.value)}
-                  placeholder="Add specific details or requirements for all images..."
-                  rows={3}
-                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-md text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent text-sm"
+                  placeholder="Add specific details or requirements..."
+                  rows={2}
+                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-md text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
                 />
-                <p className="text-xs text-gray-500 mt-1">
-                  These instructions will apply to all generated images
-                </p>
               </div>
 
               {/* Action Buttons */}
@@ -3102,6 +3487,171 @@ export default function StoryDetailsPage() {
                     <>
                       <Image className="w-4 h-4 mr-2" />
                       Generate All Images
+                    </>
+                  )}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk Audio Generation Drawer */}
+      {bulkAudioDrawerOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          {/* Background overlay */}
+          <div
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            onClick={() => setBulkAudioDrawerOpen(false)}
+          />
+
+          {/* Drawer content */}
+          <div className="relative bg-gray-900 rounded-2xl shadow-2xl border border-gray-700 max-w-md w-full my-auto max-h-[90vh] flex flex-col transform transition-all">
+            {/* Header - Fixed */}
+            <div className="p-4 border-b border-gray-700 flex-shrink-0">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="text-xl font-semibold text-white">Generate All Audio</h2>
+                  <p className="text-sm text-gray-400 mt-1">
+                    Generate audio narration for all {scenes.length} scenes
+                  </p>
+                </div>
+                <button
+                  onClick={() => {
+                    // Stop any playing voice preview
+                    if (voicePreviewAudioRef.current) {
+                      voicePreviewAudioRef.current.pause();
+                      voicePreviewAudioRef.current = null;
+                    }
+                    setPlayingPreviewId(null);
+                    setBulkAudioDrawerOpen(false);
+                  }}
+                  className="text-gray-400 hover:text-white transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Scrollable Content */}
+            <div className="flex-1 overflow-y-auto p-4">
+              {/* Voice Selection */}
+              <div className="mb-6">
+                <div className="flex items-center justify-between mb-2">
+                  <label className="block text-sm font-medium text-gray-300">
+                    Select Voice
+                  </label>
+                  <span className="text-xs text-gray-500">Will apply to all scenes</span>
+                </div>
+                {loadingVoices ? (
+                  <div className="flex items-center justify-center py-3">
+                    <Loader2 className="w-5 h-5 animate-spin text-purple-500" />
+                    <span className="ml-2 text-sm text-gray-400">Loading voices...</span>
+                  </div>
+                ) : (
+                  <div ref={voiceListRef} className="max-h-[300px] overflow-y-auto border border-gray-700 rounded-lg bg-gray-800">
+                    {voices.map((voice) => (
+                      <div
+                        key={voice.id}
+                        data-voice-id={voice.id}
+                        onClick={() => {
+                          console.log(`🎤 Bulk Audio - Voice selected: ${voice.name} (${voice.id})`);
+                          setSelectedVoiceId(voice.id);
+                        }}
+                        className={`flex items-center justify-between p-3 cursor-pointer transition-colors border-b border-gray-700 last:border-b-0 ${
+                          selectedVoiceId === voice.id
+                            ? 'bg-purple-900/30 border-l-4 border-l-purple-500'
+                            : 'hover:bg-gray-700'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2 flex-1">
+                          {selectedVoiceId === voice.id && (
+                            <Check className="w-4 h-4 text-purple-400" />
+                          )}
+                          <span className="text-sm text-white">{voice.name}</span>
+                        </div>
+                        {voice.preview_url && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              playVoicePreview(voice.id, voice.preview_url);
+                            }}
+                            className={`p-1.5 rounded-full transition-colors ${
+                              playingPreviewId === voice.id
+                                ? 'bg-purple-600 text-white'
+                                : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
+                            }`}
+                            title="Preview voice"
+                          >
+                            {playingPreviewId === voice.id ? (
+                              <Pause className="w-4 h-4" />
+                            ) : (
+                              <PlayCircle className="w-4 h-4" />
+                            )}
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Warning about regeneration */}
+              {scenes.filter(s => s.audio_url).length > 0 && (
+                <div className="mb-6 p-3 bg-orange-900/20 border border-orange-700/30 rounded-lg">
+                  <div className="flex items-start gap-2">
+                    <Volume2 className="w-4 h-4 text-orange-400 mt-0.5 flex-shrink-0" />
+                    <div className="text-xs text-orange-300">
+                      <span className="font-semibold">Note:</span> This will regenerate ALL scene audio, including existing ones. Use individual scene generation if you only want to create missing audio.
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Fixed Footer with Action Buttons */}
+            <div className="border-t border-gray-700 p-4 flex-shrink-0">
+              <div className="flex gap-3">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    // Stop any playing voice preview
+                    if (voicePreviewAudioRef.current) {
+                      voicePreviewAudioRef.current.pause();
+                      voicePreviewAudioRef.current = null;
+                    }
+                    setPlayingPreviewId(null);
+                    setBulkAudioDrawerOpen(false);
+                  }}
+                  className="flex-1 border-gray-700 text-gray-300 hover:bg-gray-800"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={async () => {
+                    console.log("🔘 Generate All Audio button clicked");
+                    console.log("  Current selectedVoiceId state:", selectedVoiceId);
+
+                    // Stop any playing voice preview before generating
+                    if (voicePreviewAudioRef.current) {
+                      voicePreviewAudioRef.current.pause();
+                      voicePreviewAudioRef.current = null;
+                    }
+                    setPlayingPreviewId(null);
+                    await generateAllAudio(selectedVoiceId);
+                  }}
+                  disabled={generatingAudios}
+                  className="flex-1 bg-purple-600 hover:bg-purple-700 text-white"
+                >
+                  {generatingAudios ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Generating...
+                    </>
+                  ) : (
+                    <>
+                      <Volume2 className="w-4 h-4 mr-2" />
+                      Generate All Audio
                     </>
                   )}
                 </Button>

@@ -21,19 +21,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Update the scene in the database
     // Note: The database trigger will automatically invalidate the video
+    const updateData = {
+      text,
+      last_modified_at: new Date().toISOString(),
+      scene_text_modified_at: new Date().toISOString()
+    };
+
     let updateResult;
     if (scene_id) {
       // Update by scene_id if available
       updateResult = await supabaseAdmin
         .from("scenes")
-        .update({ text })
+        .update(updateData)
         .eq("id", scene_id)
         .eq("story_id", story_id);
     } else {
       // Update by order if scene_id not available
       updateResult = await supabaseAdmin
         .from("scenes")
-        .update({ text })
+        .update(updateData)
         .eq("story_id", story_id)
         .eq("order", scene_order);
     }

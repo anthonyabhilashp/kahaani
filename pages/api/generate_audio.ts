@@ -115,14 +115,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const audioUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/audio/${fileName}`;
 
-    // 8️⃣ Update scene with audio URL, voice_id, duration, and word timestamps
+    // 8️⃣ Update scene with audio URL, voice_id, duration, word timestamps, and set audio_generated_at timestamp
     const { error: updateErr } = await supabaseAdmin
       .from("scenes")
       .update({
         audio_url: audioUrl,
         voice_id: voiceId,
         duration: duration,
-        word_timestamps: wordTimestamps
+        word_timestamps: wordTimestamps,
+        audio_generated_at: new Date().toISOString()
       })
       .eq("id", scene_id);
 

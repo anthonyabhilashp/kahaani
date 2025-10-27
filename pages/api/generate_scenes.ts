@@ -29,7 +29,7 @@ export const config = { api: { bodyParser: { sizeLimit: "4mb" } } };
 
 // --- Handler ---
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const { prompt, title, story_id } = req.body;
+  const { prompt, title, story_id, sceneCount = 5, manualScenes, isManual = false } = req.body;
   if (!prompt) return res.status(400).json({ error: "Prompt required" });
 
   let logger: JobLogger | null = null;
@@ -53,22 +53,35 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     let scenes: { text: string }[] = [];
 
-    if (isLongText(prompt)) {
-      logger.log("📖 Long story detected — splitting into sentences...");
-      scenes = splitIntoScenes(prompt);
-    } else {
-      const SCENE_MODEL = process.env.SCENE_MODEL || "mistralai/mistral-7b-instruct";
-      const PROVIDER = process.env.PROVIDER || "openrouter";
-      logger.log(`🧠 Generating scenes with ${SCENE_MODEL} (${PROVIDER})...`);
+    // Handle manual scenes input
+    if (isManual && manualScenes && Array.isArray(manualScenes)) {
+      logger.log(`📝 Using ${manualScenes.length} manually entered scenes`);
+      scenes = manualScenes.map((text: string) => ({ text }));
 
-      const storyPrompt = `
-You are a JSON generator. Break the following story idea into 3–6 short, visual scenes and create a catchy title.
+      // Generate a title for manually entered scenes
+      const generatedTitle = title || `Story with ${manualScenes.length} scenes`;
+      await supabaseAdmin
+        .from("stories")
+        .update({ title: generatedTitle })
+        .eq("id", storyId);
+    } else {
+
+      if (isLongText(prompt)) {
+        logger.log("📖 Long story detected — splitting into sentences...");
+        scenes = splitIntoScenes(prompt);
+      } else {
+        const SCENE_MODEL = process.env.SCENE_MODEL || "mistralai/mistral-7b-instruct";
+        const PROVIDER = process.env.PROVIDER || "openrouter";
+        logger.log(`🧠 Generating ${sceneCount} scenes with ${SCENE_MODEL} (${PROVIDER})...`);
+
+        const storyPrompt = `
+You are a JSON generator. Break the following story idea into exactly ${sceneCount} short, visual scenes and create a catchy title.
 Each scene should describe what happens visually in one sentence.
 Return ONLY valid JSON in this format:
 {"title":"A catchy title for the story","scenes":[{"text":"..."},{"text":"..."}]}
 
 Story: ${prompt}
-      `;
+        `;
 
       const response = await fetch(OPENROUTER_URL, {
         method: "POST",
@@ -102,6 +115,7 @@ Story: ${prompt}
       } catch {
         logger.error("⚠️ Model returned invalid JSON, fallback to single scene");
         scenes = [{ text: prompt }];
+      }
       }
     }
 

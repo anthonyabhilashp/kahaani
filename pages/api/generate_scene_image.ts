@@ -189,10 +189,13 @@ Do NOT generate multiple scenes, panels, or images in one. Just one standalone i
 
     const publicUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/images/${fileName}`;
 
-    // 8️⃣ Update scene with image URL
+    // 8️⃣ Update scene with image URL and set image_generated_at timestamp
     const { error: updateErr } = await supabaseAdmin
       .from("scenes")
-      .update({ image_url: publicUrl })
+      .update({
+        image_url: publicUrl,
+        image_generated_at: new Date().toISOString()
+      })
       .eq("id", scene_id);
 
     if (updateErr) throw updateErr;
