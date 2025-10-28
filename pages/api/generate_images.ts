@@ -148,113 +148,30 @@ Return exactly ${scenes.length} visual descriptions in order.`;
     
     logger.log(`🧠 Using ${provider} model: ${model} (${imageSize}, aspect ${aspect} - matches video dimensions)`);
 
-    // 4️⃣ Generate ALL images in a single API call with full story context
-    // Note: Visual descriptions now include character consistency details
-    logger.log(`🚀 Generating ${scenes.length} images in one batch request...`);
+    // 4️⃣ Generate images individually (one API call per scene)
+    // This ensures we know exactly which image belongs to which scene
+    logger.log(`🚀 Generating ${scenes.length} images individually (one per scene)...`);
     logger.log(`📝 Using model: ${model}`);
 
-    // Build the complete story context using both scene text and visual descriptions
-    const scenesText = scenes.map((scene, i) =>
+    // Build the complete story context (used for ALL scenes to maintain continuity)
+    const fullStoryContext = scenes.map((scene, i) =>
       `Scene ${i + 1}:
 Narrative: ${scene.text}
 Visual Description: ${visualDescriptions[i]}`
     ).join('\n\n');
 
-    const batchPrompt = `You are a professional ${finalStyle} illustrator. Generate ${scenes.length} separate images for this complete story.
-
-FULL STORY:
-${scenesText}
-
-🎨 VISUAL STYLE: ${finalStyle}${extraNotes}
-
-STYLE REQUIREMENTS:
-- ALL images MUST be in "${finalStyle}" style
-- Apply authentic visual characteristics of "${finalStyle}" aesthetic consistently across ALL ${scenes.length} images
-- Maintain the essence and visual qualities that define "${finalStyle}" style
-
-🚨 CRITICAL REQUIREMENTS:
-- Generate ${scenes.length} SEPARATE, INDIVIDUAL images (one for each scene listed above)
-- Each image should be a STANDALONE image that fills the ENTIRE frame (${videoWidth}x${videoHeight})
-- DO NOT stack, tile, grid, or combine multiple scenes into one image
-- DO NOT create a sequence, montage, storyboard, or comic-style layout
-- Each image represents ONLY its corresponding scene
-- Maintain consistent character designs, art style, and color palette across ALL images
-- Characters should look identical in all images (same face, clothing, proportions)
-- High quality composition for each individual image in "${finalStyle}" style
-
-Return ${scenes.length} individual images in order, all in "${finalStyle}" style.
-`;
-
-    logger.log(`📤 Sending batch request for all ${scenes.length} scenes...`);
-
-    const resp = await fetch(OPENROUTER_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.OPENROUTER_API_KEY!}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
-        messages: [{ role: "user", content: batchPrompt }],
-        modalities: ["image", "text"],
-        image_config: { aspect_ratio: aspect },
-      }),
-    });
-
-    const responseText = await resp.text();
-    logger.log(`📦 Response status: ${resp.status}`);
-
-    if (!resp.ok) {
-      logger.error(`❌ API error:`, responseText.substring(0, 500));
-      throw new Error(`Batch image generation failed (${resp.status}): ${responseText.substring(0, 500)}`);
-    }
-
-    let data: any;
-    try {
-      data = JSON.parse(responseText);
-    } catch (parseErr) {
-      logger.error("❌ Failed to parse response as JSON", responseText.substring(0, 500));
-      throw new Error(`Invalid JSON response: ${responseText.substring(0, 200)}`);
-    }
-
-    // Extract ALL images from the response
-    const choices = data?.choices || [];
     const images: string[] = [];
 
-    for (const choice of choices) {
-      const imgs = choice?.message?.images ||
-                   choice?.message?.content?.filter((c: any) => c.type === "image" || c.image_url);
+    // Generate each scene individually
+    for (let i = 0; i < scenes.length; i++) {
+      const scene = scenes[i];
+      const sceneDescription = visualDescriptions[i];
+      logger.log(`\n📸 Generating image ${i + 1}/${scenes.length} for: "${scene.text.substring(0, 50)}..."`);
 
-      if (imgs && imgs.length > 0) {
-        for (const img of imgs) {
-          const imageUrl = img?.image_url?.url || img?.image_url;
-          if (imageUrl) {
-            images.push(imageUrl);
-          }
-        }
-      }
-    }
-
-    logger.log(`📥 Received ${images.length} images from batch generation`);
-
-    if (images.length === 0) {
-      throw new Error(`No images returned from batch generation`);
-    }
-
-    // If we got fewer images than scenes, generate the missing ones individually
-    if (images.length < scenes.length) {
-      logger.log(`⚠️ Warning: Expected ${scenes.length} images, got ${images.length}.`);
-      logger.log(`🔧 Generating ${scenes.length - images.length} missing images individually...`);
-
-      for (let i = images.length; i < scenes.length; i++) {
-        const scene = scenes[i];
-        const sceneDescription = visualDescriptions[i];
-        logger.log(`\n📸 Generating missing image ${i + 1}/${scenes.length} for: "${scene.text.substring(0, 50)}..."`);
-
-        const scenePrompt = `You are a professional ${finalStyle} illustrator. Create a single high-quality image for this scene.
+      const scenePrompt = `You are a professional ${finalStyle} illustrator. Create a single high-quality image for this scene.
 
 FULL STORY CONTEXT (for consistency):
-${scenesText}
+${fullStoryContext}
 
 CURRENT SCENE TO ILLUSTRATE:
 Scene ${i + 1}:
@@ -277,66 +194,64 @@ STYLE REQUIREMENTS:
 
 Generate one beautiful image for Scene ${i + 1} in "${finalStyle}" style.`;
 
-        const resp = await fetch(OPENROUTER_URL, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${process.env.OPENROUTER_API_KEY!}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            model,
-            messages: [{ role: "user", content: scenePrompt }],
-            modalities: ["image", "text"],
-            image_config: { aspect_ratio: aspect },
-          }),
-        });
+      const resp = await fetch(OPENROUTER_URL, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${process.env.OPENROUTER_API_KEY!}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model,
+          messages: [{ role: "user", content: scenePrompt }],
+          modalities: ["image", "text"],
+          image_config: { aspect_ratio: aspect },
+        }),
+      });
 
-        const responseText = await resp.text();
+      const responseText = await resp.text();
 
-        if (!resp.ok) {
-          logger.error(`❌ API error for scene ${i + 1}:`, responseText.substring(0, 300));
-          throw new Error(`Image generation failed for scene ${i + 1} (${resp.status})`);
-        }
-
-        let data: any;
-        try {
-          data = JSON.parse(responseText);
-        } catch (parseErr) {
-          logger.error("❌ Failed to parse response", responseText.substring(0, 300));
-          throw new Error(`Invalid JSON response for scene ${i + 1}`);
-        }
-
-        // Extract image from response
-        const choices = data?.choices || [];
-        let imageUrl: string | null = null;
-
-        for (const choice of choices) {
-          const imgs = choice?.message?.images ||
-                       choice?.message?.content?.filter((c: any) => c.type === "image" || c.image_url);
-
-          if (imgs && imgs.length > 0) {
-            const img = imgs[0];
-            imageUrl = img?.image_url?.url || img?.image_url;
-            if (imageUrl) break;
-          }
-        }
-
-        if (!imageUrl) {
-          logger.error(`❌ No image returned for scene ${i + 1}`);
-          throw new Error(`No image generated for scene ${i + 1}`);
-        }
-
-        images.push(imageUrl);
-        logger.log(`✅ Scene ${i + 1} image generated successfully (${images.length}/${scenes.length})`);
+      if (!resp.ok) {
+        logger.error(`❌ API error for scene ${i + 1}:`, responseText.substring(0, 300));
+        throw new Error(`Image generation failed for scene ${i + 1} (${resp.status})`);
       }
-    } else if (images.length > scenes.length) {
-      logger.log(`ℹ️ Got ${images.length} images, using first ${scenes.length}`);
-      images.splice(scenes.length);
+
+      let data: any;
+      try {
+        data = JSON.parse(responseText);
+      } catch (parseErr) {
+        logger.error(`❌ Failed to parse response for scene ${i + 1}`, responseText.substring(0, 300));
+        throw new Error(`Invalid JSON response for scene ${i + 1}`);
+      }
+
+      // Extract image from response
+      const choices = data?.choices || [];
+      let imageUrl: string | null = null;
+
+      for (const choice of choices) {
+        const imgs = choice?.message?.images ||
+                     (Array.isArray(choice?.message?.content)
+                       ? choice?.message?.content?.filter((c: any) => c.type === "image" || c.image_url)
+                       : []);
+
+        if (imgs && imgs.length > 0) {
+          const img = imgs[0];
+          imageUrl = img?.image_url?.url || img?.image_url;
+          if (imageUrl) break;
+        }
+      }
+
+      if (!imageUrl) {
+        logger.error(`❌ No image returned for scene ${i + 1}`);
+        throw new Error(`No image generated for scene ${i + 1}`);
+      }
+
+      images.push(imageUrl);
+      logger.log(`✅ Scene ${i + 1} image generated successfully (${images.length}/${scenes.length})`);
     }
 
     logger.log(`\n🖼️ Successfully generated ${images.length} unique images for ${scenes.length} scenes`);
 
-    // 7️⃣ Save new images
+    // 5️⃣ Save new images
     const tmpDir = path.join(process.cwd(), "tmp", story_id);
     fs.mkdirSync(tmpDir, { recursive: true });
 
