@@ -10,27 +10,6 @@ export const config = { api: { bodyParser: { sizeLimit: "4mb" } } };
 
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 
-// Helper function to extract character details for consistency
-function extractCharacterInfo(text: string): string {
-  const characters = [];
-  
-  // Look for character descriptions
-  if (/\b(young\s+)?boy\b/i.test(text)) {
-    characters.push("- Main character: Young boy (consistent age, hair, clothing throughout)");
-  }
-  if (/\b(young\s+)?girl\b/i.test(text)) {
-    characters.push("- Main character: Young girl (consistent age, hair, clothing throughout)");
-  }
-  if (/\bman\b/i.test(text)) {
-    characters.push("- Character: Adult man (consistent appearance)");
-  }
-  if (/\bwoman\b/i.test(text)) {
-    characters.push("- Character: Adult woman (consistent appearance)");
-  }
-  
-  return characters.join('\n');
-}
-
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { story_id, style, instructions } = req.body;
   if (!story_id) return res.status(400).json({ error: "story_id required" });
@@ -50,6 +29,97 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (sceneErr || !scenes?.length) throw new Error("No scenes found");
     logger.log(`📚 Found ${scenes.length} scenes to generate images for`);
+
+    // 1.5️⃣ Generate visual descriptions for ALL scenes in one call (for consistency)
+    const finalStyle = style || "cinematic illustration";
+    const extraNotes = instructions ? `\nAdditional Instructions: ${instructions}` : "";
+
+    logger.log(`🧠 Generating visual descriptions for all ${scenes.length} scenes...`);
+    logger.log(`🎨 Target style: ${finalStyle}`);
+
+    const descriptionPrompt = `You are a professional visual director. Given a story broken into ${scenes.length} scenes, create detailed visual descriptions for each scene that will be used for AI image generation.
+
+STORY SCENES:
+${scenes.map((s, i) => `Scene ${i + 1}: ${s.text}`).join('\n')}
+
+TARGET VISUAL STYLE: ${finalStyle}${extraNotes}
+
+For each scene, provide a detailed visual description optimized for "${finalStyle}" style that includes:
+- Specific character details (age, appearance, clothing, facial features) appropriate for ${finalStyle} style
+- Setting details (location, time of day, lighting, weather)
+- Mood and atmosphere
+- Camera angle and composition
+- Visual characteristics and aesthetic qualities that define "${finalStyle}" style
+
+CRITICAL:
+- Maintain consistent character descriptions across ALL scenes (same names, ages, physical features, clothing style, body proportions)
+- All descriptions must be tailored to achieve authentic "${finalStyle}" visual style
+
+Return ONLY valid JSON in this exact format:
+{
+  "visual_descriptions": [
+    "Detailed visual description for scene 1 in ${finalStyle} style...",
+    "Detailed visual description for scene 2 in ${finalStyle} style...",
+    ...
+  ]
+}
+
+Return exactly ${scenes.length} visual descriptions in order.`;
+
+    const descResp = await fetch(OPENROUTER_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.OPENROUTER_API_KEY!}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: process.env.SCENE_MODEL || "mistralai/mistral-7b-instruct",
+        messages: [{ role: "user", content: descriptionPrompt }],
+        response_format: { type: "json_object" },
+      }),
+    });
+
+    const descData = await descResp.json() as any;
+    const descRaw = descData?.choices?.[0]?.message?.content || "";
+
+    logger?.log(`📦 Raw description response (first 500 chars): ${descRaw.substring(0, 500)}`);
+
+    let visualDescriptions: string[] = [];
+    try {
+      const descParsed = JSON.parse(descRaw.replace(/```(?:json)?/g, "").trim());
+      const rawDescriptions = descParsed.visual_descriptions || [];
+
+      logger?.log(`📝 Raw descriptions type: ${typeof rawDescriptions}, length: ${rawDescriptions.length}`);
+
+      // Convert to strings (handle both string[] and object[] formats)
+      visualDescriptions = rawDescriptions.map((desc: any) => {
+        if (typeof desc === 'string') {
+          return desc;
+        } else if (typeof desc === 'object' && desc !== null) {
+          // If it's an object, try to extract the description field or stringify it
+          return desc.description || desc.visual_description || desc.text || JSON.stringify(desc);
+        }
+        return String(desc);
+      });
+
+      logger.log(`✅ Generated ${visualDescriptions.length} visual descriptions`);
+    } catch (err) {
+      logger.error("⚠️ Failed to parse visual descriptions, falling back to scene text");
+      visualDescriptions = scenes.map(s => s.text);
+    }
+
+    // Ensure we have enough descriptions (pad with text if needed)
+    while (visualDescriptions.length < scenes.length) {
+      visualDescriptions.push(scenes[visualDescriptions.length].text);
+    }
+
+    // Log each scene with its visual description
+    logger?.log(`\n📋 Scene → Visual Description Mapping:`);
+    scenes.forEach((scene, i) => {
+      logger?.log(`\n🎬 Scene ${i + 1}:`);
+      logger?.log(`   Text: "${scene.text}"`);
+      logger?.log(`   Visual Description: "${visualDescriptions[i]}"`);
+    });
 
     // 2️⃣ Clean up old image files from storage if they exist
     const oldImageUrls = scenes.filter(s => s.image_url).map(s => s.image_url);
@@ -78,37 +148,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     
     logger.log(`🧠 Using ${provider} model: ${model} (${imageSize}, aspect ${aspect} - matches video dimensions)`);
 
-    const finalStyle = style || "cinematic illustration";
-    const extraNotes = instructions ? `\nInstructions: ${instructions}\n` : "";
-
-    // 🎯 Extract character information for consistency
-    const allScenesText = scenes.map(s => s.text).join(' ');
-    const characterInfo = extractCharacterInfo(allScenesText);
-
-    const characterConsistencyNote = characterInfo ? `
-🎭 CHARACTER REFERENCE FOR CONSISTENCY:
-${characterInfo}
-- MAINTAIN these exact character features in ALL scenes
-- Same clothing, hair, facial features, body proportions
-- Character must be visually identical across all images
-` : "";
-
     // 4️⃣ Generate ALL images in a single API call with full story context
+    // Note: Visual descriptions now include character consistency details
     logger.log(`🚀 Generating ${scenes.length} images in one batch request...`);
     logger.log(`📝 Using model: ${model}`);
 
-    // Build the complete story context
-    const scenesText = scenes.map((s, i) => `Scene ${i + 1}: ${s.text}`).join('\n\n');
+    // Build the complete story context using both scene text and visual descriptions
+    const scenesText = scenes.map((scene, i) =>
+      `Scene ${i + 1}:
+Narrative: ${scene.text}
+Visual Description: ${visualDescriptions[i]}`
+    ).join('\n\n');
 
-    const batchPrompt = `You are a professional cinematic illustrator. Generate ${scenes.length} separate images for this complete story.
+    const batchPrompt = `You are a professional ${finalStyle} illustrator. Generate ${scenes.length} separate images for this complete story.
 
 FULL STORY:
 ${scenesText}
 
-Style: ${finalStyle}
-${extraNotes}
+🎨 VISUAL STYLE: ${finalStyle}${extraNotes}
 
-${characterConsistencyNote}
+STYLE REQUIREMENTS:
+- ALL images MUST be in "${finalStyle}" style
+- Apply authentic visual characteristics of "${finalStyle}" aesthetic consistently across ALL ${scenes.length} images
+- Maintain the essence and visual qualities that define "${finalStyle}" style
 
 🚨 CRITICAL REQUIREMENTS:
 - Generate ${scenes.length} SEPARATE, INDIVIDUAL images (one for each scene listed above)
@@ -118,9 +180,9 @@ ${characterConsistencyNote}
 - Each image represents ONLY its corresponding scene
 - Maintain consistent character designs, art style, and color palette across ALL images
 - Characters should look identical in all images (same face, clothing, proportions)
-- High quality, cinematic composition for each individual image
+- High quality composition for each individual image in "${finalStyle}" style
 
-Return ${scenes.length} individual images in order.
+Return ${scenes.length} individual images in order, all in "${finalStyle}" style.
 `;
 
     logger.log(`📤 Sending batch request for all ${scenes.length} scenes...`);
@@ -179,19 +241,100 @@ Return ${scenes.length} individual images in order.
       throw new Error(`No images returned from batch generation`);
     }
 
-    // If we got fewer images than scenes, pad with the last image
-    // If we got more images than scenes, take only what we need
+    // If we got fewer images than scenes, generate the missing ones individually
     if (images.length < scenes.length) {
-      logger.log(`⚠️ Warning: Expected ${scenes.length} images, got ${images.length}. Padding with last image.`);
-      while (images.length < scenes.length) {
-        images.push(images[images.length - 1]);
+      logger.log(`⚠️ Warning: Expected ${scenes.length} images, got ${images.length}.`);
+      logger.log(`🔧 Generating ${scenes.length - images.length} missing images individually...`);
+
+      for (let i = images.length; i < scenes.length; i++) {
+        const scene = scenes[i];
+        const sceneDescription = visualDescriptions[i];
+        logger.log(`\n📸 Generating missing image ${i + 1}/${scenes.length} for: "${scene.text.substring(0, 50)}..."`);
+
+        const scenePrompt = `You are a professional ${finalStyle} illustrator. Create a single high-quality image for this scene.
+
+FULL STORY CONTEXT (for consistency):
+${scenesText}
+
+CURRENT SCENE TO ILLUSTRATE:
+Scene ${i + 1}:
+Narrative: ${scene.text}
+Visual Description: ${sceneDescription}
+
+🎨 VISUAL STYLE: ${finalStyle}${extraNotes}
+
+STYLE REQUIREMENTS:
+- Create this image in authentic "${finalStyle}" style
+- Apply visual characteristics and aesthetic qualities that define "${finalStyle}"
+
+🎨 REQUIREMENTS:
+- Generate ONE image that represents Scene ${i + 1} above
+- Fill the ENTIRE frame (${videoWidth}x${videoHeight}) with this single scene
+- Maintain consistent character designs and art style with other scenes in the story
+- Characters should look identical to how they appear throughout the story
+- High quality composition in "${finalStyle}" style
+- DO NOT create a grid, montage, or multiple panels
+
+Generate one beautiful image for Scene ${i + 1} in "${finalStyle}" style.`;
+
+        const resp = await fetch(OPENROUTER_URL, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${process.env.OPENROUTER_API_KEY!}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model,
+            messages: [{ role: "user", content: scenePrompt }],
+            modalities: ["image", "text"],
+            image_config: { aspect_ratio: aspect },
+          }),
+        });
+
+        const responseText = await resp.text();
+
+        if (!resp.ok) {
+          logger.error(`❌ API error for scene ${i + 1}:`, responseText.substring(0, 300));
+          throw new Error(`Image generation failed for scene ${i + 1} (${resp.status})`);
+        }
+
+        let data: any;
+        try {
+          data = JSON.parse(responseText);
+        } catch (parseErr) {
+          logger.error("❌ Failed to parse response", responseText.substring(0, 300));
+          throw new Error(`Invalid JSON response for scene ${i + 1}`);
+        }
+
+        // Extract image from response
+        const choices = data?.choices || [];
+        let imageUrl: string | null = null;
+
+        for (const choice of choices) {
+          const imgs = choice?.message?.images ||
+                       choice?.message?.content?.filter((c: any) => c.type === "image" || c.image_url);
+
+          if (imgs && imgs.length > 0) {
+            const img = imgs[0];
+            imageUrl = img?.image_url?.url || img?.image_url;
+            if (imageUrl) break;
+          }
+        }
+
+        if (!imageUrl) {
+          logger.error(`❌ No image returned for scene ${i + 1}`);
+          throw new Error(`No image generated for scene ${i + 1}`);
+        }
+
+        images.push(imageUrl);
+        logger.log(`✅ Scene ${i + 1} image generated successfully (${images.length}/${scenes.length})`);
       }
     } else if (images.length > scenes.length) {
-      logger.log(`⚠️ Warning: Expected ${scenes.length} images, got ${images.length}. Using first ${scenes.length} images.`);
+      logger.log(`ℹ️ Got ${images.length} images, using first ${scenes.length}`);
       images.splice(scenes.length);
     }
 
-    logger.log(`\n🖼️ Successfully prepared ${images.length} images for ${scenes.length} scenes`);
+    logger.log(`\n🖼️ Successfully generated ${images.length} unique images for ${scenes.length} scenes`);
 
     // 7️⃣ Save new images
     const tmpDir = path.join(process.cwd(), "tmp", story_id);

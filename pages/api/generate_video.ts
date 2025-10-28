@@ -97,11 +97,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .maybeSingle();
 
     if (existingJob) {
-      const startedAt = new Date(existingJob.started_at).toLocaleTimeString();
-      return res.status(409).json({
-        error: `Video generation already in progress for this story (started at ${startedAt})`,
-        job_id: existingJob.id
-      });
+      // Check if job is stale (older than 30 minutes) - assume it crashed
+      const jobAge = Date.now() - new Date(existingJob.started_at).getTime();
+      const thirtyMinutes = 30 * 60 * 1000;
+
+      if (jobAge > thirtyMinutes) {
+        // Job is stale - mark as failed and allow new generation
+        console.log(`⚠️ Stale job detected (${Math.floor(jobAge / 60000)} minutes old), marking as failed`);
+        await supabaseAdmin
+          .from('video_generation_jobs')
+          .update({
+            status: 'failed',
+            completed_at: new Date().toISOString(),
+            error: 'Job timed out (stale for more than 30 minutes)'
+          })
+          .eq('id', existingJob.id);
+      } else {
+        // Job is recent - still processing
+        const startedAt = new Date(existingJob.started_at).toLocaleTimeString();
+        return res.status(409).json({
+          error: `Video generation already in progress for this story (started at ${startedAt})`,
+          job_id: existingJob.id
+        });
+      }
     }
 
     // 🆕 CREATE JOB RECORD TO MARK AS PROCESSING

@@ -746,15 +746,15 @@ export default function StoryDetailsPage() {
       // Update scenes with new images, using cache-busting timestamp
       const timestamp = Date.now();
       const updatedScenes = scenes.map((scene) => {
-        // Find the matching updated scene from API response (now includes complete data with word_timestamps)
+        // Find the matching updated scene from API response
         const updatedScene = result.updated_scenes?.find((s: any) => s.id === scene.id);
         if (updatedScene) {
-          // Merge complete scene data from API (includes word_timestamps, audio_url, etc.)
+          // IMPORTANT: Merge new data with existing scene to preserve audio_url and other fields
           return {
-            ...updatedScene,
+            ...scene,  // Keep ALL existing data (audio_url, duration, text, etc.)
+            ...updatedScene,  // Override with new image data
             // Add cache-busting timestamp ONLY to image URLs (audio hasn't changed)
             image_url: updatedScene.image_url ? `${updatedScene.image_url}?t=${timestamp}` : updatedScene.image_url
-            // Keep audio_url as-is from API response (no timestamp)
           };
         }
         return scene;

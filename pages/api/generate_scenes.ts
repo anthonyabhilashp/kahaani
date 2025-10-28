@@ -96,9 +96,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         const storyPrompt = `
 You are a JSON generator. Break the following story idea into exactly ${sceneCount} short, visual scenes and create a catchy title.
-Each scene should describe what happens visually in one sentence.
-Return ONLY valid JSON in this format:
-{"title":"A catchy title for the story","scenes":[{"text":"..."},{"text":"..."}]}
+
+For each scene, provide a short narrative sentence describing what happens.
+
+Return ONLY valid JSON in this exact format:
+{
+  "title": "A catchy title for the story",
+  "scenes": [
+    {
+      "text": "Brief narrative sentence describing what happens"
+    }
+  ]
+}
 
 Story: ${prompt}
         `;
