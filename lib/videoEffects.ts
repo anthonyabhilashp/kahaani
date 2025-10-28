@@ -44,7 +44,8 @@ export const VIDEO_EFFECTS: Record<EffectType, VideoEffect> = {
     getFilter: (w, h, duration) => {
       const fps = 30;
       const totalFrames = Math.round(duration * fps);
-      return `zoompan=z='1+0.02*sin(2*PI*on/${totalFrames})':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${totalFrames}:s=${w}x${h}:fps=${fps},tblend=all_mode=average`;
+      // Very subtle floating effect
+      return `zoompan=z='1.02+0.01*sin(2*PI*on/${totalFrames})':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${totalFrames}:s=${w}x${h}:fps=${fps}`;
     },
   },
 
@@ -56,7 +57,8 @@ export const VIDEO_EFFECTS: Record<EffectType, VideoEffect> = {
     getFilter: (w, h, duration) => {
       const fps = 30;
       const totalFrames = Math.round(duration * fps);
-      return `zoompan=z='1+0.08*on/${totalFrames}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${totalFrames}:s=${w}x${h}:fps=${fps},tblend=all_mode=average`;
+      // Smooth zoom in
+      return `zoompan=z='1+0.08*on/${totalFrames}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${totalFrames}:s=${w}x${h}:fps=${fps}`;
     },
   },
 
@@ -68,7 +70,8 @@ export const VIDEO_EFFECTS: Record<EffectType, VideoEffect> = {
     getFilter: (w, h, duration) => {
       const fps = 30;
       const totalFrames = Math.round(duration * fps);
-      return `zoompan=z='1.08-0.08*on/${totalFrames}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${totalFrames}:s=${w}x${h}:fps=${fps},tblend=all_mode=average`;
+      // Smooth zoom out
+      return `zoompan=z='1.08-0.08*on/${totalFrames}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${totalFrames}:s=${w}x${h}:fps=${fps}`;
     },
   },
 
@@ -82,7 +85,7 @@ export const VIDEO_EFFECTS: Record<EffectType, VideoEffect> = {
       const totalFrames = Math.round(duration * fps);
       const zoomLevel = 1.05;
       const panRange = w * 0.04;
-      return `zoompan=z=${zoomLevel}:x='iw/2-(iw/zoom/2)+(${panRange}-2*${panRange}*on/${totalFrames})':y='ih/2-(ih/zoom/2)':d=${totalFrames}:s=${w}x${h}:fps=${fps},tblend=all_mode=average`;
+      return `zoompan=z=${zoomLevel}:x='iw/2-(iw/zoom/2)+(${panRange}-2*${panRange}*on/${totalFrames})':y='ih/2-(ih/zoom/2)':d=${totalFrames}:s=${w}x${h}:fps=${fps}`;
     },
   },
 
@@ -96,7 +99,7 @@ export const VIDEO_EFFECTS: Record<EffectType, VideoEffect> = {
       const totalFrames = Math.round(duration * fps);
       const zoomLevel = 1.05;
       const panRange = w * 0.04;
-      return `zoompan=z=${zoomLevel}:x='iw/2-(iw/zoom/2)+(-${panRange}+2*${panRange}*on/${totalFrames})':y='ih/2-(ih/zoom/2)':d=${totalFrames}:s=${w}x${h}:fps=${fps},tblend=all_mode=average`;
+      return `zoompan=z=${zoomLevel}:x='iw/2-(iw/zoom/2)+(-${panRange}+2*${panRange}*on/${totalFrames})':y='ih/2-(ih/zoom/2)':d=${totalFrames}:s=${w}x${h}:fps=${fps}`;
     },
   },
 
@@ -109,7 +112,7 @@ export const VIDEO_EFFECTS: Record<EffectType, VideoEffect> = {
       const fps = 30;
       const totalFrames = Math.round(duration * fps);
       const panRange = w * 0.03;
-      return `zoompan=z='1+0.12*on/${totalFrames}':x='iw/2-(iw/zoom/2)+(-${panRange}+2*${panRange}*on/${totalFrames})':y='ih/2-(ih/zoom/2)':d=${totalFrames}:s=${w}x${h}:fps=${fps},tblend=all_mode=average`;
+      return `zoompan=z='1+0.1*on/${totalFrames}':x='iw/2-(iw/zoom/2)+(-${panRange}+2*${panRange}*on/${totalFrames})':y='ih/2-(ih/zoom/2)':d=${totalFrames}:s=${w}x${h}:fps=${fps}`;
     },
   },
 
@@ -122,7 +125,7 @@ export const VIDEO_EFFECTS: Record<EffectType, VideoEffect> = {
       const fps = 30;
       const totalFrames = Math.round(duration * fps);
       const panRange = w * 0.03;
-      return `zoompan=z='1.12-0.12*on/${totalFrames}':x='iw/2-(iw/zoom/2)+(${panRange}-2*${panRange}*on/${totalFrames})':y='ih/2-(ih/zoom/2)':d=${totalFrames}:s=${w}x${h}:fps=${fps},tblend=all_mode=average`;
+      return `zoompan=z='1.1-0.1*on/${totalFrames}':x='iw/2-(iw/zoom/2)+(${panRange}-2*${panRange}*on/${totalFrames})':y='ih/2-(ih/zoom/2)':d=${totalFrames}:s=${w}x${h}:fps=${fps}`;
     },
   },
 };

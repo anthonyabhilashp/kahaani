@@ -1,5 +1,7 @@
 import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/router";
+import { useAuth } from "../contexts/AuthContext";
+import { supabase } from "../lib/supabaseClient";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -28,6 +30,7 @@ type Story = {
 
 export default function Dashboard() {
   const router = useRouter();
+  const { user, loading: authLoading, signOut } = useAuth();
   const [stories, setStories] = useState<Story[]>([]);
   const [loading, setLoading] = useState(true);
   const [newPrompt, setNewPrompt] = useState("");
@@ -40,21 +43,42 @@ export default function Dashboard() {
   const [deleting, setDeleting] = useState(false);
   const hasFetchedRef = useRef(false);
 
+  // Protect route - redirect to login if not authenticated
+  useEffect(() => {
+    if (!authLoading && !user) {
+      router.push('/login');
+    }
+  }, [user, authLoading, router]);
+
   useEffect(() => {
     // Prevent duplicate fetches (React Strict Mode calls useEffect twice)
     if (hasFetchedRef.current) {
       console.log("⏭️ Skipping duplicate stories fetch");
       return;
     }
-    hasFetchedRef.current = true;
-    fetchStories();
+    // Only fetch stories if user is authenticated
+    if (!authLoading && user) {
+      hasFetchedRef.current = true;
+      fetchStories();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [user, authLoading]);
 
   async function fetchStories() {
     setLoading(true);
     try {
-      const res = await fetch("/api/get_stories");
+      // Get session token for authentication
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        router.push('/login');
+        return;
+      }
+
+      const res = await fetch("/api/get_stories", {
+        headers: {
+          "Authorization": `Bearer ${session.access_token}`
+        }
+      });
       if (!res.ok) {
         console.error("Failed to fetch stories:", res.status);
         setStories([]);
@@ -75,9 +99,20 @@ export default function Dashboard() {
     setCreating(true);
 
     try {
+      // Get session token for authentication
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        alert("Please log in to create stories");
+        router.push('/login');
+        return;
+      }
+
       const res = await fetch("/api/generate_scenes", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${session.access_token}`
+        },
         body: JSON.stringify({
           prompt: newPrompt,
           sceneCount: sceneCount
@@ -96,9 +131,13 @@ export default function Dashboard() {
         if (storyId) {
           router.push(`/story/${storyId}`);
         }
+      } else {
+        const error = await res.json();
+        alert(`Failed to create story: ${error.error || 'Unknown error'}`);
       }
     } catch (error) {
       console.error("Error creating story:", error);
+      alert(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
     } finally {
       setCreating(false);
     }
@@ -151,8 +190,8 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-black text-white flex">
-      {/* Left Sidebar */}
-      <div className="w-64 bg-gray-950 border-r border-gray-800 flex flex-col fixed h-full">
+      {/* Left Sidebar - Hidden on mobile */}
+      <div className="hidden md:flex w-64 bg-gray-950 border-r border-gray-800 flex-col fixed h-full">
         {/* Logo/Brand */}
         <div className="p-6 border-b border-gray-800">
           <h1 className="text-2xl font-bold text-white">Kahaani</h1>
@@ -174,7 +213,7 @@ export default function Dashboard() {
               }`}
             >
               <Video className="w-5 h-5" />
-              <span className="font-medium">Faceless Videos</span>
+              <span className="font-medium">Stories</span>
             </button>
 
             {/* Placeholder for future categories */}
@@ -191,137 +230,249 @@ export default function Dashboard() {
 
         {/* User Profile Section */}
         <div className="border-t border-gray-800 p-4">
-          <div className="flex items-center gap-3 mb-3 px-2 py-2 rounded-lg hover:bg-gray-900 cursor-pointer transition-colors">
-            <div className="w-9 h-9 rounded-full bg-gradient-to-br from-orange-500 to-pink-500 flex items-center justify-center">
-              <User className="w-5 h-5 text-white" />
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-white truncate">User Account</p>
-              <p className="text-xs text-gray-500 truncate">user@example.com</p>
-            </div>
-          </div>
-
-          <div className="space-y-1">
-            <button className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-gray-400 hover:bg-gray-900 hover:text-white transition-colors text-sm">
-              <Settings className="w-4 h-4" />
-              <span>Settings</span>
-            </button>
-            <button className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-gray-400 hover:bg-gray-900 hover:text-red-400 transition-colors text-sm">
-              <LogOut className="w-4 h-4" />
-              <span>Sign Out</span>
-            </button>
-          </div>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <div className="flex items-center gap-3 px-2 py-2 rounded-lg hover:bg-gray-900 cursor-pointer transition-colors">
+                <div className="w-9 h-9 rounded-full bg-gradient-to-br from-orange-500 to-pink-500 flex items-center justify-center">
+                  <User className="w-5 h-5 text-white" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-white truncate">User Account</p>
+                  <p className="text-xs text-gray-500 truncate">{user?.email || 'user@example.com'}</p>
+                </div>
+              </div>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56 bg-gray-900 border-gray-800">
+              <DropdownMenuItem
+                className="flex items-center gap-3 text-gray-400 hover:text-white hover:bg-gray-800 cursor-pointer"
+                onClick={() => {/* Settings functionality can be added later */}}
+              >
+                <Settings className="w-4 h-4" />
+                <span>Settings</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                className="flex items-center gap-3 text-gray-400 hover:text-red-400 hover:bg-gray-800 cursor-pointer"
+                onClick={signOut}
+              >
+                <LogOut className="w-4 h-4" />
+                <span>Sign Out</span>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
 
       {/* Main Content */}
-      <div className="flex-1 ml-64">
-        {/* Header */}
-        <div className="border-b border-gray-800 bg-gray-950 sticky top-0 z-10">
-          <div className="px-8 py-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-2xl font-bold text-white mb-1">Faceless Videos</h2>
-                <p className="text-gray-400 text-sm">AI-powered visual storytelling</p>
-              </div>
-              <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-                <DialogTrigger asChild>
-                  <Button size="lg" className="bg-orange-600 hover:bg-orange-700 text-white font-semibold">
-                    <Plus className="w-4 h-4 mr-2" /> New Story
-                  </Button>
-                </DialogTrigger>
-                <DialogContent className="sm:max-w-2xl bg-gray-900 text-white border-gray-800">
-                  <DialogHeader>
-                    <DialogTitle className="text-2xl font-bold">Create a New Story</DialogTitle>
-                  </DialogHeader>
+      <div className="flex-1 md:ml-64 w-full">
+        {/* Mobile Header */}
+        <div className="md:hidden border-b border-gray-800 bg-gray-950 sticky top-0 z-20 px-4 py-4">
+          <div className="flex items-center justify-between">
+            <h1 className="text-xl font-bold text-white">Kahaani</h1>
+            <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+              <DialogTrigger asChild>
+                <Button size="sm" className="bg-orange-600 hover:bg-orange-700 text-white font-semibold">
+                  <Plus className="w-4 h-4 mr-1" /> New
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="sm:max-w-2xl bg-gray-900 text-white border-gray-800 max-h-[90vh] overflow-y-auto">
+                <DialogHeader>
+                  <DialogTitle className="text-2xl font-bold">Create a New Story</DialogTitle>
+                </DialogHeader>
 
-                  <div className="space-y-4 mt-4">
-                    {/* Story Input */}
-                    <div>
-                      <label className="block text-sm font-medium text-gray-300 mb-2">
-                        Story Input
-                      </label>
-                      <p className="text-xs text-gray-500 mb-3">
-                        You can either write your complete story, or give a simple idea and AI will generate scenes for you.
-                      </p>
-                      <textarea
-                        placeholder="E.g., 'A young adventurer discovers a magical compass' or write your full story with all details..."
-                        value={newPrompt}
-                        onChange={(e) => setNewPrompt(e.target.value)}
-                        rows={5}
-                        className="w-full p-4 bg-gray-800 border border-gray-700 rounded-lg resize-none focus:ring-2 focus:ring-orange-500 focus:border-transparent text-white placeholder:text-gray-500"
-                      />
-                    </div>
-
-                    {/* Scene Count Selector */}
-                    <div>
-                      <label className="block text-sm font-medium text-gray-300 mb-3">
-                        Number of Scenes: <span className="text-orange-400 font-bold">{sceneCount}</span>
-                      </label>
-                      <Slider
-                        value={[sceneCount]}
-                        onValueChange={(value) => setSceneCount(value[0])}
-                        min={3}
-                        max={8}
-                        step={1}
-                        className="w-full"
-                      />
-                      <div className="flex justify-between text-xs text-gray-500 mt-2">
-                        <span>3 scenes</span>
-                        <span>8 scenes</span>
-                      </div>
-                    </div>
-
-                    {/* Example prompts */}
-                    <div className="space-y-2">
-                      <p className="text-xs text-gray-500">Need inspiration? Try these:</p>
-                      <div className="grid grid-cols-1 gap-2">
-                        {[
-                          "A cat discovers a secret library where books come alive at night",
-                          "Two friends build a time machine and accidentally meet dinosaurs",
-                          "A magical paintbrush brings drawings to life in unexpected ways"
-                        ].map((example, idx) => (
-                          <button
-                            key={idx}
-                            type="button"
-                            onClick={() => setNewPrompt(example)}
-                            className="text-left text-xs text-orange-400 hover:text-orange-300 p-2 rounded-md hover:bg-gray-800 transition-colors"
-                          >
-                            "{example}"
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Create Button */}
-                    <Button
-                      disabled={creating || !newPrompt.trim()}
-                      onClick={createStory}
-                      className="w-full bg-orange-600 hover:bg-orange-700 text-white font-semibold"
-                      size="lg"
-                    >
-                      {creating ? (
-                        <>
-                          <Loader2 className="animate-spin h-5 w-5 mr-2" /> Creating Story...
-                        </>
-                      ) : (
-                        <>
-                          <Plus className="w-4 h-4 mr-2" /> Generate Story
-                        </>
-                      )}
-                    </Button>
+                <div className="space-y-4 mt-4">
+                  {/* Story Input */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-300 mb-2">
+                      Story Input
+                    </label>
+                    <p className="text-xs text-gray-500 mb-3">
+                      You can either write your complete story, or give a simple idea and AI will generate scenes for you.
+                    </p>
+                    <textarea
+                      placeholder="E.g., 'A young adventurer discovers a magical compass' or write your full story with all details..."
+                      value={newPrompt}
+                      onChange={(e) => setNewPrompt(e.target.value)}
+                      rows={5}
+                      className="w-full p-4 bg-gray-800 border border-gray-700 rounded-lg resize-none focus:ring-2 focus:ring-orange-500 focus:border-transparent text-white placeholder:text-gray-500"
+                    />
                   </div>
-                </DialogContent>
-              </Dialog>
-            </div>
+
+                  {/* Scene Count Selector */}
+                  <div>
+                    <div className="flex items-center justify-between mb-3">
+                      <label className="text-sm font-medium text-gray-300">
+                        Number of Scenes
+                      </label>
+                      <div className="bg-orange-600 text-white px-3 py-1 rounded-lg text-sm font-bold">
+                        {sceneCount}
+                      </div>
+                    </div>
+                    <p className="text-xs text-gray-500 mb-3">
+                      AI will break down your story into this many visual moments
+                    </p>
+                    <Slider
+                      value={[sceneCount]}
+                      onValueChange={(value) => setSceneCount(value[0])}
+                      min={1}
+                      max={20}
+                      step={1}
+                      className="w-full"
+                    />
+                    <div className="flex justify-between text-xs text-gray-500 mt-2">
+                      <span>1 scene</span>
+                      <span>20 scenes</span>
+                    </div>
+                  </div>
+
+                  {/* Example prompts */}
+                  <div className="space-y-2">
+                    <p className="text-xs text-gray-500">Need inspiration? Try these:</p>
+                    <div className="grid grid-cols-1 gap-2">
+                      {[
+                        "A cat discovers a secret library where books come alive at night",
+                        "Two friends build a time machine and accidentally meet dinosaurs",
+                        "A magical paintbrush brings drawings to life in unexpected ways"
+                      ].map((example, idx) => (
+                        <button
+                          key={idx}
+                          type="button"
+                          onClick={() => setNewPrompt(example)}
+                          className="text-left text-xs text-orange-400 hover:text-orange-300 p-2 rounded-md hover:bg-gray-800 transition-colors"
+                        >
+                          "{example}"
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Create Button */}
+                  <Button
+                    disabled={creating || !newPrompt.trim()}
+                    onClick={createStory}
+                    className="w-full bg-orange-600 hover:bg-orange-700 text-white font-semibold"
+                    size="lg"
+                  >
+                    {creating ? (
+                      <>
+                        <Loader2 className="animate-spin h-5 w-5 mr-2" /> Creating Story...
+                      </>
+                    ) : (
+                      <>
+                        <Plus className="w-4 h-4 mr-2" /> Generate Story
+                      </>
+                    )}
+                  </Button>
+                </div>
+              </DialogContent>
+            </Dialog>
           </div>
         </div>
 
         {/* Stories Grid */}
-        <div className="px-8 py-8">
+        <div className="px-4 md:px-8 py-6 md:py-8">
           <div className="flex items-center justify-between mb-6">
             <div className="text-sm text-gray-500">
               {stories.length} {stories.length === 1 ? 'story' : 'stories'}
+            </div>
+            {/* Desktop Create Button - Hidden on mobile */}
+            <div className="hidden md:block">
+              <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+                <DialogTrigger asChild>
+                  <Button size="default" className="bg-orange-600 hover:bg-orange-700 text-white font-semibold">
+                    <Plus className="w-4 h-4 mr-2" /> Create new story
+                  </Button>
+                </DialogTrigger>
+              <DialogContent className="sm:max-w-2xl bg-gray-900 text-white border-gray-800">
+                <DialogHeader>
+                  <DialogTitle className="text-2xl font-bold">Create a New Story</DialogTitle>
+                </DialogHeader>
+
+                <div className="space-y-4 mt-4">
+                  {/* Story Input */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-300 mb-2">
+                      Story Input
+                    </label>
+                    <p className="text-xs text-gray-500 mb-3">
+                      You can either write your complete story, or give a simple idea and AI will generate scenes for you.
+                    </p>
+                    <textarea
+                      placeholder="E.g., 'A young adventurer discovers a magical compass' or write your full story with all details..."
+                      value={newPrompt}
+                      onChange={(e) => setNewPrompt(e.target.value)}
+                      rows={5}
+                      className="w-full p-4 bg-gray-800 border border-gray-700 rounded-lg resize-none focus:ring-2 focus:ring-orange-500 focus:border-transparent text-white placeholder:text-gray-500"
+                    />
+                  </div>
+
+                  {/* Scene Count Selector */}
+                  <div>
+                    <div className="flex items-center justify-between mb-3">
+                      <label className="text-sm font-medium text-gray-300">
+                        Number of Scenes
+                      </label>
+                      <div className="bg-orange-600 text-white px-3 py-1 rounded-lg text-sm font-bold">
+                        {sceneCount}
+                      </div>
+                    </div>
+                    <p className="text-xs text-gray-500 mb-3">
+                      AI will break down your story into this many visual moments
+                    </p>
+                    <Slider
+                      value={[sceneCount]}
+                      onValueChange={(value) => setSceneCount(value[0])}
+                      min={1}
+                      max={20}
+                      step={1}
+                      className="w-full"
+                    />
+                    <div className="flex justify-between text-xs text-gray-500 mt-2">
+                      <span>1 scene</span>
+                      <span>20 scenes</span>
+                    </div>
+                  </div>
+
+                  {/* Example prompts */}
+                  <div className="space-y-2">
+                    <p className="text-xs text-gray-500">Need inspiration? Try these:</p>
+                    <div className="grid grid-cols-1 gap-2">
+                      {[
+                        "A cat discovers a secret library where books come alive at night",
+                        "Two friends build a time machine and accidentally meet dinosaurs",
+                        "A magical paintbrush brings drawings to life in unexpected ways"
+                      ].map((example, idx) => (
+                        <button
+                          key={idx}
+                          type="button"
+                          onClick={() => setNewPrompt(example)}
+                          className="text-left text-xs text-orange-400 hover:text-orange-300 p-2 rounded-md hover:bg-gray-800 transition-colors"
+                        >
+                          "{example}"
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Create Button */}
+                  <Button
+                    disabled={creating || !newPrompt.trim()}
+                    onClick={createStory}
+                    className="w-full bg-orange-600 hover:bg-orange-700 text-white font-semibold"
+                    size="lg"
+                  >
+                    {creating ? (
+                      <>
+                        <Loader2 className="animate-spin h-5 w-5 mr-2" /> Creating Story...
+                      </>
+                    ) : (
+                      <>
+                        <Plus className="w-4 h-4 mr-2" /> Generate Story
+                      </>
+                    )}
+                  </Button>
+                </div>
+              </DialogContent>
+              </Dialog>
             </div>
           </div>
 
@@ -332,7 +483,11 @@ export default function Dashboard() {
           </div>
         ) : stories.length === 0 ? (
           <div className="text-center py-20">
-            <div className="text-8xl mb-6">📚</div>
+            <div className="mb-6 flex justify-center">
+              <div className="w-24 h-24 rounded-full bg-orange-900/20 flex items-center justify-center">
+                <Film className="w-12 h-12 text-orange-400" />
+              </div>
+            </div>
             <h3 className="text-2xl font-semibold text-white mb-4">No stories yet</h3>
             <p className="text-gray-400 mb-8 max-w-md mx-auto">
               Ready to create your first story? Let your imagination run wild!
@@ -340,7 +495,7 @@ export default function Dashboard() {
             <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
               <DialogTrigger asChild>
                 <Button className="bg-orange-600 hover:bg-orange-700 text-white font-semibold">
-                  <Plus className="w-4 h-4 mr-2" /> Create Your First Story
+                  <Plus className="w-4 h-4 mr-2" /> Create new story
                 </Button>
               </DialogTrigger>
               <DialogContent className="sm:max-w-2xl bg-gray-900 text-white border-gray-800">
@@ -368,20 +523,28 @@ export default function Dashboard() {
 
                   {/* Scene Count Selector */}
                   <div>
-                    <label className="block text-sm font-medium text-gray-300 mb-3">
-                      Number of Scenes: <span className="text-orange-400 font-bold">{sceneCount}</span>
-                    </label>
+                    <div className="flex items-center justify-between mb-3">
+                      <label className="text-sm font-medium text-gray-300">
+                        Number of Scenes
+                      </label>
+                      <div className="bg-orange-600 text-white px-3 py-1 rounded-lg text-sm font-bold">
+                        {sceneCount}
+                      </div>
+                    </div>
+                    <p className="text-xs text-gray-500 mb-3">
+                      AI will break down your story into this many visual moments
+                    </p>
                     <Slider
                       value={[sceneCount]}
                       onValueChange={(value) => setSceneCount(value[0])}
-                      min={3}
-                      max={8}
+                      min={1}
+                      max={20}
                       step={1}
                       className="w-full"
                     />
                     <div className="flex justify-between text-xs text-gray-500 mt-2">
-                      <span>3 scenes</span>
-                      <span>8 scenes</span>
+                      <span>1 scene</span>
+                      <span>20 scenes</span>
                     </div>
                   </div>
 
@@ -428,7 +591,7 @@ export default function Dashboard() {
             </Dialog>
           </div>
         ) : (
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 md:gap-4">
             {stories.map((story) => (
               <div
                 key={story.id}

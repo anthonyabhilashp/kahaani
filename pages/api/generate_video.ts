@@ -8,8 +8,21 @@ import { JobLogger } from "../../lib/logger";
 import { generateWordByWordASS, type WordTimestamp } from "../../lib/assSubtitles";
 import { updateStoryMetadata } from "../../lib/updateStoryMetadata";
 import { getEffect } from "../../lib/videoEffects";
+import { generateEffectFrames, cleanupFrames } from "../../lib/frameGenerator";
 
 export const config = { api: { bodyParser: { sizeLimit: "4mb" } } };
+
+// --- Helper to update job progress ---
+async function updateJobProgress(jobId: string, progress: number) {
+  try {
+    await supabaseAdmin
+      .from('video_generation_jobs')
+      .update({ progress })
+      .eq('id', jobId);
+  } catch (err) {
+    console.warn('Failed to update job progress:', err);
+  }
+}
 
 // --- Convert hex color to ASS color format ---
 function convertHexToASSColor(hex: string): string {
@@ -72,16 +85,58 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!story_id) return res.status(400).json({ error: "story_id required" });
 
   let logger: JobLogger | null = null;
+  let jobId: string | null = null;
 
   try {
+    // 🚨 CHECK IF VIDEO GENERATION IS ALREADY IN PROGRESS
+    const { data: existingJob } = await supabaseAdmin
+      .from('video_generation_jobs')
+      .select('id, started_at')
+      .eq('story_id', story_id)
+      .eq('status', 'processing')
+      .maybeSingle();
+
+    if (existingJob) {
+      const startedAt = new Date(existingJob.started_at).toLocaleTimeString();
+      return res.status(409).json({
+        error: `Video generation already in progress for this story (started at ${startedAt})`,
+        job_id: existingJob.id
+      });
+    }
+
+    // 🆕 CREATE JOB RECORD TO MARK AS PROCESSING
+    const { data: newJob, error: jobError } = await supabaseAdmin
+      .from('video_generation_jobs')
+      .insert({
+        story_id,
+        status: 'processing'
+      })
+      .select('id')
+      .single();
+
+    if (jobError || !newJob) {
+      console.error("❌ Failed to create job record:", jobError);
+      return res.status(500).json({
+        error: "Failed to start video generation job"
+      });
+    }
+
+    jobId = newJob.id;
+    console.log(`✅ Created video generation job: ${jobId}`);
+
+    await updateJobProgress(jobId, 5);
+
     logger = new JobLogger(story_id, "generate_video");
-    logger.log(`🎬 Starting video generation for story: ${story_id} with aspect ratio: ${aspect_ratio || '9:16'}`);
+    logger.log(`🎬 Starting video generation for story: ${story_id} (Job ID: ${jobId})`);
+    logger.log(`📐 Aspect ratio: ${aspect_ratio || '9:16'}`);
     if (background_music?.enabled) {
       logger.log(`🎵 Background music enabled at ${background_music.volume}% volume`);
     }
 
     const tmpDir = path.join(process.cwd(), "tmp", story_id);
     fs.mkdirSync(tmpDir, { recursive: true });
+
+    await updateJobProgress(jobId, 10);
 
     // 1️⃣ Fetch scenes with images, audio, word timestamps, and effects
     const { data: scenes, error: sceneErr } = await supabaseAdmin
@@ -92,6 +147,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (sceneErr || !scenes?.length) throw new Error("No scenes found for this story");
     logger.log(`📚 Found ${scenes.length} scenes`);
+
+    await updateJobProgress(jobId, 15);
 
     // 2️⃣ Verify images exist in scenes
     const scenesWithImages = scenes.filter(s => s.image_url);
@@ -139,6 +196,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     logger.log(`🖼️ Downloaded media for ${mediaPaths.length} scenes`);
     logger.log(`⏱️ Scene timing: ${mediaPaths.map(s => `Scene ${s.sceneIndex + 1}: ${s.duration.toFixed(2)}s`).join(', ')}`);
 
+    await updateJobProgress(jobId, 30);
+
     // 6️⃣ Clean up old videos for this story
     const { data: oldVideos } = await supabaseAdmin
       .from("videos")
@@ -183,6 +242,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // 8️⃣ Generate individual scene clips with precise timing and effects
     const videoClips: string[] = [];
     const audioClips: string[] = [];
+    const frameDirsToCleanup: string[] = [];
+
+    await updateJobProgress(jobId, 35);
 
     for (const scene of mediaPaths) {
       if (!scene.imagePath) continue; // Skip scenes without images
@@ -196,31 +258,62 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       logger.log(`🎬 Scene ${scene.sceneIndex + 1}: Applying "${effect.name}" effect`);
 
-      // Build video filter chain
-      let videoFilter = `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black`;
+      // Use frame-by-frame rendering for smooth effects
+      if (effectId !== "none") {
+        const framesDir = path.join(tmpDir, `frames-${scene.sceneIndex}`);
+        frameDirsToCleanup.push(framesDir);
 
-      // Add effect filter if not "none"
-      const effectFilter = effect.getFilter(width, height, scene.duration);
-      if (effectFilter) {
-        videoFilter += `,${effectFilter}`;
+        logger.log(`🖼️ Generating smooth frames at 15fps...`);
+
+        await generateEffectFrames({
+          imagePath: scene.imagePath,
+          outputDir: framesDir,
+          width,
+          height,
+          duration: scene.duration,
+          effectType: effectId,
+          fps: 15, // Lower FPS = much faster, still smooth
+        });
+
+        logger.log(`✅ Frames generated, encoding video...`);
+
+        // Create video from PNG frames (lossless quality)
+        await new Promise<void>((resolve, reject) => {
+          ffmpeg()
+            .input(path.join(framesDir, "frame_%06d.png"))
+            .inputOptions(["-framerate 15"])
+            .videoCodec("libx264")
+            .noAudio()
+            .outputOptions([
+              "-pix_fmt yuv420p",
+              "-preset medium", // Better quality encoding
+              "-crf 15", // Very high quality (lower = better)
+            ])
+            .save(clipPath)
+            .on("end", () => resolve())
+            .on("error", (err: any) => reject(err));
+        });
+
+      } else {
+        // No effect - use static image with simple scaling
+        const videoFilter = `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black`;
+
+        await new Promise<void>((resolve, reject) => {
+          ffmpeg()
+            .input(scene.imagePath!)
+            .inputOptions(["-loop 1"])
+            .videoCodec("libx264")
+            .noAudio()
+            .outputOptions([
+              "-pix_fmt yuv420p",
+              `-vf ${videoFilter}`,
+              `-t ${scene.duration}`,
+            ])
+            .save(clipPath)
+            .on("end", () => resolve())
+            .on("error", (err: any) => reject(err));
+        });
       }
-
-      // Create video clip for this scene duration
-      await new Promise<void>((resolve, reject) => {
-        ffmpeg()
-          .input(scene.imagePath!)
-          .inputOptions(["-loop 1"])  // Loop the image
-          .videoCodec("libx264")
-          .noAudio()
-          .outputOptions([
-            "-pix_fmt yuv420p",
-            `-vf ${videoFilter}`,
-            `-t ${scene.duration}`,  // Duration of the clip
-          ])
-          .save(clipPath)
-          .on("end", () => resolve())
-          .on("error", (err: any) => reject(err));
-      });
 
       videoClips.push(`file '${clipPath}'`);
 
@@ -228,7 +321,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (scene.audioPath) {
         audioClips.push(scene.audioPath);
       }
+
+      // Update progress for each scene processed (35-55% range)
+      const sceneProgress = 35 + Math.floor((scene.sceneIndex + 1) / mediaPaths.length * 20);
+      await updateJobProgress(jobId, sceneProgress);
     }
+
+    await updateJobProgress(jobId, 55);
+
+    // Cleanup frame directories
+    logger.log(`🧹 Cleaning up ${frameDirsToCleanup.length} frame directories...`);
+    for (const framesDir of frameDirsToCleanup) {
+      try {
+        cleanupFrames(framesDir);
+      } catch (err) {
+        logger.error(`⚠️ Failed to cleanup ${framesDir}`, err);
+      }
+    }
+
+    await updateJobProgress(jobId, 60);
 
     // 9️⃣ Combine all video clips
     const concatTxt = path.join(tmpDir, "video-concat.txt");
@@ -345,9 +456,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .inputOptions(["-f concat", "-safe 0"])
         .outputOptions(outputOpts)
         .save(videoOnlyPath)
-        .on("end", resolve)
+        .on("end", () => resolve())
         .on("error", reject);
     });
+
+    await updateJobProgress(jobId, 75);
 
     // 🔟 Create final video - video already has correct timing, just add audio track
     const finalVideo = path.join(tmpDir, `final-video-${story_id}.mp4`);
@@ -372,7 +485,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           .inputOptions(["-f concat", "-safe 0"])
           .audioCodec("aac")
           .save(mergedNarrationAudio)
-          .on("end", resolve)
+          .on("end", () => resolve())
           .on("error", reject);
       });
 
@@ -463,6 +576,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       logger.log("✅ Video-only (no audio)");
     }
 
+    await updateJobProgress(jobId, 85);
+
     // 11️⃣ Upload final video
     const buffer = fs.readFileSync(finalVideo);
     const fileName = `video-${story_id}-${Date.now()}.mp4`;
@@ -498,14 +613,47 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     logger.log(`☁️ Uploaded video → ${publicUrl} (${totalDuration.toFixed(1)}s total)`);
 
+    await updateJobProgress(jobId, 95);
+
     // Update story metadata (completion status)
     logger.log(`📊 Updating story metadata...`);
     await updateStoryMetadata(story_id);
     logger.log(`✅ Story metadata updated`);
 
-    res.status(200).json({ story_id, video_url: publicUrl, duration: totalDuration, is_valid: true });
+    // ✅ MARK JOB AS COMPLETED
+    if (jobId) {
+      await supabaseAdmin
+        .from('video_generation_jobs')
+        .update({
+          status: 'completed',
+          progress: 100,
+          completed_at: new Date().toISOString()
+        })
+        .eq('id', jobId);
+      logger.log(`✅ Video generation job ${jobId} marked as completed`);
+    }
+
+    res.status(200).json({ story_id, video_url: publicUrl, duration: totalDuration, is_valid: true, job_id: jobId });
   } catch (err: any) {
     if (logger) logger.error("❌ Error generating video", err);
+
+    // ❌ MARK JOB AS FAILED
+    if (jobId) {
+      try {
+        await supabaseAdmin
+          .from('video_generation_jobs')
+          .update({
+            status: 'failed',
+            completed_at: new Date().toISOString(),
+            error: err.message || 'Unknown error'
+          })
+          .eq('id', jobId);
+        console.log(`❌ Video generation job ${jobId} marked as failed`);
+      } catch (updateErr) {
+        console.error("Failed to update job status:", updateErr);
+      }
+    }
+
     res.status(500).json({ error: err.message });
   }
 }

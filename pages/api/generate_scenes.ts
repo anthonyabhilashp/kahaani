@@ -35,8 +35,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   let logger: JobLogger | null = null;
 
   try {
+    // 🔐 Get authenticated user from session
+    const authHeader = req.headers.authorization;
+    if (!authHeader) {
+      return res.status(401).json({ error: "Unauthorized - Please log in" });
+    }
+
+    const token = authHeader.replace('Bearer ', '');
+    const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(token);
+
+    if (authError || !user) {
+      return res.status(401).json({ error: "Unauthorized - Invalid session" });
+    }
+
     let storyId = story_id || uuidv4();
     logger = new JobLogger(storyId, "generate_scenes");
+    logger.log(`👤 User: ${user.email} (${user.id})`);
 
     if (story_id) {
       logger.log(`♻️ Overwriting scenes for existing story: ${storyId}`);
@@ -47,7 +61,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       logger.log(`🆕 Creating new story for: "${prompt}"`);
       const { error: storyErr } = await supabaseAdmin
         .from("stories")
-        .insert([{ id: storyId, title: title || null, prompt, status: "processing" }]);
+        .insert([{
+          id: storyId,
+          title: title || null,
+          prompt,
+          status: "processing",
+          user_id: user.id  // 🔑 Link story to authenticated user
+        }]);
       if (storyErr) throw storyErr;
     }
 

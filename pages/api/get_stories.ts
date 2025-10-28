@@ -3,11 +3,40 @@ import { supabaseAdmin } from "../../lib/supabaseAdmin";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
-    // Fetch all stories
-    const { data: stories, error } = await supabaseAdmin
+    // 🔐 Get authenticated user
+    const authHeader = req.headers.authorization;
+    if (!authHeader) {
+      return res.status(401).json({ error: "Unauthorized - Please log in" });
+    }
+
+    const token = authHeader.replace('Bearer ', '');
+    const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(token);
+
+    if (authError || !user) {
+      return res.status(401).json({ error: "Unauthorized - Invalid session" });
+    }
+
+    // Check if user is admin
+    const { data: userData } = await supabaseAdmin
+      .from('user_profiles')
+      .select('is_admin')
+      .eq('user_id', user.id)
+      .single();
+
+    const isAdmin = userData?.is_admin === true;
+
+    // Fetch stories - admin sees all, regular users see only theirs
+    let query = supabaseAdmin
       .from("stories")
       .select("*")
       .order("created_at", { ascending: false });
+
+    // If not admin, filter by user_id
+    if (!isAdmin) {
+      query = query.eq('user_id', user.id);
+    }
+
+    const { data: stories, error } = await query;
 
     if (error) throw error;
 

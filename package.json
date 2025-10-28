@@ -17,8 +17,6 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
-    "@ffmpeg/ffmpeg": "^0.12.15",
-    "@ffmpeg/util": "^0.12.2",
     "@radix-ui/react-alert-dialog": "^1.1.15",
     "@radix-ui/react-dialog": "^1.1.15",
     "@radix-ui/react-dropdown-menu": "^2.1.16",
@@ -41,6 +39,7 @@
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "remotion-subtitle": "^1.0.7",
+    "sharp": "^0.34.4",
     "tailwind-merge": "^3.3.1",
     "tailwind-variants": "^3.1.1",
     "tailwindcss-animate": "^1.0.7",
@@ -48,6 +47,7 @@
   },
   "devDependencies": {
     "@types/fluent-ffmpeg": "^2.1.27",
+    "@types/formidable": "^3.4.6",
     "@types/node": "^24.7.1",
     "@types/react": "^19.2.2",
     "@types/uuid": "^10.0.0",

@@ -38,10 +38,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const story = storyResult.data;
 
     // Build background_music_settings object for backward compatibility
+    // Note: background_music is an array from Supabase join, so we need to access [0]
+    const bgMusic = Array.isArray(story?.background_music) ? story.background_music[0] : story?.background_music;
     const background_music_settings = story?.background_music_id ? {
       music_id: story.background_music_id,
-      music_url: story.background_music?.file_url || null,
-      music_name: story.background_music?.name || null,
+      music_url: bgMusic?.file_url || null,
+      music_name: bgMusic?.name || null,
       volume: story.background_music_volume ?? 30,
       enabled: story.background_music_enabled ?? false,
     } : null;

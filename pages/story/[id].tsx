@@ -5,7 +5,8 @@ import { Popover, PopoverContent, PopoverTrigger } from "../../components/ui/pop
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../components/ui/alert-dialog";
 import { Slider } from "../../components/ui/slider";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../components/ui/tooltip";
-import { ArrowLeft, Play, Pause, Download, Volume2, VolumeX, Maximize, Loader2, ImageIcon, Image, Pencil, Trash2, Check, X, PlayCircle, ChevronDown, Plus, Type, Music, Upload, Sparkles } from "lucide-react";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../../components/ui/dropdown-menu";
+import { ArrowLeft, Play, Pause, Download, Volume2, VolumeX, Maximize, Loader2, ImageIcon, Image, Pencil, Trash2, Check, X, PlayCircle, ChevronDown, Plus, Type, Music, Upload, Sparkles, ExternalLink, MoreHorizontal } from "lucide-react";
 import { WordByWordCaption, SimpleCaption, type WordTimestamp } from "../../components/WordByWordCaption";
 import { EffectSelectionModal } from "../../components/EffectSelectionModal";
 import type { EffectType } from "../../lib/videoEffects";
@@ -51,10 +52,14 @@ export default function StoryDetailsPage() {
   const [selectedScene, setSelectedScene] = useState(0);
   const [loading, setLoading] = useState(true);
   const [generatingImages, setGeneratingImages] = useState(false);
+  const [imageProgress, setImageProgress] = useState({ current: 0, total: 0 });
   const [generatingAudios, setGeneratingAudios] = useState(false);
+  const [audioProgress, setAudioProgress] = useState({ current: 0, total: 0 });
   const [generatingSceneImage, setGeneratingSceneImage] = useState<Set<number>>(new Set());
   const [generatingSceneAudio, setGeneratingSceneAudio] = useState<Set<number>>(new Set());
   const [generatingVideo, setGeneratingVideo] = useState(false);
+  const [videoProgress, setVideoProgress] = useState(0);
+  const videoProgressIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const [imageStyle, setImageStyle] = useState<string>("cinematic illustration");
   const [editingScene, setEditingScene] = useState<number | null>(null);
   const [editText, setEditText] = useState("");
@@ -212,14 +217,15 @@ export default function StoryDetailsPage() {
   const [captionsDrawerOpen, setCaptionsDrawerOpen] = useState(false);
   const [captionsEnabled, setCaptionsEnabled] = useState(true);
   const [captionPositionFromBottom, setCaptionPositionFromBottom] = useState(20); // Default 20% from bottom (0-100 range)
-  const [captionFontSize, setCaptionFontSize] = useState(20); // Good default for readability
-  const [captionFontWeight, setCaptionFontWeight] = useState(700); // Bold by default
+  const [captionFontSize, setCaptionFontSize] = useState(18); // Good default for readability
+  const [captionFontWeight, setCaptionFontWeight] = useState(600); // Semi-bold by default
   const [captionFontFamily, setCaptionFontFamily] = useState("Montserrat"); // Default font
-  const [captionActiveColor, setCaptionActiveColor] = useState("#FFEB3B"); // Yellow highlight
+  const [captionActiveColor, setCaptionActiveColor] = useState("#02f7f3"); // Cyan highlight
   const [captionInactiveColor, setCaptionInactiveColor] = useState("#FFFFFF"); // White
   const [captionWordsPerBatch, setCaptionWordsPerBatch] = useState(3); // Default 3 words at a time
   const [captionTextTransform, setCaptionTextTransform] = useState<"none" | "uppercase" | "lowercase" | "capitalize">("none");
   const [leftPanelView, setLeftPanelView] = useState<"scenes" | "captions" | "background_music">("scenes");
+  const [mobileView, setMobileView] = useState<"timeline" | "preview">("timeline"); // Mobile: show timeline or preview
 
   // Background Music State
   const [bgMusicEnabled, setBgMusicEnabled] = useState(false);
@@ -398,10 +404,10 @@ export default function StoryDetailsPage() {
         const settings = data.story.caption_settings;
         setCaptionsEnabled(settings.enabled ?? true);
         setCaptionFontFamily(settings.fontFamily ?? "Montserrat");
-        setCaptionFontSize(settings.fontSize ?? 20);
-        setCaptionFontWeight(settings.fontWeight ?? 700);
+        setCaptionFontSize(settings.fontSize ?? 18);
+        setCaptionFontWeight(settings.fontWeight ?? 600);
         setCaptionPositionFromBottom(settings.positionFromBottom ?? 20);
-        setCaptionActiveColor(settings.activeColor ?? "#FFEB3B");
+        setCaptionActiveColor(settings.activeColor ?? "#02f7f3");
         setCaptionInactiveColor(settings.inactiveColor ?? "#FFFFFF");
         setCaptionWordsPerBatch(settings.wordsPerBatch ?? 3);
         setCaptionTextTransform(settings.textTransform ?? "none");
@@ -708,10 +714,16 @@ export default function StoryDetailsPage() {
   const generateImages = async (style?: string, instructions?: string) => {
     if (!id) return;
     setGeneratingImages(true);
+    setImageProgress({ current: 0, total: scenes.length });
     setBulkImageDrawerOpen(false); // Close drawer when generation starts
 
     try {
       console.log("Starting image generation for story:", id);
+      console.log(`  Generating images for ${scenes.length} scenes`);
+
+      // Show progress as processing
+      setImageProgress({ current: 1, total: scenes.length });
+
       const res = await fetch("/api/generate_images", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -728,17 +740,21 @@ export default function StoryDetailsPage() {
       const result = await res.json();
       console.log("✅ Image generation completed:", result);
 
+      // Set progress to complete
+      setImageProgress({ current: scenes.length, total: scenes.length });
+
       // Update scenes with new images, using cache-busting timestamp
       const timestamp = Date.now();
-      const generatedTimestamp = new Date().toISOString();
       const updatedScenes = scenes.map((scene) => {
-        // Find the matching updated scene from API response
+        // Find the matching updated scene from API response (now includes complete data with word_timestamps)
         const updatedScene = result.updated_scenes?.find((s: any) => s.id === scene.id);
-        if (updatedScene && updatedScene.image_url) {
+        if (updatedScene) {
+          // Merge complete scene data from API (includes word_timestamps, audio_url, etc.)
           return {
-            ...scene,
-            image_url: `${updatedScene.image_url}?t=${timestamp}`,
-            image_generated_at: generatedTimestamp
+            ...updatedScene,
+            // Add cache-busting timestamp ONLY to image URLs (audio hasn't changed)
+            image_url: updatedScene.image_url ? `${updatedScene.image_url}?t=${timestamp}` : updatedScene.image_url
+            // Keep audio_url as-is from API response (no timestamp)
           };
         }
         return scene;
@@ -766,18 +782,21 @@ export default function StoryDetailsPage() {
       });
       setModifiedScenes(updatedModifiedScenes);
 
-      // Don't reset media preload state or re-preload audio
+      // Preload media (images and audio) to update cache
+      await preloadMedia(updatedScenes);
     } catch (err) {
       console.error("Image generation error:", err);
       alert(`Image generation failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
     } finally {
       setGeneratingImages(false);
+      setImageProgress({ current: 0, total: 0 });
     }
   };
 
   const generateAllAudio = async (voiceId?: string) => {
     if (!id) return;
     setGeneratingAudios(true);
+    setAudioProgress({ current: 0, total: scenes.length });
     setBulkAudioDrawerOpen(false); // Close drawer when generation starts
 
     try {
@@ -787,6 +806,9 @@ export default function StoryDetailsPage() {
       console.log("  Selected Voice ID:", voiceId);
       console.log("  Story Voice ID:", story?.voice_id);
       console.log("  Final Voice ID:", finalVoiceId);
+
+      // Show progress as the API processes
+      setAudioProgress({ current: 1, total: scenes.length });
 
       const res = await fetch("/api/generate_all_audio", {
         method: "POST",
@@ -843,6 +865,9 @@ export default function StoryDetailsPage() {
       });
       setModifiedScenes(updatedModifiedScenes);
 
+      // Set complete
+      setAudioProgress({ current: scenes.length, total: scenes.length });
+
       // Preload all new audio files
       await preloadMedia(updatedScenes);
     } catch (err) {
@@ -850,6 +875,7 @@ export default function StoryDetailsPage() {
       alert(`Bulk audio generation failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
     } finally {
       setGeneratingAudios(false);
+      setAudioProgress({ current: 0, total: 0 });
     }
   };
 
@@ -1202,10 +1228,26 @@ export default function StoryDetailsPage() {
   };
 
   const generateVideo = async () => {
-    if (!id) return;
+    if (!id || typeof id !== 'string') return;
+
     setGeneratingVideo(true);
+    setVideoProgress(0);
+
+    // Simulate progress based on estimated time (video generation takes ~20-40 seconds)
+    const startTime = Date.now();
+    const estimatedDuration = 30000; // 30 seconds estimate
+
+    const progressInterval = setInterval(() => {
+      const elapsed = Date.now() - startTime;
+      const estimatedProgress = Math.min(95, Math.floor((elapsed / estimatedDuration) * 100));
+      setVideoProgress(estimatedProgress);
+    }, 500); // Update every 500ms
+
+    videoProgressIntervalRef.current = progressInterval;
+
     try {
-      console.log("🎬 Starting video export for story:", id, "with aspect ratio:", aspectRatio);
+      console.log("🎬 Starting SERVER-SIDE video generation for story:", id);
+
       const res = await fetch("/api/generate_video", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1221,7 +1263,9 @@ export default function StoryDetailsPage() {
             activeColor: captionActiveColor,
             inactiveColor: captionInactiveColor,
             wordsPerBatch: captionWordsPerBatch,
-            textTransform: captionTextTransform
+            textTransform: captionTextTransform,
+            style: 'custom',
+            position: 'bottom'
           } : { enabled: false },
           background_music: bgMusicEnabled && bgMusicUrl ? {
             enabled: true,
@@ -1230,32 +1274,47 @@ export default function StoryDetailsPage() {
           } : { enabled: false }
         }),
       });
+
       if (!res.ok) {
         const errorData = await res.json();
-        throw new Error(errorData.error || "Video generation failed");
+        throw new Error(errorData.error || `Server error: ${res.status}`);
       }
-      const result = await res.json();
-      console.log("✅ Video export completed:", result);
+
+      const data = await res.json();
+      console.log("✅ Server-side video generation completed:", data);
+
+      // Clear progress interval and set to 100%
+      if (videoProgressIntervalRef.current) {
+        clearInterval(videoProgressIntervalRef.current);
+        videoProgressIntervalRef.current = null;
+      }
+      setVideoProgress(100);
 
       // Update video state
       setVideo({
-        video_url: result.video_url,
-        is_valid: result.is_valid,
-        duration: result.duration
+        video_url: data.video_url,
+        is_valid: data.is_valid,
+        duration: data.duration
       });
 
       // Auto-download the video
       const link = document.createElement('a');
-      link.href = result.video_url;
+      link.href = data.video_url;
       link.download = `${story?.title || 'story'}-${aspectRatio}.mp4`;
       link.click();
 
-      alert(`✅ Video exported successfully! Duration: ${result.duration?.toFixed(1)}s`);
+      alert(`✅ Video generated successfully! Duration: ${data.duration.toFixed(1)}s`);
     } catch (err) {
-      console.error("❌ Video export error:", err);
-      alert(`Video export failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      console.error("❌ Video generation error:", err);
+      alert(`Video generation failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
     } finally {
+      // Clean up progress interval
+      if (videoProgressIntervalRef.current) {
+        clearInterval(videoProgressIntervalRef.current);
+        videoProgressIntervalRef.current = null;
+      }
       setGeneratingVideo(false);
+      setVideoProgress(0);
     }
   };
 
@@ -1738,7 +1797,7 @@ export default function StoryDetailsPage() {
     return (
       <div className="flex items-center justify-center h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100">
         <div className="text-center">
-          <Loader2 className="animate-spin h-12 w-12 text-purple-600 mx-auto mb-4" />
+          <Loader2 className="animate-spin h-12 w-12 text-orange-600 mx-auto mb-4" />
           <p className="text-lg text-gray-700 font-medium">Loading your magical story...</p>
         </div>
       </div>
@@ -1747,80 +1806,94 @@ export default function StoryDetailsPage() {
 
   return (
     <div className="flex flex-col h-screen bg-black">
-      {/* Top Header - Dark theme like StoryShort */}
+      {/* Top Header */}
       <header className="bg-black border-b border-gray-800">
-        <div className="px-6 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => router.push("/")}
-              className="text-gray-400 hover:text-white hover:bg-gray-800"
-            >
-              <ArrowLeft className="w-4 h-4 mr-1" />
-              Back to videos
-            </Button>
-            {editingTitle ? (
-              <div className="flex items-center gap-2 flex-1 max-w-2xl">
-                <input
-                  type="text"
-                  value={editTitleText}
-                  onChange={(e) => setEditTitleText(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') saveStoryTitle();
-                    if (e.key === 'Escape') cancelEditingTitle();
-                  }}
-                  className="flex-1 text-lg font-semibold text-white bg-gray-800 border border-gray-700 rounded px-3 py-1.5 focus:outline-none focus:border-orange-500 min-w-[300px]"
-                  autoFocus
-                  disabled={savingTitle}
-                />
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={saveStoryTitle}
-                  disabled={savingTitle || !editTitleText.trim()}
-                  className="text-green-400 hover:text-green-300 hover:bg-gray-800 flex-shrink-0"
-                >
-                  {savingTitle ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={cancelEditingTitle}
-                  disabled={savingTitle}
-                  className="text-red-400 hover:text-red-300 hover:bg-gray-800 flex-shrink-0"
-                >
-                  <X className="w-4 h-4" />
-                </Button>
+        <div className="px-3 md:px-6 py-2 md:py-3 flex items-center justify-between gap-2 md:gap-6">
+          {/* Left side: Logo + Title + Back Link */}
+          <div className="flex items-center gap-2 md:gap-3 flex-1 min-w-0">
+            {/* Logo placeholder - Hidden on mobile */}
+            <div className="flex-shrink-0 hidden md:block">
+              <div className="w-10 h-10 bg-gradient-to-br from-orange-500 to-orange-600 rounded-lg flex items-center justify-center text-white font-bold text-base">
+                K
               </div>
-            ) : (
-              <div className="flex items-center gap-2">
-                <h1 className="text-lg font-semibold text-white">
-                  {story?.title || "Video Editor"}
-                </h1>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={startEditingTitle}
-                  className="text-gray-400 hover:text-white hover:bg-gray-800"
-                >
-                  <Pencil className="w-3 h-3" />
-                </Button>
-              </div>
-            )}
+            </div>
+
+            {/* Title + Back Link (vertical stack) */}
+            <div className="flex flex-col gap-0.5 flex-1 min-w-0">
+              {editingTitle ? (
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={editTitleText}
+                    onChange={(e) => setEditTitleText(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') saveStoryTitle();
+                      if (e.key === 'Escape') cancelEditingTitle();
+                    }}
+                    className="flex-1 text-base font-semibold text-white bg-gray-800 border border-gray-700 rounded px-3 py-1.5 focus:outline-none focus:border-orange-500"
+                    maxLength={64}
+                    autoFocus
+                    disabled={savingTitle}
+                    placeholder="Enter story title"
+                  />
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={saveStoryTitle}
+                    disabled={savingTitle || !editTitleText.trim()}
+                    className="text-green-400 hover:text-green-300 hover:bg-gray-800 flex-shrink-0"
+                  >
+                    {savingTitle ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={cancelEditingTitle}
+                    disabled={savingTitle}
+                    className="text-red-400 hover:text-red-300 hover:bg-gray-800 flex-shrink-0"
+                  >
+                    <X className="w-4 h-4" />
+                  </Button>
+                </div>
+              ) : (
+                <>
+                  <div className="flex items-center gap-2">
+                    <h1 className="text-sm md:text-lg font-semibold text-white truncate">
+                      {story?.title || "Video Editor"}
+                    </h1>
+                    <button
+                      onClick={startEditingTitle}
+                      className="p-1.5 md:p-2 bg-gray-800 hover:bg-orange-600 text-gray-400 hover:text-white rounded transition-colors flex-shrink-0"
+                    >
+                      <Pencil className="w-3 h-3 md:w-4 md:h-4" />
+                    </button>
+                  </div>
+                  <button
+                    onClick={() => router.push("/")}
+                    className="text-xs text-gray-400 hover:text-orange-400 transition-colors flex items-center gap-1 w-fit"
+                  >
+                    <ArrowLeft className="w-3 h-3" />
+                    <span className="hidden sm:inline">Back to stories</span>
+                    <span className="sm:hidden">Back</span>
+                  </button>
+                </>
+              )}
+            </div>
           </div>
 
-          <div className="flex items-center gap-4">
-            {/* Story Default Voice Selector */}
+          {/* Right side: Controls - Compact on mobile */}
+          <div className="flex items-center gap-1.5 md:gap-3 flex-shrink-0">
+            {/* Story Default Voice Selector - Compact on mobile */}
             <Popover open={storyVoicePopoverOpen} onOpenChange={setStoryVoicePopoverOpen}>
               <PopoverTrigger asChild>
                 <Button
                   variant="outline"
-                  className="bg-gray-800 border-gray-700 text-white hover:bg-gray-700 hover:text-white"
+                  size="sm"
+                  className="bg-gray-800 border-gray-700 text-white hover:bg-gray-700 hover:text-white px-2 md:px-3"
                 >
-                  <Volume2 className="w-4 h-4 mr-2" />
-                  {voices.find(v => v.id === (story?.voice_id || "21m00Tcm4TlvDq8ikWAM"))?.name || "Select Voice"}
-                  <ChevronDown className="w-4 h-4 ml-2 opacity-50" />
+                  <Volume2 className="w-3 h-3 md:w-4 md:h-4 md:mr-2" />
+                  <span className="hidden md:inline text-xs md:text-sm">{voices.find(v => v.id === (story?.voice_id || "21m00Tcm4TlvDq8ikWAM"))?.name || "Select Voice"}</span>
+                  <ChevronDown className="w-3 h-3 md:w-4 md:h-4 ml-1 md:ml-2 opacity-50" />
                 </Button>
               </PopoverTrigger>
               <PopoverContent className="w-64 p-0 bg-gray-900 border-gray-700" align="start">
@@ -1831,7 +1904,7 @@ export default function StoryDetailsPage() {
                   <div className="max-h-[300px] overflow-y-auto">
                     {loadingVoices ? (
                       <div className="flex items-center justify-center py-4">
-                        <Loader2 className="w-4 h-4 animate-spin text-purple-500" />
+                        <Loader2 className="w-4 h-4 animate-spin text-orange-500" />
                       </div>
                     ) : voices.length > 0 ? (
                       voices.map((voice) => (
@@ -1840,13 +1913,13 @@ export default function StoryDetailsPage() {
                           onClick={() => openVoiceUpdateConfirm(voice.id)}
                           className={`w-full flex items-center justify-between px-3 py-2 text-sm rounded-md transition-colors ${
                             (story?.voice_id || "21m00Tcm4TlvDq8ikWAM") === voice.id
-                              ? "bg-purple-900/30 text-white"
+                              ? "bg-orange-900/30 text-white"
                               : "text-gray-300 hover:bg-gray-800"
                           }`}
                         >
                           <span>{voice.name}</span>
                           {(story?.voice_id || "21m00Tcm4TlvDq8ikWAM") === voice.id && (
-                            <Check className="w-4 h-4 text-purple-400" />
+                            <Check className="w-4 h-4 text-orange-400" />
                           )}
                         </button>
                       ))
@@ -1864,7 +1937,7 @@ export default function StoryDetailsPage() {
                 <AlertDialogHeader>
                   <AlertDialogTitle>Update Story Default Voice?</AlertDialogTitle>
                   <AlertDialogDescription className="text-gray-400">
-                    Change story default voice to <span className="font-semibold text-purple-400">{pendingVoiceName}</span>?
+                    Change story default voice to <span className="font-semibold text-orange-400">{pendingVoiceName}</span>?
                     <br /><br />
                     All new scenes will use this voice by default. Existing scenes will keep their current voice unless regenerated.
                   </AlertDialogDescription>
@@ -1875,7 +1948,7 @@ export default function StoryDetailsPage() {
                   </AlertDialogCancel>
                   <AlertDialogAction
                     onClick={updateStoryVoice}
-                    className="bg-purple-600 hover:bg-purple-700 text-white"
+                    className="bg-orange-600 hover:bg-orange-700 text-white"
                   >
                     Update Voice
                   </AlertDialogAction>
@@ -1883,18 +1956,21 @@ export default function StoryDetailsPage() {
               </AlertDialogContent>
             </AlertDialog>
 
-            {/* Aspect Ratio Selector */}
+            {/* Aspect Ratio Selector - Compact on mobile */}
             <Popover open={aspectRatioPopoverOpen} onOpenChange={setAspectRatioPopoverOpen}>
               <PopoverTrigger asChild>
                 <Button
                   variant="outline"
-                  className="bg-gray-800 border-gray-700 text-white hover:bg-gray-700 hover:text-white"
+                  size="sm"
+                  className="bg-gray-800 border-gray-700 text-white hover:bg-gray-700 hover:text-white px-2 md:px-3"
                 >
-                  <Maximize className="w-4 h-4 mr-2" />
-                  {aspectRatio === "9:16" && "9:16"}
-                  {aspectRatio === "16:9" && "16:9"}
-                  {aspectRatio === "1:1" && "1:1"}
-                  <ChevronDown className="w-4 h-4 ml-2 opacity-50" />
+                  <Maximize className="w-3 h-3 md:w-4 md:h-4 md:mr-2" />
+                  <span className="hidden md:inline">
+                    {aspectRatio === "9:16" && "9:16"}
+                    {aspectRatio === "16:9" && "16:9"}
+                    {aspectRatio === "1:1" && "1:1"}
+                  </span>
+                  <ChevronDown className="w-3 h-3 md:w-4 md:h-4 ml-1 md:ml-2 opacity-50" />
                 </Button>
               </PopoverTrigger>
               <PopoverContent className="w-48 p-0 bg-gray-900 border-gray-700" align="start">
@@ -1910,13 +1986,13 @@ export default function StoryDetailsPage() {
                       }}
                       className={`w-full flex items-center justify-between px-3 py-2 text-sm rounded-md transition-colors ${
                         aspectRatio === "9:16"
-                          ? "bg-purple-900/30 text-white"
+                          ? "bg-orange-900/30 text-white"
                           : "text-gray-300 hover:bg-gray-800"
                       }`}
                     >
                       <span>9:16 (Portrait)</span>
                       {aspectRatio === "9:16" && (
-                        <Check className="w-4 h-4 text-purple-400" />
+                        <Check className="w-4 h-4 text-orange-400" />
                       )}
                     </button>
                     <button
@@ -1926,13 +2002,13 @@ export default function StoryDetailsPage() {
                       }}
                       className={`w-full flex items-center justify-between px-3 py-2 text-sm rounded-md transition-colors ${
                         aspectRatio === "16:9"
-                          ? "bg-purple-900/30 text-white"
+                          ? "bg-orange-900/30 text-white"
                           : "text-gray-300 hover:bg-gray-800"
                       }`}
                     >
                       <span>16:9 (Landscape)</span>
                       {aspectRatio === "16:9" && (
-                        <Check className="w-4 h-4 text-purple-400" />
+                        <Check className="w-4 h-4 text-orange-400" />
                       )}
                     </button>
                     <button
@@ -1942,13 +2018,13 @@ export default function StoryDetailsPage() {
                       }}
                       className={`w-full flex items-center justify-between px-3 py-2 text-sm rounded-md transition-colors ${
                         aspectRatio === "1:1"
-                          ? "bg-purple-900/30 text-white"
+                          ? "bg-orange-900/30 text-white"
                           : "text-gray-300 hover:bg-gray-800"
                       }`}
                     >
                       <span>1:1 (Square)</span>
                       {aspectRatio === "1:1" && (
-                        <Check className="w-4 h-4 text-purple-400" />
+                        <Check className="w-4 h-4 text-orange-400" />
                       )}
                     </button>
                   </div>
@@ -1956,36 +2032,60 @@ export default function StoryDetailsPage() {
               </PopoverContent>
             </Popover>
 
-            {/* Export Button */}
-            <Button
-              onClick={generateVideo}
-              disabled={generatingVideo}
-              className="bg-orange-500 hover:bg-orange-600 text-white font-medium px-6"
-            >
-              {generatingVideo ? (
-                <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Exporting...
-                </>
-              ) : (
-                <>
-                  <Download className="w-4 h-4 mr-2" />
-                  Export / Share
-                </>
+            {/* Export Button with Video Link - Compact on mobile */}
+            <div className="flex items-center gap-1 md:gap-2">
+              <Button
+                onClick={generateVideo}
+                disabled={generatingVideo}
+                size="sm"
+                className="bg-orange-600 hover:bg-orange-700 text-white font-medium min-w-0 md:min-w-[150px] px-2 md:px-4"
+              >
+                {generatingVideo ? (
+                  <>
+                    <Loader2 className="w-3 h-3 md:w-4 md:h-4 mr-1 md:mr-2 animate-spin" />
+                    <span className="text-xs md:text-sm">{videoProgress > 0 ? `${videoProgress}%` : 'Starting...'}</span>
+                  </>
+                ) : (
+                  <>
+                    <Download className="w-3 h-3 md:w-4 md:h-4 md:mr-2" />
+                    <span className="hidden md:inline">Export / Share</span>
+                    <span className="md:hidden text-xs">Export</span>
+                  </>
+                )}
+              </Button>
+
+              {/* Video link - Show if video exists */}
+              {video?.video_url && (
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        onClick={() => window.open(video.video_url, '_blank')}
+                        className="p-1 md:p-1.5 text-gray-400 hover:text-white transition-colors rounded hover:bg-gray-800"
+                        aria-label="View generated video"
+                      >
+                        <ExternalLink className="w-3 h-3 md:w-4 md:h-4" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>View generated video</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
               )}
-            </Button>
+            </div>
           </div>
         </div>
       </header>
 
-      <div className="flex flex-1 overflow-hidden">
-        {/* Left Sidebar - Tool Icons - Narrow */}
-        <aside className="w-16 bg-black border-r border-gray-800 flex flex-col items-center py-6 gap-6">
+      <div className="flex flex-1 overflow-hidden flex-col md:flex-row">
+        {/* Left Sidebar - Tool Icons (Bottom on mobile, Left on tablets/desktop) */}
+        <aside className="md:w-20 bg-black border-t md:border-t-0 md:border-r border-gray-800 flex md:flex-col items-center py-2 md:py-6 gap-4 md:gap-6 order-last md:order-first justify-around md:justify-start">
           {/* Scenes/Frames Icon */}
           <button
             onClick={() => setLeftPanelView("scenes")}
             className={`w-10 h-10 flex flex-col items-center justify-center transition-colors ${
-              leftPanelView === "scenes" ? "text-purple-400 bg-purple-900/20" : "text-gray-400 hover:text-white"
+              leftPanelView === "scenes" ? "text-orange-400 bg-orange-900/20" : "text-gray-400 hover:text-white"
             }`}
             title="Scenes"
           >
@@ -1997,7 +2097,7 @@ export default function StoryDetailsPage() {
           <button
             onClick={() => setLeftPanelView("captions")}
             className={`w-10 h-10 flex flex-col items-center justify-center transition-colors ${
-              leftPanelView === "captions" ? "text-purple-400 bg-purple-900/20" : "text-gray-400 hover:text-white"
+              leftPanelView === "captions" ? "text-orange-400 bg-orange-900/20" : "text-gray-400 hover:text-white"
             }`}
             title="Captions"
           >
@@ -2009,7 +2109,7 @@ export default function StoryDetailsPage() {
           <button
             onClick={() => setLeftPanelView("background_music")}
             className={`w-10 h-10 flex flex-col items-center justify-center transition-colors ${
-              leftPanelView === "background_music" ? "text-purple-400 bg-purple-900/20" : "text-gray-400 hover:text-white"
+              leftPanelView === "background_music" ? "text-orange-400 bg-orange-900/20" : "text-gray-400 hover:text-white"
             }`}
             title="Background Music"
           >
@@ -2021,15 +2121,76 @@ export default function StoryDetailsPage() {
           </button>
         </aside>
 
-        {/* Main Content - Side by Side Layout: 40% Timeline + 60% Preview */}
-        <main className="flex-1 flex bg-black overflow-hidden">
-          {/* Left Timeline Section - 40% width */}
-          <div className="w-[40%] border-r border-gray-800 bg-black overflow-y-auto">
+        {/* Main Content - Toggle on mobile, Side by Side on tablets/desktop */}
+        <main className="flex-1 flex bg-black overflow-hidden relative">
+          {/* Left Timeline Section - Toggleable on mobile, 45% on tablets/desktop */}
+          <div className={`${mobileView === 'timeline' ? 'flex' : 'hidden'} md:flex md:w-[45%] border-r border-gray-800 bg-black overflow-y-auto flex-col w-full`}>
             {leftPanelView === "scenes" ? (
               /* Scenes Timeline View */
               <TooltipProvider delayDuration={300}>
-                <div className="p-4 space-y-3">
-                  {scenes.map((scene, index) => (
+                <div className="relative">
+                  {/* Sticky Header with Bulk Actions */}
+                  <div className="sticky top-0 z-10 bg-black border-b border-gray-800 px-3 md:px-10 py-3">
+                    <div className="flex gap-3">
+                      {/* Generate All Images Button */}
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            onClick={() => setBulkImageDrawerOpen(true)}
+                            disabled={generatingImages}
+                            size="sm"
+                            className="flex-1 bg-orange-600 hover:bg-orange-700 text-white text-xs"
+                          >
+                            {generatingImages ? (
+                              <>
+                                <Loader2 className="w-3 h-3 mr-1.5 animate-spin" />
+                                Generating...
+                              </>
+                            ) : (
+                              <>
+                                <Image className="w-3 h-3 mr-1.5" />
+                                Images for All Scenes
+                              </>
+                            )}
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p>Generate images for all {scenes.length} scenes at once</p>
+                        </TooltipContent>
+                      </Tooltip>
+
+                      {/* Generate All Audio Button */}
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            onClick={() => setBulkAudioDrawerOpen(true)}
+                            disabled={generatingAudios}
+                            size="sm"
+                            className="flex-1 bg-orange-600 hover:bg-orange-700 text-white text-xs"
+                          >
+                            {generatingAudios ? (
+                              <>
+                                <Loader2 className="w-3 h-3 mr-1.5 animate-spin" />
+                                Generating...
+                              </>
+                            ) : (
+                              <>
+                                <Volume2 className="w-3 h-3 mr-1.5" />
+                                Audio for All Scenes
+                              </>
+                            )}
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p>Generate audio for all {scenes.length} scenes at once</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </div>
+                  </div>
+
+                  {/* Scenes List */}
+                  <div className="px-3 md:px-10 py-3 space-y-3">
+                    {scenes.map((scene, index) => (
                 <div key={`scene-wrapper-${scene.id}`}>
                   {/* Add Scene Button - appears before each scene */}
                   <div className="flex justify-center my-2">
@@ -2064,7 +2225,7 @@ export default function StoryDetailsPage() {
                       : 'border-gray-800 hover:border-gray-700'
                   }`}
                 >
-                  <div className="p-3 flex flex-col">
+                  <div className="p-2.5 lg:p-3 flex flex-col">
                     {/* Thumbnail and Scene Number */}
                     <div className="flex gap-3 mb-3">
                       {/* Thumbnail */}
@@ -2083,7 +2244,7 @@ export default function StoryDetailsPage() {
                         )}
                         {/* Scene number badge */}
                         <div className="absolute top-1 left-1 bg-black/80 px-2 py-0.5 rounded text-white text-xs font-bold">
-                          #{index}
+                          #{index + 1}
                         </div>
                         {/* Audio indicator - clickable to play/pause */}
                         {scene.audio_url && (
@@ -2103,8 +2264,8 @@ export default function StoryDetailsPage() {
                       {/* Scene Info */}
                       <div className="flex-1 flex flex-col min-w-0">
                         <div className="flex items-center justify-between mb-1">
-                          <div className="text-orange-500 text-xs font-medium flex items-center gap-1">
-                            <span>🎤</span> Voice caption
+                          <div className="text-orange-500 text-xs font-medium">
+                            Scene Narration
                           </div>
                           {/* Modified indicator - show when scene was edited and has existing media */}
                           {modifiedScenes.has(index) && (scene.image_url || scene.audio_url) && (
@@ -2127,7 +2288,7 @@ export default function StoryDetailsPage() {
                               value={editText}
                               onChange={(e) => setEditText(e.target.value)}
                               onClick={(e) => e.stopPropagation()}
-                              className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-gray-300 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+                              className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-gray-300 text-xs focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent resize-none"
                               rows={4}
                               autoFocus
                             />
@@ -2138,7 +2299,7 @@ export default function StoryDetailsPage() {
                                   editScene(index, editText);
                                 }}
                                 disabled={!editText.trim() || editText === scene.text}
-                                className="px-2 py-1 bg-blue-600 hover:bg-blue-700 text-white text-xs rounded transition-colors flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                                className="px-2 py-1 bg-orange-600 hover:bg-orange-700 text-white text-xs rounded transition-colors flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
                               >
                                 <Check className="w-3 h-3" />
                                 Save
@@ -2168,8 +2329,8 @@ export default function StoryDetailsPage() {
                     </div>
 
                     {/* Action Buttons */}
-                    <div className="flex items-center justify-between gap-2 pt-3 border-t border-gray-800">
-                      <div className="flex gap-2">
+                    <div className="flex items-center justify-between gap-1.5 lg:gap-2 pt-3 border-t border-gray-800">
+                      <div className="flex gap-1.5 lg:gap-2">
                         {/* Audio Button or Status */}
                         <Tooltip>
                           <TooltipTrigger asChild>
@@ -2179,14 +2340,14 @@ export default function StoryDetailsPage() {
                                   e.stopPropagation();
                                   openAudioDrawer(index);
                                 }}
-                                className={`px-3 py-1.5 text-xs rounded transition-colors flex items-center gap-1.5 ${
+                                className={`px-2 lg:px-3 py-1.5 text-xs rounded transition-colors flex items-center gap-1 lg:gap-1.5 ${
                                   isAudioOutdated(scene)
                                     ? 'bg-yellow-900/50 hover:bg-yellow-800/60 border border-yellow-700/50 text-yellow-400'
                                     : 'bg-green-800 hover:bg-green-700 text-white'
                                 }`}
                               >
                                 <Check className="w-3 h-3" />
-                                Audio
+                                <span className="text-[10px] lg:text-xs">Audio</span>
                               </button>
                             ) : (
                               <button
@@ -2195,17 +2356,17 @@ export default function StoryDetailsPage() {
                                   openAudioDrawer(index);
                                 }}
                                 disabled={generatingSceneAudio.has(index)}
-                                className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-400 text-xs rounded transition-colors flex items-center gap-1.5 disabled:opacity-50"
+                                className="px-2 lg:px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-400 text-xs rounded transition-colors flex items-center gap-1 lg:gap-1.5 disabled:opacity-50"
                               >
                                 {generatingSceneAudio.has(index) ? (
                                   <>
                                     <Loader2 className="w-3 h-3 animate-spin" />
-                                    Audio...
+                                    <span className="text-[10px] lg:text-xs">Audio...</span>
                                   </>
                                 ) : (
                                   <>
                                     <X className="w-3 h-3" />
-                                    Audio
+                                    <span className="text-[10px] lg:text-xs">Audio</span>
                                   </>
                                 )}
                               </button>
@@ -2226,7 +2387,7 @@ export default function StoryDetailsPage() {
                                   openImageDrawer(index);
                                 }}
                                 disabled={generatingSceneImage.has(index)}
-                                className={`px-3 py-1.5 text-xs rounded transition-colors flex items-center gap-1.5 disabled:opacity-50 ${
+                                className={`px-2 lg:px-3 py-1.5 text-xs rounded transition-colors flex items-center gap-1 lg:gap-1.5 disabled:opacity-50 ${
                                   isImageOutdated(scene)
                                     ? 'bg-yellow-900/50 hover:bg-yellow-800/60 border border-yellow-700/50 text-yellow-400'
                                     : 'bg-green-800 hover:bg-green-700 text-white'
@@ -2235,12 +2396,12 @@ export default function StoryDetailsPage() {
                                 {generatingSceneImage.has(index) ? (
                                   <>
                                     <Loader2 className="w-3 h-3 animate-spin" />
-                                    Regen...
+                                    <span className="text-[10px] lg:text-xs">Regen...</span>
                                   </>
                                 ) : (
                                   <>
                                     <Check className="w-3 h-3" />
-                                    Image
+                                    <span className="text-[10px] lg:text-xs">Image</span>
                                   </>
                                 )}
                               </button>
@@ -2251,17 +2412,17 @@ export default function StoryDetailsPage() {
                                   openImageDrawer(index);
                                 }}
                                 disabled={generatingSceneImage.has(index)}
-                                className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-400 text-xs rounded transition-colors flex items-center gap-1.5 disabled:opacity-50"
+                                className="px-2 lg:px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-400 text-xs rounded transition-colors flex items-center gap-1 lg:gap-1.5 disabled:opacity-50"
                               >
                                 {generatingSceneImage.has(index) ? (
                                   <>
                                     <Loader2 className="w-3 h-3 animate-spin" />
-                                    Image...
+                                    <span className="text-[10px] lg:text-xs">Image...</span>
                                   </>
                                 ) : (
                                   <>
                                     <X className="w-3 h-3" />
-                                    Image
+                                    <span className="text-[10px] lg:text-xs">Image</span>
                                   </>
                                 )}
                               </button>
@@ -2272,7 +2433,7 @@ export default function StoryDetailsPage() {
                           </TooltipContent>
                         </Tooltip>
 
-                        {/* Effect Button */}
+                        {/* Effect Button - Icon Only */}
                         {scene.image_url && (
                           <Tooltip>
                             <TooltipTrigger asChild>
@@ -2282,10 +2443,9 @@ export default function StoryDetailsPage() {
                                   setSelectedEffectScene(index);
                                   setEffectModalOpen(true);
                                 }}
-                                className="px-3 py-1.5 bg-purple-700 hover:bg-purple-600 text-white text-xs rounded transition-colors flex items-center gap-1.5"
+                                className="p-1.5 bg-gray-800 hover:bg-gray-700 text-white rounded transition-colors"
                               >
-                                <Sparkles className="w-3 h-3" />
-                                Effect
+                                <Sparkles className="w-3.5 h-3.5" />
                               </button>
                             </TooltipTrigger>
                             <TooltipContent>
@@ -2294,28 +2454,41 @@ export default function StoryDetailsPage() {
                           </Tooltip>
                         )}
                       </div>
-                      <div className="flex gap-2">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setEditingScene(index);
-                            setEditText(scene.text);
-                          }}
-                          className="p-2 bg-gray-800 hover:bg-blue-600 text-gray-400 hover:text-white rounded transition-colors"
-                        >
-                          <Pencil className="w-4 h-4" />
-                        </button>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setSceneToDelete(index);
-                            setDeleteDialogOpen(true);
-                          }}
-                          className="p-2 bg-gray-800 hover:bg-red-600 text-gray-400 hover:text-white rounded transition-colors"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
+                      {/* More Actions Menu */}
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <button
+                            onClick={(e) => e.stopPropagation()}
+                            className="p-1.5 bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white rounded transition-colors"
+                          >
+                            <MoreHorizontal className="w-3.5 h-3.5" />
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-40 bg-gray-900 border-gray-700">
+                          <DropdownMenuItem
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setEditingScene(index);
+                              setEditText(scene.text);
+                            }}
+                            className="flex items-center gap-2 text-gray-300 hover:text-white hover:bg-gray-800 cursor-pointer"
+                          >
+                            <Pencil className="w-4 h-4" />
+                            <span>Edit Scene</span>
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSceneToDelete(index);
+                              setDeleteDialogOpen(true);
+                            }}
+                            className="flex items-center gap-2 text-red-400 hover:text-red-300 hover:bg-gray-800 cursor-pointer"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                            <span>Delete Scene</span>
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                     </div>
                   </div>
                 </div>
@@ -2341,83 +2514,12 @@ export default function StoryDetailsPage() {
                   </TooltipContent>
                 </Tooltip>
               </div>
-
-              {/* Generate Images Button */}
-              <div className="bg-gray-900 rounded-lg border-2 border-dashed border-gray-700 hover:border-gray-600 transition-all">
-                <div className="p-4 flex flex-col items-center justify-center gap-3">
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        onClick={() => setBulkImageDrawerOpen(true)}
-                        disabled={generatingImages}
-                        className="w-full bg-blue-600 hover:bg-blue-700 text-white"
-                      >
-                        {generatingImages ? (
-                          <>
-                            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                            Generating All...
-                          </>
-                        ) : (
-                          <>
-                            <Image className="w-4 h-4 mr-2" />
-                            Generate All Images
-                          </>
-                        )}
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      <p>Generate images for all scenes at once using AI</p>
-                    </TooltipContent>
-                  </Tooltip>
-                  <div className="text-xs text-gray-400 text-center">
-                    {scenes.filter(s => s.image_url).length} / {scenes.length} scenes with images
-                  </div>
-                  <div className="text-xs text-gray-500 text-center">
-                    Tip: Click "Image" on each scene to generate individually
                   </div>
                 </div>
-              </div>
-
-              {/* Generate All Audio Button */}
-              <div className="bg-gray-900 rounded-lg border-2 border-dashed border-gray-700 hover:border-gray-600 transition-all">
-                <div className="p-4 flex flex-col items-center justify-center gap-3">
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        onClick={() => setBulkAudioDrawerOpen(true)}
-                        disabled={generatingAudios}
-                        className="w-full bg-purple-600 hover:bg-purple-700 text-white"
-                      >
-                        {generatingAudios ? (
-                          <>
-                            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                            Generating All...
-                          </>
-                        ) : (
-                          <>
-                            <Volume2 className="w-4 h-4 mr-2" />
-                            Generate All Audio
-                          </>
-                        )}
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      <p>Generate audio narration for all scenes at once</p>
-                    </TooltipContent>
-                  </Tooltip>
-                  <div className="text-xs text-gray-400 text-center">
-                    {scenes.filter(s => s.audio_url).length} / {scenes.length} scenes with audio
-                  </div>
-                  <div className="text-xs text-gray-500 text-center">
-                    Tip: Click "Audio" on each scene to generate individually
-                  </div>
-                </div>
-              </div>
-            </div>
-          </TooltipProvider>
+              </TooltipProvider>
             ) : leftPanelView === "captions" ? (
               /* Captions Settings View */
-              <div className="p-6 space-y-6">
+              <div className="p-3 md:p-6 space-y-4 md:space-y-6">
                 <h2 className="text-xl font-semibold text-white mb-4">Caption Settings</h2>
 
                 {/* Enable/Disable Captions */}
@@ -2430,7 +2532,7 @@ export default function StoryDetailsPage() {
                     <button
                       onClick={() => setCaptionsEnabled(!captionsEnabled)}
                       className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                        captionsEnabled ? "bg-purple-600" : "bg-gray-700"
+                        captionsEnabled ? "bg-orange-600" : "bg-gray-700"
                       }`}
                     >
                       <span
@@ -2447,7 +2549,7 @@ export default function StoryDetailsPage() {
                     {/* Caption Position from Bottom */}
                     <div>
                       <label className="block text-sm font-medium text-gray-300 mb-3">
-                        Position from Bottom: <span className="text-purple-400 font-bold">{captionPositionFromBottom}%</span>
+                        Position from Bottom: <span className="text-orange-400 font-bold">{captionPositionFromBottom}%</span>
                       </label>
                       <Slider
                         value={[captionPositionFromBottom]}
@@ -2467,7 +2569,7 @@ export default function StoryDetailsPage() {
                       <select
                         value={captionFontFamily}
                         onChange={(e) => setCaptionFontFamily(e.target.value)}
-                        className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded text-gray-300 focus:outline-none focus:border-purple-500"
+                        className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded text-gray-300 focus:outline-none focus:border-orange-500"
                         style={{
                           backgroundImage: `url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e")`,
                           backgroundPosition: 'right 0.5rem center',
@@ -2519,7 +2621,7 @@ export default function StoryDetailsPage() {
                     {/* Font Size */}
                     <div>
                       <label className="block text-sm font-medium text-gray-300 mb-3">
-                        Font Size: <span className="text-purple-400 font-bold">{captionFontSize}px</span>
+                        Font Size: <span className="text-orange-400 font-bold">{captionFontSize}px</span>
                       </label>
                       <Slider
                         value={[captionFontSize]}
@@ -2534,7 +2636,7 @@ export default function StoryDetailsPage() {
                     {/* Font Weight */}
                     <div>
                       <label className="block text-sm font-medium text-gray-300 mb-3">
-                        Font Weight: <span className="text-purple-400 font-bold">{captionFontWeight}</span>
+                        Font Weight: <span className="text-orange-400 font-bold">{captionFontWeight}</span>
                       </label>
                       <Slider
                         value={[captionFontWeight]}
@@ -2565,7 +2667,7 @@ export default function StoryDetailsPage() {
                           type="text"
                           value={captionActiveColor}
                           onChange={(e) => setCaptionActiveColor(e.target.value)}
-                          className="flex-1 px-3 py-2 bg-gray-800 border border-gray-700 rounded text-gray-300 text-sm focus:outline-none focus:border-purple-500"
+                          className="flex-1 px-3 py-2 bg-gray-800 border border-gray-700 rounded text-gray-300 text-sm focus:outline-none focus:border-orange-500"
                           placeholder="#FFEB3B"
                         />
                       </div>
@@ -2590,7 +2692,7 @@ export default function StoryDetailsPage() {
                           type="text"
                           value={captionInactiveColor}
                           onChange={(e) => setCaptionInactiveColor(e.target.value)}
-                          className="flex-1 px-3 py-2 bg-gray-800 border border-gray-700 rounded text-gray-300 text-sm focus:outline-none focus:border-purple-500"
+                          className="flex-1 px-3 py-2 bg-gray-800 border border-gray-700 rounded text-gray-300 text-sm focus:outline-none focus:border-orange-500"
                           placeholder="#FFFFFF"
                         />
                       </div>
@@ -2616,7 +2718,7 @@ export default function StoryDetailsPage() {
                     {/* Words Per Batch */}
                     <div>
                       <label className="block text-sm font-medium text-gray-300 mb-3">
-                        Words Per Batch: <span className="text-purple-400 font-bold">{captionWordsPerBatch} {captionWordsPerBatch === 1 ? 'word' : 'words'}</span>
+                        Words Per Batch: <span className="text-orange-400 font-bold">{captionWordsPerBatch} {captionWordsPerBatch === 1 ? 'word' : 'words'}</span>
                       </label>
                       <Slider
                         value={[captionWordsPerBatch]}
@@ -2632,7 +2734,7 @@ export default function StoryDetailsPage() {
               </div>
             ) : (
               /* Background Music Settings View */
-              <div className="p-6 space-y-6">
+              <div className="p-3 md:p-6 space-y-4 md:space-y-6">
                 <h2 className="text-xl font-semibold text-white mb-4">Background Music</h2>
 
                 {/* Enable/Disable Background Music */}
@@ -2646,7 +2748,7 @@ export default function StoryDetailsPage() {
                       onClick={() => setBgMusicEnabled(!bgMusicEnabled)}
                       disabled={!bgMusicUrl}
                       className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                        bgMusicEnabled ? "bg-purple-600" : "bg-gray-700"
+                        bgMusicEnabled ? "bg-orange-600" : "bg-gray-700"
                       } ${!bgMusicUrl ? "opacity-50 cursor-not-allowed" : ""}`}
                     >
                       <span
@@ -2663,7 +2765,7 @@ export default function StoryDetailsPage() {
                   <div className="p-4 bg-gray-800 rounded-lg">
                     <h3 className="text-sm font-medium text-white mb-3">Selected Music</h3>
                     <div className="flex items-center gap-3 p-3 bg-gray-900 rounded-lg">
-                      <Music className="w-5 h-5 text-purple-400" />
+                      <Music className="w-5 h-5 text-orange-400" />
                       <div className="flex-1 min-w-0">
                         <p className="text-sm text-white truncate">{bgMusicName || "Background music"}</p>
                         <p className="text-xs text-gray-400">Click play to preview</p>
@@ -2671,7 +2773,7 @@ export default function StoryDetailsPage() {
                       <Button
                         size="sm"
                         onClick={toggleBgMusicPlayback}
-                        className="bg-purple-600 hover:bg-purple-700"
+                        className="bg-orange-600 hover:bg-orange-700"
                       >
                         {bgMusicPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
                       </Button>
@@ -2697,7 +2799,7 @@ export default function StoryDetailsPage() {
                       <Button
                         size="sm"
                         variant="outline"
-                        className="bg-purple-600 hover:bg-purple-700 text-white border-none"
+                        className="bg-orange-600 hover:bg-orange-700 text-white border-none"
                         disabled={bgMusicUploading}
                       >
                         {bgMusicUploading ? (
@@ -2727,7 +2829,7 @@ export default function StoryDetailsPage() {
                         }}
                         className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
                           selectedCategory === category
-                            ? "bg-purple-600 text-white"
+                            ? "bg-orange-600 text-white"
                             : "bg-gray-700 text-gray-300 hover:bg-gray-600"
                         }`}
                       >
@@ -2740,7 +2842,7 @@ export default function StoryDetailsPage() {
                   <div className="space-y-2 max-h-96 overflow-y-auto">
                     {musicLibraryLoading ? (
                       <div className="flex items-center justify-center py-8">
-                        <Loader2 className="w-6 h-6 animate-spin text-purple-400" />
+                        <Loader2 className="w-6 h-6 animate-spin text-orange-400" />
                       </div>
                     ) : musicLibrary.length === 0 ? (
                       <p className="text-sm text-gray-400 text-center py-8">
@@ -2753,14 +2855,14 @@ export default function StoryDetailsPage() {
                           onClick={() => music.file_url && handleSelectMusicFromLibrary(music)}
                           className={`p-3 rounded-lg cursor-pointer transition-colors ${
                             bgMusicId === music.id
-                              ? "bg-purple-900/40 border border-purple-500"
+                              ? "bg-orange-900/40 border border-orange-500"
                               : music.file_url
                               ? "bg-gray-900 hover:bg-gray-800"
                               : "bg-gray-900/50 opacity-50 cursor-not-allowed"
                           }`}
                         >
                           <div className="flex items-center gap-3">
-                            <Music className={`w-4 h-4 ${bgMusicId === music.id ? "text-purple-400" : "text-gray-500"}`} />
+                            <Music className={`w-4 h-4 ${bgMusicId === music.id ? "text-orange-400" : "text-gray-500"}`} />
                             <div className="flex-1 min-w-0">
                               <p className="text-sm text-white truncate font-medium">{music.name}</p>
                               {music.description && (
@@ -2768,7 +2870,7 @@ export default function StoryDetailsPage() {
                               )}
                               <div className="flex items-center gap-2 mt-1">
                                 {music.is_preset && (
-                                  <span className="px-2 py-0.5 bg-blue-900/50 text-blue-300 text-xs rounded">Preset</span>
+                                  <span className="px-2 py-0.5 bg-gray-700 text-gray-300 text-xs rounded">Preset</span>
                                 )}
                                 {music.category && (
                                   <span className="px-2 py-0.5 bg-gray-700 text-gray-300 text-xs rounded">{music.category}</span>
@@ -2779,7 +2881,7 @@ export default function StoryDetailsPage() {
                               </div>
                             </div>
                             {bgMusicId === music.id && (
-                              <div className="w-2 h-2 bg-purple-500 rounded-full"></div>
+                              <div className="w-2 h-2 bg-orange-500 rounded-full"></div>
                             )}
                           </div>
                         </div>
@@ -2792,7 +2894,7 @@ export default function StoryDetailsPage() {
                 {bgMusicUrl && (
                   <div>
                     <label className="block text-sm font-medium text-gray-300 mb-3">
-                      Volume: <span className="text-purple-400 font-bold">{bgMusicVolume}%</span>
+                      Volume: <span className="text-orange-400 font-bold">{bgMusicVolume}%</span>
                     </label>
                     <p className="text-xs text-gray-400 mb-3">
                       Adjust background music volume relative to narration
@@ -2811,8 +2913,8 @@ export default function StoryDetailsPage() {
             )}
           </div>
 
-          {/* Right Preview Section - 60% width */}
-          <div className="w-[60%] flex items-center justify-center p-8 bg-black">
+          {/* Right Preview Section - Toggleable on mobile, 55% on tablets/desktop */}
+          <div className={`${mobileView === 'preview' ? 'flex' : 'hidden'} md:flex flex-1 md:w-[55%] items-center justify-center p-3 bg-black w-full`}>
             <div className="video-preview-container">
               {scenes[selectedScene]?.image_url ? (
                 <div className="relative">
@@ -2982,6 +3084,26 @@ export default function StoryDetailsPage() {
                 </div>
               )}
             </div>
+          </div>
+
+          {/* Mobile View Toggle Button - Only visible on mobile */}
+          <div className="md:hidden fixed bottom-20 right-4 z-30 flex gap-2">
+            <button
+              onClick={() => setMobileView(mobileView === 'timeline' ? 'preview' : 'timeline')}
+              className="bg-orange-600 hover:bg-orange-700 text-white px-4 py-3 rounded-full shadow-lg flex items-center gap-2 font-semibold"
+            >
+              {mobileView === 'timeline' ? (
+                <>
+                  <PlayCircle className="w-5 h-5" />
+                  <span>Preview</span>
+                </>
+              ) : (
+                <>
+                  <ImageIcon className="w-5 h-5" />
+                  <span>Timeline</span>
+                </>
+              )}
+            </button>
           </div>
         </main>
       </div>
@@ -3242,7 +3364,7 @@ export default function StoryDetailsPage() {
                 </div>
                 {loadingVoices ? (
                   <div className="flex items-center justify-center py-3">
-                    <Loader2 className="w-5 h-5 animate-spin text-purple-500" />
+                    <Loader2 className="w-5 h-5 animate-spin text-orange-500" />
                     <span className="ml-2 text-sm text-gray-400">Loading voices...</span>
                   </div>
                 ) : (
@@ -3254,13 +3376,13 @@ export default function StoryDetailsPage() {
                         onClick={() => setSelectedVoiceId(voice.id)}
                         className={`flex items-center justify-between p-3 cursor-pointer transition-colors border-b border-gray-700 last:border-b-0 ${
                           selectedVoiceId === voice.id
-                            ? 'bg-purple-900/30 border-l-4 border-l-purple-500'
+                            ? 'bg-orange-900/30 border-l-4 border-l-purple-500'
                             : 'hover:bg-gray-700'
                         }`}
                       >
                         <div className="flex items-center gap-2 flex-1">
                           {selectedVoiceId === voice.id && (
-                            <Check className="w-4 h-4 text-purple-400" />
+                            <Check className="w-4 h-4 text-orange-400" />
                           )}
                           <span className="text-sm text-white">{voice.name}</span>
                         </div>
@@ -3272,7 +3394,7 @@ export default function StoryDetailsPage() {
                             }}
                             className={`p-1.5 rounded-full transition-colors ${
                               playingPreviewId === voice.id
-                                ? 'bg-purple-600 text-white'
+                                ? 'bg-orange-600 text-white'
                                 : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
                             }`}
                             title="Preview voice"
@@ -3324,7 +3446,7 @@ export default function StoryDetailsPage() {
                     setAudioDrawerOpen(false);
                   }}
                   disabled={generatingSceneAudio.has(audioDrawerScene)}
-                  className="flex-1 bg-purple-600 hover:bg-purple-700 text-white"
+                  className="flex-1 bg-orange-600 hover:bg-orange-700 text-white"
                 >
                   {generatingSceneAudio.has(audioDrawerScene) ? (
                     <>
@@ -3399,10 +3521,10 @@ export default function StoryDetailsPage() {
 
               {/* Visual Consistency Info */}
               {imageDrawerScene !== null && scenes.filter(s => s.image_url && scenes.indexOf(s) !== imageDrawerScene).length > 0 && (
-                <div className="mb-6 p-3 bg-blue-900/20 border border-blue-700/30 rounded-lg">
+                <div className="mb-6 p-3 bg-gray-800 border border-gray-700 rounded-lg">
                   <div className="flex items-start gap-2">
-                    <Image className="w-4 h-4 text-blue-400 mt-0.5 flex-shrink-0" />
-                    <div className="text-xs text-blue-300">
+                    <Image className="w-4 h-4 text-orange-400 mt-0.5 flex-shrink-0" />
+                    <div className="text-xs text-orange-300">
                       <span className="font-semibold">Visual Consistency:</span> This image will be generated using AI to match the style and characters from your existing {scenes.filter(s => s.image_url && scenes.indexOf(s) !== imageDrawerScene).length} scene image(s).
                     </div>
                   </div>
@@ -3419,7 +3541,7 @@ export default function StoryDetailsPage() {
                   onChange={(e) => setImageInstructions(e.target.value)}
                   placeholder="Add specific details or requirements for this image..."
                   rows={3}
-                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-md text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent text-sm"
+                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-md text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent text-sm"
                 />
                 <p className="text-xs text-gray-500 mt-1">
                   Example: "Show the character from behind", "Include a sunset in the background"
@@ -3446,7 +3568,7 @@ export default function StoryDetailsPage() {
                     }
                   }}
                   disabled={imageDrawerScene !== null && generatingSceneImage.has(imageDrawerScene)}
-                  className="flex-1 bg-purple-600 hover:bg-purple-700 text-white"
+                  className="flex-1 bg-orange-600 hover:bg-orange-700 text-white"
                 >
                   {imageDrawerScene !== null && generatingSceneImage.has(imageDrawerScene) ? (
                     <>
@@ -3481,7 +3603,7 @@ export default function StoryDetailsPage() {
               {/* Header */}
               <div className="flex items-center justify-between mb-4">
                 <div>
-                  <h2 className="text-xl font-semibold text-white">Generate All Images</h2>
+                  <h2 className="text-xl font-semibold text-white">Generate Images for All Scenes</h2>
                   <p className="text-sm text-gray-400 mt-1">
                     Generate images for all {scenes.length} scenes in this story
                   </p>
@@ -3564,7 +3686,7 @@ export default function StoryDetailsPage() {
                       onClick={() => setSelectedImageStyle(style.value)}
                       className={`flex-shrink-0 rounded-lg transition-all border-2 overflow-hidden ${
                         selectedImageStyle === style.value
-                          ? "border-blue-500 shadow-lg shadow-blue-500/20"
+                          ? "border-orange-500 shadow-lg shadow-orange-500/20"
                           : "border-gray-700 hover:border-gray-600"
                       }`}
                     >
@@ -3579,7 +3701,7 @@ export default function StoryDetailsPage() {
 
                         {/* Selected checkmark - top right corner */}
                         {selectedImageStyle === style.value && (
-                          <div className="absolute top-2 right-2 bg-blue-500 rounded-full p-1 shadow-lg z-20">
+                          <div className="absolute top-2 right-2 bg-orange-500 rounded-full p-1 shadow-lg z-20">
                             <Check className="w-4 h-4 text-white" />
                           </div>
                         )}
@@ -3588,7 +3710,7 @@ export default function StoryDetailsPage() {
                       {/* Label */}
                       <div className={`p-2 text-center ${
                         selectedImageStyle === style.value
-                          ? "bg-blue-900/40 text-white"
+                          ? "bg-orange-900/40 text-white"
                           : "bg-gray-800 text-gray-300"
                       }`}>
                         <div className="text-xs font-medium">{style.label}</div>
@@ -3609,7 +3731,7 @@ export default function StoryDetailsPage() {
                   onChange={(e) => setImageInstructions(e.target.value)}
                   placeholder="Add specific details or requirements..."
                   rows={2}
-                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-md text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-md text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent text-sm"
                 />
               </div>
 
@@ -3627,12 +3749,12 @@ export default function StoryDetailsPage() {
                     await generateImages(selectedImageStyle, imageInstructions);
                   }}
                   disabled={generatingImages}
-                  className="flex-1 bg-blue-600 hover:bg-blue-700 text-white"
+                  className="flex-1 bg-orange-600 hover:bg-orange-700 text-white"
                 >
                   {generatingImages ? (
                     <>
                       <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                      Generating...
+                      {imageProgress.total > 0 ? `Processing ${imageProgress.current}/${imageProgress.total}...` : 'Starting...'}
                     </>
                   ) : (
                     <>
@@ -3662,7 +3784,7 @@ export default function StoryDetailsPage() {
             <div className="p-4 border-b border-gray-700 flex-shrink-0">
               <div className="flex items-center justify-between">
                 <div>
-                  <h2 className="text-xl font-semibold text-white">Generate All Audio</h2>
+                  <h2 className="text-xl font-semibold text-white">Generate Audio for All Scenes</h2>
                   <p className="text-sm text-gray-400 mt-1">
                     Generate audio narration for all {scenes.length} scenes
                   </p>
@@ -3696,7 +3818,7 @@ export default function StoryDetailsPage() {
                 </div>
                 {loadingVoices ? (
                   <div className="flex items-center justify-center py-3">
-                    <Loader2 className="w-5 h-5 animate-spin text-purple-500" />
+                    <Loader2 className="w-5 h-5 animate-spin text-orange-500" />
                     <span className="ml-2 text-sm text-gray-400">Loading voices...</span>
                   </div>
                 ) : (
@@ -3711,13 +3833,13 @@ export default function StoryDetailsPage() {
                         }}
                         className={`flex items-center justify-between p-3 cursor-pointer transition-colors border-b border-gray-700 last:border-b-0 ${
                           selectedVoiceId === voice.id
-                            ? 'bg-purple-900/30 border-l-4 border-l-purple-500'
+                            ? 'bg-orange-900/30 border-l-4 border-l-purple-500'
                             : 'hover:bg-gray-700'
                         }`}
                       >
                         <div className="flex items-center gap-2 flex-1">
                           {selectedVoiceId === voice.id && (
-                            <Check className="w-4 h-4 text-purple-400" />
+                            <Check className="w-4 h-4 text-orange-400" />
                           )}
                           <span className="text-sm text-white">{voice.name}</span>
                         </div>
@@ -3729,7 +3851,7 @@ export default function StoryDetailsPage() {
                             }}
                             className={`p-1.5 rounded-full transition-colors ${
                               playingPreviewId === voice.id
-                                ? 'bg-purple-600 text-white'
+                                ? 'bg-orange-600 text-white'
                                 : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
                             }`}
                             title="Preview voice"
@@ -3792,12 +3914,12 @@ export default function StoryDetailsPage() {
                     await generateAllAudio(selectedVoiceId);
                   }}
                   disabled={generatingAudios}
-                  className="flex-1 bg-purple-600 hover:bg-purple-700 text-white"
+                  className="flex-1 bg-orange-600 hover:bg-orange-700 text-white"
                 >
                   {generatingAudios ? (
                     <>
                       <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                      Generating...
+                      {audioProgress.total > 0 ? `Processing ${audioProgress.current}/${audioProgress.total}...` : 'Starting...'}
                     </>
                   ) : (
                     <>
@@ -3850,7 +3972,7 @@ export default function StoryDetailsPage() {
                   <button
                     onClick={() => setCaptionsEnabled(!captionsEnabled)}
                     className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                      captionsEnabled ? "bg-purple-600" : "bg-gray-700"
+                      captionsEnabled ? "bg-orange-600" : "bg-gray-700"
                     }`}
                   >
                     <span
@@ -3872,7 +3994,7 @@ export default function StoryDetailsPage() {
                     <select
                       value={captionFontFamily}
                       onChange={(e) => setCaptionFontFamily(e.target.value)}
-                      className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded text-gray-300 focus:outline-none focus:border-purple-500"
+                      className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded text-gray-300 focus:outline-none focus:border-orange-500"
                       style={{
                         backgroundImage: `url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e")`,
                         backgroundPosition: 'right 0.5rem center',
@@ -3924,7 +4046,7 @@ export default function StoryDetailsPage() {
                   {/* Caption Position from Bottom */}
                   <div className="mb-6">
                     <label className="block text-sm font-medium text-gray-300 mb-3">
-                      Position from Bottom: <span className="text-purple-400 font-bold">{captionPositionFromBottom}%</span>
+                      Position from Bottom: <span className="text-orange-400 font-bold">{captionPositionFromBottom}%</span>
                     </label>
                     <Slider
                       value={[captionPositionFromBottom]}
@@ -3939,7 +4061,7 @@ export default function StoryDetailsPage() {
                   {/* Font Size */}
                   <div className="mb-6">
                     <label className="block text-sm font-medium text-gray-300 mb-3">
-                      Font Size: <span className="text-purple-400 font-bold">{captionFontSize}px</span>
+                      Font Size: <span className="text-orange-400 font-bold">{captionFontSize}px</span>
                     </label>
                     <input
                       type="range"
@@ -3958,7 +4080,7 @@ export default function StoryDetailsPage() {
                   {/* Font Weight */}
                   <div className="mb-6">
                     <label className="block text-sm font-medium text-gray-300 mb-3">
-                      Font Weight: <span className="text-purple-400 font-bold">{captionFontWeight}</span>
+                      Font Weight: <span className="text-orange-400 font-bold">{captionFontWeight}</span>
                     </label>
                     <input
                       type="range"
@@ -3991,7 +4113,7 @@ export default function StoryDetailsPage() {
                     setCaptionsDrawerOpen(false);
                     // Settings are already saved in state
                   }}
-                  className="flex-1 bg-purple-600 hover:bg-purple-700 text-white"
+                  className="flex-1 bg-orange-600 hover:bg-orange-700 text-white"
                 >
                   <Check className="w-4 h-4 mr-2" />
                   Save Settings

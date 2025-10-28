@@ -60,7 +60,7 @@ export function EffectSelectionModal({
                       relative group rounded-lg overflow-hidden border-2 transition-all
                       ${
                         currentEffect === effect.id
-                          ? "border-blue-500 ring-2 ring-blue-500/50"
+                          ? "border-orange-500 ring-2 ring-orange-500/50"
                           : "border-gray-700 hover:border-gray-500"
                       }
                     `}
@@ -93,7 +93,7 @@ export function EffectSelectionModal({
 
               {/* Selected Indicator */}
               {currentEffect === effect.id && (
-                <div className="absolute top-2 left-2 bg-blue-500 text-white rounded-full p-1">
+                <div className="absolute top-2 left-2 bg-orange-500 text-white rounded-full p-1">
                   <svg
                     className="w-4 h-4"
                     fill="currentColor"
