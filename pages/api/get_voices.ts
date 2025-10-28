@@ -21,11 +21,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const data: any = await response.json();
     console.log("✅ Successfully fetched", data.voices?.length || 0, "voices");
 
-    // Return voices in a simple format (without category suffix)
+    // Return voices with labels/features
     const voices = data.voices.map((voice: any) => ({
       id: voice.voice_id,
       name: voice.name,
       preview_url: voice.preview_url,
+      labels: voice.labels, // e.g., { accent: "american", age: "young", use_case: "narration" }
     }));
 
     res.status(200).json({ voices });

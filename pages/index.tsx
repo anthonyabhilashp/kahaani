@@ -6,8 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Plus, Loader2, PlayCircle, Clock, Film, Image as ImageIcon, Video, Settings, User, LogOut, Trash2, MoreHorizontal } from "lucide-react";
-import { Slider } from "@/components/ui/slider";
+import { Plus, Loader2, PlayCircle, Clock, Film, Image as ImageIcon, Video, Settings, User, LogOut, Trash2, MoreHorizontal, Smartphone, Square, Monitor } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -42,6 +41,15 @@ export default function Dashboard() {
   const [storyToDelete, setStoryToDelete] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
   const hasFetchedRef = useRef(false);
+
+  // New story creation options
+  const [targetDuration, setTargetDuration] = useState<30 | 60 | 120 | 180>(60); // in seconds
+  const [selectedVoiceId, setSelectedVoiceId] = useState<string>("21m00Tcm4TlvDq8ikWAM"); // Rachel - default
+  const [aspectRatio, setAspectRatio] = useState<"9:16" | "1:1" | "16:9">("9:16");
+  const [voices, setVoices] = useState<any[]>([]);
+  const [loadingVoices, setLoadingVoices] = useState(false);
+  const [playingPreviewId, setPlayingPreviewId] = useState<string | null>(null);
+  const voicePreviewAudioRef = useRef<HTMLAudioElement | null>(null);
 
   // Protect route - redirect to login if not authenticated
   useEffect(() => {
@@ -94,6 +102,57 @@ export default function Dashboard() {
     }
   }
 
+  // Fetch ElevenLabs voices
+  async function fetchVoices() {
+    setLoadingVoices(true);
+    try {
+      const res = await fetch("/api/get_voices");
+      const data = await res.json();
+      setVoices(data.voices || []);
+    } catch (error) {
+      console.error("Error fetching voices:", error);
+    } finally {
+      setLoadingVoices(false);
+    }
+  }
+
+  // Calculate scene count based on target duration (rough estimate: ~6 seconds per scene)
+  useEffect(() => {
+    const estimatedScenes = Math.max(3, Math.round(targetDuration / 6));
+    setSceneCount(estimatedScenes);
+  }, [targetDuration]);
+
+  // Load voices when dialog opens
+  useEffect(() => {
+    if (dialogOpen && voices.length === 0) {
+      fetchVoices();
+    }
+  }, [dialogOpen]);
+
+  // Play voice preview
+  const playVoicePreview = (voiceId: string, previewUrl?: string) => {
+    if (!previewUrl) return;
+
+    // Stop any currently playing preview
+    if (voicePreviewAudioRef.current) {
+      voicePreviewAudioRef.current.pause();
+      voicePreviewAudioRef.current = null;
+    }
+
+    // If clicking the same voice, just stop
+    if (playingPreviewId === voiceId) {
+      setPlayingPreviewId(null);
+      return;
+    }
+
+    // Play new preview
+    const audio = new Audio(previewUrl);
+    audio.play();
+    audio.onended = () => setPlayingPreviewId(null);
+    voicePreviewAudioRef.current = audio;
+    setPlayingPreviewId(voiceId);
+  };
+
   async function createStory() {
     if (!newPrompt.trim()) return;
     setCreating(true);
@@ -115,7 +174,9 @@ export default function Dashboard() {
         },
         body: JSON.stringify({
           prompt: newPrompt,
-          sceneCount: sceneCount
+          sceneCount: sceneCount,
+          voice_id: selectedVoiceId,
+          aspect_ratio: aspectRatio
         }),
       });
 
@@ -123,9 +184,12 @@ export default function Dashboard() {
         const data = await res.json();
         const storyId = data.story_id;
 
-        // Close dialog
+        // Close dialog and reset form
         setDialogOpen(false);
         setNewPrompt("");
+        setTargetDuration(60);
+        setSelectedVoiceId("21m00Tcm4TlvDq8ikWAM");
+        setAspectRatio("9:16");
 
         // Navigate to story page
         if (storyId) {
@@ -187,6 +251,189 @@ export default function Dashboard() {
     const secs = Math.floor(seconds % 60);
     return `${mins}:${secs.toString().padStart(2, "0")}`;
   }
+
+  // Format duration for display (30s, 1m, 2m, 3m)
+  function formatTargetDuration(seconds: number): string {
+    if (seconds < 60) return `${seconds}s`;
+    return `${seconds / 60}m`;
+  }
+
+  // Format voice labels for display
+  function formatVoiceLabels(labels?: Record<string, any>): string {
+    if (!labels) return '';
+    return Object.entries(labels)
+      .filter(([_, value]) => value && typeof value === 'string')
+      .slice(0, 3)
+      .map(([_, value]) => {
+        // Convert underscores to spaces and capitalize each word
+        return value.split('_').map((word: string) =>
+          word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
+        ).join(' ');
+      })
+      .join(' • ');
+  }
+
+  // Render the create story dialog content
+  const renderDialogContent = () => (
+    <div className="space-y-4 mt-4">
+      {/* Story Input */}
+      <div>
+        <label className="block text-sm font-medium text-gray-200 mb-2">
+          Story Idea
+        </label>
+        <textarea
+          placeholder="E.g., 'A young adventurer discovers a magical compass that leads to hidden treasures'"
+          value={newPrompt}
+          onChange={(e) => setNewPrompt(e.target.value)}
+          rows={4}
+          className="w-full p-3 bg-gray-800 border border-gray-700 rounded-lg resize-none focus:ring-2 focus:ring-orange-500 focus:border-transparent text-white placeholder:text-gray-500 text-sm"
+        />
+      </div>
+
+      {/* Duration */}
+      <div>
+        <label className="block text-sm font-medium text-gray-200 mb-2">
+          Duration
+        </label>
+        <div className="grid grid-cols-4 gap-2">
+          {[30, 60, 120, 180].map((duration) => {
+            const sceneEstimate = Math.max(3, Math.round(duration / 6));
+            return (
+              <button
+                key={duration}
+                type="button"
+                onClick={() => setTargetDuration(duration as 30 | 60 | 120 | 180)}
+                className={`p-2 rounded-lg border transition-all ${
+                  targetDuration === duration
+                    ? 'border-orange-500 bg-orange-500/20 text-orange-400'
+                    : 'border-gray-700 bg-gray-800 text-gray-400 hover:border-gray-600'
+                }`}
+              >
+                <div className="text-sm font-medium">{formatTargetDuration(duration)}</div>
+                <div className="text-xs opacity-75">({sceneEstimate} scenes)</div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Format */}
+      <div>
+        <label className="block text-sm font-medium text-gray-200 mb-2">
+          Format
+        </label>
+        <div className="grid grid-cols-3 gap-2">
+          {[
+            { value: "9:16", icon: Smartphone, label: "9:16" },
+            { value: "16:9", icon: Monitor, label: "16:9" },
+            { value: "1:1", icon: Square, label: "1:1" }
+          ].map(({ value, icon: Icon, label }) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => setAspectRatio(value as any)}
+              className={`p-2 rounded-lg border transition-all ${
+                aspectRatio === value
+                  ? 'border-orange-500 bg-orange-500/20'
+                  : 'border-gray-700 bg-gray-800 hover:border-gray-600'
+              }`}
+            >
+              <Icon className={`w-4 h-4 mx-auto mb-1 ${aspectRatio === value ? 'text-orange-400' : 'text-gray-400'}`} />
+              <div className={`text-xs font-medium ${aspectRatio === value ? 'text-orange-400' : 'text-gray-300'}`}>
+                {label}
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Voice Selection */}
+      <div>
+        <label className="block text-sm font-medium text-gray-200 mb-2">
+          Narrator Voice
+        </label>
+        {loadingVoices ? (
+          <div className="flex items-center justify-center py-8 bg-gray-800 border border-gray-700 rounded-lg">
+            <Loader2 className="w-5 h-5 animate-spin text-orange-500" />
+            <span className="ml-2 text-sm text-gray-400">Loading voices...</span>
+          </div>
+        ) : voices.length > 0 ? (
+          <div className="grid grid-cols-4 gap-2 max-h-[280px] overflow-y-auto">
+            {voices.slice(0, 8).map((voice) => (
+              <button
+                key={voice.id}
+                type="button"
+                onClick={() => setSelectedVoiceId(voice.id)}
+                className={`p-2.5 rounded-lg border transition-all text-left ${
+                  selectedVoiceId === voice.id
+                    ? 'border-orange-500 bg-orange-500/20'
+                    : 'border-gray-700 bg-gray-800 hover:border-gray-600'
+                }`}
+              >
+                {/* Voice Name */}
+                <div className={`text-sm font-medium mb-1 ${
+                  selectedVoiceId === voice.id ? 'text-orange-400' : 'text-white'
+                }`}>
+                  {voice.name}
+                </div>
+
+                {/* Voice Tags */}
+                {voice.labels && formatVoiceLabels(voice.labels) && (
+                  <div className="text-xs text-gray-500 mb-2 line-clamp-2 min-h-[2rem]">
+                    {formatVoiceLabels(voice.labels)}
+                  </div>
+                )}
+
+                {/* Preview Button */}
+                {voice.preview_url && (
+                  <div
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      playVoicePreview(voice.id, voice.preview_url);
+                    }}
+                    className={`w-full px-2 py-1 rounded text-xs font-medium transition-colors text-center ${
+                      playingPreviewId === voice.id
+                        ? 'bg-orange-600 text-white'
+                        : 'bg-gray-700/80 hover:bg-gray-600 text-gray-300'
+                    }`}
+                  >
+                    {playingPreviewId === voice.id ? 'Stop' : 'Preview'}
+                  </div>
+                )}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div className="p-3 bg-gray-800 border border-gray-700 rounded-lg text-sm text-gray-400 text-center">
+            Click to load voices
+          </div>
+        )}
+      </div>
+
+      {/* Info note */}
+      <p className="text-xs text-gray-500 text-center">
+        All settings adjustable after creation
+      </p>
+
+      {/* Create Button */}
+      <Button
+        disabled={creating || !newPrompt.trim()}
+        onClick={createStory}
+        className="w-full bg-orange-600 hover:bg-orange-700 text-white font-semibold"
+        size="lg"
+      >
+        {creating ? (
+          <>
+            <Loader2 className="animate-spin h-5 w-5 mr-2" /> Creating Story...
+          </>
+        ) : (
+          <>
+            <Plus className="w-5 h-5 mr-2" /> Create Story
+          </>
+        )}
+      </Button>
+    </div>
+  );
 
   return (
     <div className="min-h-screen bg-black text-white flex">
@@ -278,91 +525,7 @@ export default function Dashboard() {
                 <DialogHeader>
                   <DialogTitle className="text-2xl font-bold">Create a New Story</DialogTitle>
                 </DialogHeader>
-
-                <div className="space-y-4 mt-4">
-                  {/* Story Input */}
-                  <div>
-                    <label className="block text-sm font-medium text-gray-300 mb-2">
-                      Story Input
-                    </label>
-                    <p className="text-xs text-gray-500 mb-3">
-                      You can either write your complete story, or give a simple idea and AI will generate scenes for you.
-                    </p>
-                    <textarea
-                      placeholder="E.g., 'A young adventurer discovers a magical compass' or write your full story with all details..."
-                      value={newPrompt}
-                      onChange={(e) => setNewPrompt(e.target.value)}
-                      rows={5}
-                      className="w-full p-4 bg-gray-800 border border-gray-700 rounded-lg resize-none focus:ring-2 focus:ring-orange-500 focus:border-transparent text-white placeholder:text-gray-500"
-                    />
-                  </div>
-
-                  {/* Scene Count Selector */}
-                  <div>
-                    <div className="flex items-center justify-between mb-3">
-                      <label className="text-sm font-medium text-gray-300">
-                        Number of Scenes
-                      </label>
-                      <div className="bg-orange-600 text-white px-3 py-1 rounded-lg text-sm font-bold">
-                        {sceneCount}
-                      </div>
-                    </div>
-                    <p className="text-xs text-gray-500 mb-3">
-                      AI will break down your story into this many visual moments
-                    </p>
-                    <Slider
-                      value={[sceneCount]}
-                      onValueChange={(value) => setSceneCount(value[0])}
-                      min={1}
-                      max={20}
-                      step={1}
-                      className="w-full"
-                    />
-                    <div className="flex justify-between text-xs text-gray-500 mt-2">
-                      <span>1 scene</span>
-                      <span>20 scenes</span>
-                    </div>
-                  </div>
-
-                  {/* Example prompts */}
-                  <div className="space-y-2">
-                    <p className="text-xs text-gray-500">Need inspiration? Try these:</p>
-                    <div className="grid grid-cols-1 gap-2">
-                      {[
-                        "A cat discovers a secret library where books come alive at night",
-                        "Two friends build a time machine and accidentally meet dinosaurs",
-                        "A magical paintbrush brings drawings to life in unexpected ways"
-                      ].map((example, idx) => (
-                        <button
-                          key={idx}
-                          type="button"
-                          onClick={() => setNewPrompt(example)}
-                          className="text-left text-xs text-orange-400 hover:text-orange-300 p-2 rounded-md hover:bg-gray-800 transition-colors"
-                        >
-                          "{example}"
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Create Button */}
-                  <Button
-                    disabled={creating || !newPrompt.trim()}
-                    onClick={createStory}
-                    className="w-full bg-orange-600 hover:bg-orange-700 text-white font-semibold"
-                    size="lg"
-                  >
-                    {creating ? (
-                      <>
-                        <Loader2 className="animate-spin h-5 w-5 mr-2" /> Creating Story...
-                      </>
-                    ) : (
-                      <>
-                        <Plus className="w-4 h-4 mr-2" /> Generate Story
-                      </>
-                    )}
-                  </Button>
-                </div>
+                {renderDialogContent()}
               </DialogContent>
             </Dialog>
           </div>
@@ -382,95 +545,11 @@ export default function Dashboard() {
                     <Plus className="w-4 h-4 mr-2" /> Create new story
                   </Button>
                 </DialogTrigger>
-              <DialogContent className="sm:max-w-2xl bg-gray-900 text-white border-gray-800">
+              <DialogContent className="sm:max-w-2xl bg-gray-900 text-white border-gray-800 max-h-[90vh] overflow-y-auto">
                 <DialogHeader>
                   <DialogTitle className="text-2xl font-bold">Create a New Story</DialogTitle>
                 </DialogHeader>
-
-                <div className="space-y-4 mt-4">
-                  {/* Story Input */}
-                  <div>
-                    <label className="block text-sm font-medium text-gray-300 mb-2">
-                      Story Input
-                    </label>
-                    <p className="text-xs text-gray-500 mb-3">
-                      You can either write your complete story, or give a simple idea and AI will generate scenes for you.
-                    </p>
-                    <textarea
-                      placeholder="E.g., 'A young adventurer discovers a magical compass' or write your full story with all details..."
-                      value={newPrompt}
-                      onChange={(e) => setNewPrompt(e.target.value)}
-                      rows={5}
-                      className="w-full p-4 bg-gray-800 border border-gray-700 rounded-lg resize-none focus:ring-2 focus:ring-orange-500 focus:border-transparent text-white placeholder:text-gray-500"
-                    />
-                  </div>
-
-                  {/* Scene Count Selector */}
-                  <div>
-                    <div className="flex items-center justify-between mb-3">
-                      <label className="text-sm font-medium text-gray-300">
-                        Number of Scenes
-                      </label>
-                      <div className="bg-orange-600 text-white px-3 py-1 rounded-lg text-sm font-bold">
-                        {sceneCount}
-                      </div>
-                    </div>
-                    <p className="text-xs text-gray-500 mb-3">
-                      AI will break down your story into this many visual moments
-                    </p>
-                    <Slider
-                      value={[sceneCount]}
-                      onValueChange={(value) => setSceneCount(value[0])}
-                      min={1}
-                      max={20}
-                      step={1}
-                      className="w-full"
-                    />
-                    <div className="flex justify-between text-xs text-gray-500 mt-2">
-                      <span>1 scene</span>
-                      <span>20 scenes</span>
-                    </div>
-                  </div>
-
-                  {/* Example prompts */}
-                  <div className="space-y-2">
-                    <p className="text-xs text-gray-500">Need inspiration? Try these:</p>
-                    <div className="grid grid-cols-1 gap-2">
-                      {[
-                        "A cat discovers a secret library where books come alive at night",
-                        "Two friends build a time machine and accidentally meet dinosaurs",
-                        "A magical paintbrush brings drawings to life in unexpected ways"
-                      ].map((example, idx) => (
-                        <button
-                          key={idx}
-                          type="button"
-                          onClick={() => setNewPrompt(example)}
-                          className="text-left text-xs text-orange-400 hover:text-orange-300 p-2 rounded-md hover:bg-gray-800 transition-colors"
-                        >
-                          "{example}"
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Create Button */}
-                  <Button
-                    disabled={creating || !newPrompt.trim()}
-                    onClick={createStory}
-                    className="w-full bg-orange-600 hover:bg-orange-700 text-white font-semibold"
-                    size="lg"
-                  >
-                    {creating ? (
-                      <>
-                        <Loader2 className="animate-spin h-5 w-5 mr-2" /> Creating Story...
-                      </>
-                    ) : (
-                      <>
-                        <Plus className="w-4 h-4 mr-2" /> Generate Story
-                      </>
-                    )}
-                  </Button>
-                </div>
+                {renderDialogContent()}
               </DialogContent>
               </Dialog>
             </div>
@@ -498,95 +577,11 @@ export default function Dashboard() {
                   <Plus className="w-4 h-4 mr-2" /> Create new story
                 </Button>
               </DialogTrigger>
-              <DialogContent className="sm:max-w-2xl bg-gray-900 text-white border-gray-800">
+              <DialogContent className="sm:max-w-2xl bg-gray-900 text-white border-gray-800 max-h-[90vh] overflow-y-auto">
                 <DialogHeader>
                   <DialogTitle className="text-2xl font-bold">Create Your First Story</DialogTitle>
                 </DialogHeader>
-
-                <div className="space-y-4 mt-4">
-                  {/* Story Input */}
-                  <div>
-                    <label className="block text-sm font-medium text-gray-300 mb-2">
-                      Story Input
-                    </label>
-                    <p className="text-xs text-gray-500 mb-3">
-                      You can either write your complete story, or give a simple idea and AI will generate scenes for you.
-                    </p>
-                    <textarea
-                      placeholder="E.g., 'A young adventurer discovers a magical compass' or write your full story with all details..."
-                      value={newPrompt}
-                      onChange={(e) => setNewPrompt(e.target.value)}
-                      rows={5}
-                      className="w-full p-4 bg-gray-800 border border-gray-700 rounded-lg resize-none focus:ring-2 focus:ring-orange-500 focus:border-transparent text-white placeholder:text-gray-500"
-                    />
-                  </div>
-
-                  {/* Scene Count Selector */}
-                  <div>
-                    <div className="flex items-center justify-between mb-3">
-                      <label className="text-sm font-medium text-gray-300">
-                        Number of Scenes
-                      </label>
-                      <div className="bg-orange-600 text-white px-3 py-1 rounded-lg text-sm font-bold">
-                        {sceneCount}
-                      </div>
-                    </div>
-                    <p className="text-xs text-gray-500 mb-3">
-                      AI will break down your story into this many visual moments
-                    </p>
-                    <Slider
-                      value={[sceneCount]}
-                      onValueChange={(value) => setSceneCount(value[0])}
-                      min={1}
-                      max={20}
-                      step={1}
-                      className="w-full"
-                    />
-                    <div className="flex justify-between text-xs text-gray-500 mt-2">
-                      <span>1 scene</span>
-                      <span>20 scenes</span>
-                    </div>
-                  </div>
-
-                  {/* Example prompts */}
-                  <div className="space-y-2">
-                    <p className="text-xs text-gray-500">Need inspiration? Try these:</p>
-                    <div className="grid grid-cols-1 gap-2">
-                      {[
-                        "A cat discovers a secret library where books come alive at night",
-                        "Two friends build a time machine and accidentally meet dinosaurs",
-                        "A magical paintbrush brings drawings to life in unexpected ways"
-                      ].map((example, idx) => (
-                        <button
-                          key={idx}
-                          type="button"
-                          onClick={() => setNewPrompt(example)}
-                          className="text-left text-xs text-orange-400 hover:text-orange-300 p-2 rounded-md hover:bg-gray-800 transition-colors"
-                        >
-                          "{example}"
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Create Button */}
-                  <Button
-                    disabled={creating || !newPrompt.trim()}
-                    onClick={createStory}
-                    className="w-full bg-orange-600 hover:bg-orange-700 text-white font-semibold"
-                    size="lg"
-                  >
-                    {creating ? (
-                      <>
-                        <Loader2 className="animate-spin h-5 w-5 mr-2" /> Creating Story...
-                      </>
-                    ) : (
-                      <>
-                        <Plus className="w-4 h-4 mr-2" /> Generate Story
-                      </>
-                    )}
-                  </Button>
-                </div>
+                {renderDialogContent()}
               </DialogContent>
             </Dialog>
           </div>

@@ -7,6 +7,7 @@ import { supabaseAdmin } from "../../lib/supabaseAdmin";
 import { JobLogger } from "../../lib/logger";
 import { updateStoryMetadata } from "../../lib/updateStoryMetadata";
 import * as Echogarden from "echogarden";
+import { textToSSML } from "../../lib/ssmlHelper";
 
 const ELEVENLABS_API = "https://api.elevenlabs.io/v1/text-to-speech";
 
@@ -32,6 +33,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const voiceId = voice_id || "21m00Tcm4TlvDq8ikWAM";
     logger.log(`🎤 Using voice_id: ${voiceId}`);
 
+    // Use fixed defaults for voice parameters (same for all stories)
+    const voiceStability = 0.4;
+    const voiceSimilarity = 0.7;
+    logger.log(`🎤 Voice settings: stability=${voiceStability}, similarity=${voiceSimilarity}`);
+
     // 1️⃣ Fetch all scenes for this story
     const { data: scenes, error: scenesErr } = await supabaseAdmin
       .from("scenes")
@@ -53,7 +59,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       logger.log(`📖 Scene text: "${scene.text.substring(0, 50)}..."`);
 
       try {
-        // 3️⃣ Generate audio with ElevenLabs
+        // 3️⃣ Convert text to SSML with intelligent pauses
+        const isLastScene = i === scenes.length - 1;
+        const ssmlText = textToSSML(scene.text, {
+          sentencePause: 500, // 0.5s after sentences
+          endPause: 800, // 0.8s at scene end
+          commaPause: 300, // 0.3s after commas
+          isLastScene: isLastScene, // 1.5s pause for final scene
+        });
+        logger.log(`📝 Using SSML for better narration flow${isLastScene ? ' (final scene)' : ''}`);
+        logger.log(`🔍 SSML preview: ${ssmlText.substring(0, 100)}...`);
+
+        // 4️⃣ Generate audio with ElevenLabs
         logger.log(`🧠 Generating TTS with ElevenLabs voice: ${voiceId}`);
         const ttsRes = await fetch(`${ELEVENLABS_API}/${voiceId}`, {
           method: "POST",
@@ -62,9 +79,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            text: scene.text,
+            text: ssmlText,
             model_id: "eleven_multilingual_v2",
-            voice_settings: { stability: 0.4, similarity_boost: 0.7 },
+            voice_settings: {
+              stability: voiceStability,
+              similarity_boost: voiceSimilarity
+            },
+            enable_ssml: true,
           }),
         });
 
@@ -75,18 +96,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         const audioBuffer = Buffer.from(await ttsRes.arrayBuffer());
 
-        // 4️⃣ Save locally
+        // 5️⃣ Save locally
         const tempDir = path.join(process.cwd(), "tmp", scene.id);
         fs.mkdirSync(tempDir, { recursive: true });
         const audioPath = path.join(tempDir, `scene-${scene.id}.mp3`);
         fs.writeFileSync(audioPath, audioBuffer);
 
-        // 5️⃣ Get duration
+        // 6️⃣ Get duration
         const info = await ffprobeAsync(audioPath);
         const duration = info.format?.duration || 0;
         logger.log(`⏱ Audio duration: ${duration.toFixed(2)} seconds`);
 
-        // 6️⃣ Generate word-level timestamps using forced alignment
+        // 7️⃣ Generate word-level timestamps using forced alignment
         logger.log(`🔍 Generating word-level timestamps with forced alignment...`);
         let wordTimestamps = null;
         try {
@@ -106,12 +127,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           logger.error(`⚠️ Word alignment failed for scene ${scene.id}, continuing without timestamps`, alignErr);
         }
 
-        // 7️⃣ Delete old audio if exists
+        // 8️⃣ Delete old audio if exists
         const fileName = `scene-${scene.id}.mp3`;
         logger.log(`🗑️ Removing any existing audio file: ${fileName}`);
         await supabaseAdmin.storage.from("audio").remove([fileName]);
 
-        // 8️⃣ Upload new audio to Supabase
+        // 9️⃣ Upload new audio to Supabase
         logger.log(`☁️ Uploading new audio file: ${fileName}`);
         const { error: uploadErr } = await supabaseAdmin.storage
           .from("audio")
@@ -123,7 +144,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         const audioUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/audio/${fileName}`;
 
-        // 9️⃣ Update scene with audio URL, voice_id, duration, word timestamps
+        // 🔟 Update scene with audio URL, voice_id, duration, word timestamps
         const { error: updateErr } = await supabaseAdmin
           .from("scenes")
           .update({

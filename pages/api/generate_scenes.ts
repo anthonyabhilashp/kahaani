@@ -29,7 +29,7 @@ export const config = { api: { bodyParser: { sizeLimit: "4mb" } } };
 
 // --- Handler ---
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const { prompt, title, story_id, sceneCount = 5, manualScenes, isManual = false } = req.body;
+  const { prompt, title, story_id, sceneCount = 5, manualScenes, isManual = false, voice_id, aspect_ratio } = req.body;
   if (!prompt) return res.status(400).json({ error: "Prompt required" });
 
   let logger: JobLogger | null = null;
@@ -51,12 +51,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let storyId = story_id || uuidv4();
     logger = new JobLogger(storyId, "generate_scenes");
     logger.log(`👤 User: ${user.email} (${user.id})`);
+    logger.log(`🎙️ Voice ID: ${voice_id || '21m00Tcm4TlvDq8ikWAM'}`);
+    logger.log(`📐 Aspect Ratio: ${aspect_ratio || '9:16'}`);
 
     if (story_id) {
       logger.log(`♻️ Overwriting scenes for existing story: ${storyId}`);
       // Delete old scenes
       await supabaseAdmin.from("scenes").delete().eq("story_id", storyId);
-      await supabaseAdmin.from("stories").update({ prompt }).eq("id", storyId);
+      await supabaseAdmin.from("stories").update({
+        prompt,
+        voice_id: voice_id || '21m00Tcm4TlvDq8ikWAM',
+        aspect_ratio: aspect_ratio || '9:16'
+      }).eq("id", storyId);
     } else {
       logger.log(`🆕 Creating new story for: "${prompt}"`);
       const { error: storyErr } = await supabaseAdmin
@@ -66,7 +72,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           title: title || null,
           prompt,
           status: "processing",
-          user_id: user.id  // 🔑 Link story to authenticated user
+          user_id: user.id,  // 🔑 Link story to authenticated user
+          voice_id: voice_id || '21m00Tcm4TlvDq8ikWAM',
+          aspect_ratio: aspect_ratio || '9:16'
         }]);
       if (storyErr) throw storyErr;
     }
@@ -95,16 +103,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         logger.log(`🧠 Generating ${sceneCount} scenes with ${SCENE_MODEL} (${PROVIDER})...`);
 
         const storyPrompt = `
-You are a JSON generator. Break the following story idea into exactly ${sceneCount} short, visual scenes and create a catchy title.
+You are a JSON generator. Break the following story idea into exactly ${sceneCount} short, visual, and ENGAGING scenes with a catchy title.
 
-For each scene, provide a short narrative sentence describing what happens.
+RULES:
+- Each scene must be ONLY 1-2 sentences maximum
+- Make scenes ENGAGING: use vivid action verbs, sensory details, emotion, and drama
+- Use varied sentence types: statements, exclamations (!), questions (?)
+- Use proper punctuation: periods, commas, exclamation marks, question marks
+- Write complete sentences that sound exciting when read aloud
+- Use commas for natural pauses in longer sentences
+- Create visual, cinematic moments that capture the imagination
+- IMPORTANT: The LAST scene must provide a satisfying conclusion with a definitive ending tone (use words like "finally", "at last", "and so")
+
+Examples of engaging vs boring:
+- Boring: "The hero went to the castle."
+- Engaging: "The hero charged toward the dark castle, sword gleaming in the moonlight!"
+
+For each scene, provide a vivid, engaging narrative description.
 
 Return ONLY valid JSON in this exact format:
 {
   "title": "A catchy title for the story",
   "scenes": [
     {
-      "text": "Brief narrative sentence describing what happens"
+      "text": "One or two exciting, well-punctuated sentences describing what happens."
     }
   ]
 }

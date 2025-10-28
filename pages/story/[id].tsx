@@ -182,11 +182,26 @@ export default function StoryDetailsPage() {
     }
   };
 
+  // Format voice labels for display
+  const formatVoiceLabels = (labels?: Record<string, any>): string => {
+    if (!labels) return '';
+    return Object.entries(labels)
+      .filter(([_, value]) => value && typeof value === 'string')
+      .slice(0, 3)
+      .map(([_, value]) => {
+        // Convert underscores to spaces and capitalize each word
+        return value.split('_').map((word: string) =>
+          word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
+        ).join(' ');
+      })
+      .join(' • ');
+  };
+
   // Audio drawer state
   const [audioDrawerOpen, setAudioDrawerOpen] = useState(false);
   const [audioDrawerScene, setAudioDrawerScene] = useState<number | null>(null);
   const [selectedVoiceId, setSelectedVoiceId] = useState<string>("21m00Tcm4TlvDq8ikWAM"); // Default voice
-  const [voices, setVoices] = useState<Array<{id: string; name: string; preview_url?: string}>>([]);
+  const [voices, setVoices] = useState<Array<{id: string; name: string; preview_url?: string; labels?: Record<string, any>}>>([]);
   const [loadingVoices, setLoadingVoices] = useState(false);
   const [playingPreviewId, setPlayingPreviewId] = useState<string | null>(null);
   const voicePreviewAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -743,47 +758,9 @@ export default function StoryDetailsPage() {
       // Set progress to complete
       setImageProgress({ current: scenes.length, total: scenes.length });
 
-      // Update scenes with new images, using cache-busting timestamp
-      const timestamp = Date.now();
-      const updatedScenes = scenes.map((scene) => {
-        // Find the matching updated scene from API response
-        const updatedScene = result.updated_scenes?.find((s: any) => s.id === scene.id);
-        if (updatedScene) {
-          // IMPORTANT: Merge new data with existing scene to preserve audio_url and other fields
-          return {
-            ...scene,  // Keep ALL existing data (audio_url, duration, text, etc.)
-            ...updatedScene,  // Override with new image data
-            // Add cache-busting timestamp ONLY to image URLs (audio hasn't changed)
-            image_url: updatedScene.image_url ? `${updatedScene.image_url}?t=${timestamp}` : updatedScene.image_url
-          };
-        }
-        return scene;
-      });
-      setScenes(updatedScenes);
-
-      // Recalculate modified scenes for all updated scenes
-      const updatedModifiedScenes = new Set(modifiedScenes);
-      updatedScenes.forEach((scene, index) => {
-        if (scene.scene_text_modified_at && scene.image_url) {
-          const textModified = new Date(scene.scene_text_modified_at).getTime();
-          const imageGenerated = scene.image_generated_at ? new Date(scene.image_generated_at).getTime() : 0;
-          const audioGenerated = scene.audio_generated_at ? new Date(scene.audio_generated_at).getTime() : 0;
-
-          // Check if still needs regeneration
-          const needsRegen = (scene.audio_url && textModified > audioGenerated);
-          if (needsRegen) {
-            updatedModifiedScenes.add(index);
-          } else {
-            updatedModifiedScenes.delete(index);
-          }
-        } else if (scene.image_url) {
-          updatedModifiedScenes.delete(index);
-        }
-      });
-      setModifiedScenes(updatedModifiedScenes);
-
-      // Preload media (images and audio) to update cache
-      await preloadMedia(updatedScenes);
+      // Refetch entire story details to get fresh data with all fields
+      console.log("🔄 Refetching story details to sync all data...");
+      await fetchStory();
     } catch (err) {
       console.error("Image generation error:", err);
       alert(`Image generation failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
@@ -825,51 +802,12 @@ export default function StoryDetailsPage() {
       const result = await res.json();
       console.log("✅ Bulk audio generation completed:", result);
 
-      // Update scenes with new audio, using cache-busting timestamp
-      const timestamp = Date.now();
-      const generatedTimestamp = new Date().toISOString();
-      const updatedScenes = scenes.map((scene) => {
-        // Find the matching updated scene from API response
-        const updatedScene = result.updated_scenes?.find((s: any) => s.id === scene.id);
-        if (updatedScene && updatedScene.audio_url && !updatedScene.error) {
-          return {
-            ...scene,
-            audio_url: `${updatedScene.audio_url}?t=${timestamp}`,
-            voice_id: updatedScene.voice_id,
-            duration: updatedScene.duration,
-            word_timestamps: updatedScene.word_timestamps,
-            audio_generated_at: generatedTimestamp
-          };
-        }
-        return scene;
-      });
-      setScenes(updatedScenes);
-
-      // Recalculate modified scenes
-      const updatedModifiedScenes = new Set(modifiedScenes);
-      updatedScenes.forEach((scene, index) => {
-        if (scene.scene_text_modified_at && scene.audio_url) {
-          const textModified = new Date(scene.scene_text_modified_at).getTime();
-          const audioGenerated = scene.audio_generated_at ? new Date(scene.audio_generated_at).getTime() : 0;
-
-          // Check if still needs regeneration
-          const needsRegen = textModified > audioGenerated;
-          if (needsRegen) {
-            updatedModifiedScenes.add(index);
-          } else {
-            updatedModifiedScenes.delete(index);
-          }
-        } else if (scene.audio_url) {
-          updatedModifiedScenes.delete(index);
-        }
-      });
-      setModifiedScenes(updatedModifiedScenes);
-
       // Set complete
       setAudioProgress({ current: scenes.length, total: scenes.length });
 
-      // Preload all new audio files
-      await preloadMedia(updatedScenes);
+      // Refetch entire story details to get fresh data with all fields
+      console.log("🔄 Refetching story details to sync all data...");
+      await fetchStory();
     } catch (err) {
       console.error("Bulk audio generation error:", err);
       alert(`Bulk audio generation failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
@@ -936,38 +874,9 @@ export default function StoryDetailsPage() {
       const result = await res.json();
       console.log("Scene image generation completed:", result);
 
-      // Update the specific scene with the new image URL and timestamp
-      // Add cache-busting timestamp to force browser to reload the image
-      const imageUrlWithTimestamp = result.image_url ? `${result.image_url}?t=${Date.now()}` : result.image_url;
-      console.log("🔄 Updating scene", sceneIndex, "with cache-busted URL:", imageUrlWithTimestamp);
-      const updatedScenes = [...scenes];
-      updatedScenes[sceneIndex] = {
-        ...updatedScenes[sceneIndex],
-        image_url: imageUrlWithTimestamp,
-        image_generated_at: new Date().toISOString()
-      };
-      setScenes(updatedScenes);
-      console.log("✅ Scenes state updated, thumbnail should refresh now");
-
-      // Recalculate modified scenes without full reload
-      const updatedModifiedScenes = new Set(modifiedScenes);
-      const scene = updatedScenes[sceneIndex];
-      if (scene.scene_text_modified_at) {
-        const textModified = new Date(scene.scene_text_modified_at).getTime();
-        const imageGenerated = new Date().getTime(); // Just generated now
-        const audioGenerated = scene.audio_generated_at ? new Date(scene.audio_generated_at).getTime() : 0;
-
-        // Check if still needs regeneration
-        const needsRegen = (scene.audio_url && textModified > audioGenerated);
-        if (needsRegen) {
-          updatedModifiedScenes.add(sceneIndex);
-        } else {
-          updatedModifiedScenes.delete(sceneIndex);
-        }
-      } else {
-        updatedModifiedScenes.delete(sceneIndex);
-      }
-      setModifiedScenes(updatedModifiedScenes);
+      // Refetch entire story details to get fresh data with all fields
+      console.log("🔄 Refetching story details to sync all data...");
+      await fetchStory();
 
     } catch (err) {
       console.error("Scene image generation error:", err);
@@ -1168,54 +1077,9 @@ export default function StoryDetailsPage() {
       const result = await res.json();
       console.log("Scene audio generation completed:", result);
 
-      // Update the specific scene with the new audio URL, voice_id, duration, word_timestamps, and timestamp
-      // Add cache-busting timestamp to force browser to reload the audio
-      const audioUrlWithTimestamp = result.audio_url ? `${result.audio_url}?t=${Date.now()}` : result.audio_url;
-      const updatedScenes = [...scenes];
-      updatedScenes[sceneIndex] = {
-        ...updatedScenes[sceneIndex],
-        audio_url: audioUrlWithTimestamp,
-        voice_id: result.voice_id || voiceId || selectedVoiceId,
-        duration: result.duration,
-        word_timestamps: result.word_timestamps || null,
-        audio_generated_at: new Date().toISOString()
-      };
-      setScenes(updatedScenes);
-
-      // Update preloaded audio cache with new audio (add cache buster to force reload)
-      if (result.audio_url) {
-        const cacheBustedUrl = `${result.audio_url}?t=${Date.now()}`;
-        const audioElement = new Audio(cacheBustedUrl);
-        audioElement.preload = 'metadata';
-        audioElement.oncanplaythrough = () => {
-          setPreloadedAudio(prev => ({
-            ...prev,
-            [sceneIndex]: audioElement
-          }));
-          console.log(`✅ New audio preloaded for scene ${sceneIndex + 1} with cache-busted URL`);
-        };
-        audioElement.load(); // Force load the new audio
-      }
-
-      // Recalculate modified scenes without full reload
-      const updatedModifiedScenes = new Set(modifiedScenes);
-      const scene = updatedScenes[sceneIndex];
-      if (scene.scene_text_modified_at) {
-        const textModified = new Date(scene.scene_text_modified_at).getTime();
-        const imageGenerated = scene.image_generated_at ? new Date(scene.image_generated_at).getTime() : 0;
-        const audioGenerated = new Date().getTime(); // Just generated now
-
-        // Check if still needs regeneration
-        const needsRegen = (scene.image_url && textModified > imageGenerated);
-        if (needsRegen) {
-          updatedModifiedScenes.add(sceneIndex);
-        } else {
-          updatedModifiedScenes.delete(sceneIndex);
-        }
-      } else {
-        updatedModifiedScenes.delete(sceneIndex);
-      }
-      setModifiedScenes(updatedModifiedScenes);
+      // Refetch entire story details to get fresh data with all fields
+      console.log("🔄 Refetching story details to sync all data...");
+      await fetchStory();
 
     } catch (err) {
       console.error("Scene audio generation error:", err);
@@ -1908,20 +1772,46 @@ export default function StoryDetailsPage() {
                       </div>
                     ) : voices.length > 0 ? (
                       voices.map((voice) => (
-                        <button
+                        <div
                           key={voice.id}
-                          onClick={() => openVoiceUpdateConfirm(voice.id)}
-                          className={`w-full flex items-center justify-between px-3 py-2 text-sm rounded-md transition-colors ${
+                          className={`flex items-center gap-2 px-3 py-2 rounded-md transition-colors ${
                             (story?.voice_id || "21m00Tcm4TlvDq8ikWAM") === voice.id
-                              ? "bg-orange-900/30 text-white"
-                              : "text-gray-300 hover:bg-gray-800"
+                              ? "bg-orange-900/30"
+                              : "hover:bg-gray-800"
                           }`}
                         >
-                          <span>{voice.name}</span>
-                          {(story?.voice_id || "21m00Tcm4TlvDq8ikWAM") === voice.id && (
-                            <Check className="w-4 h-4 text-orange-400" />
+                          <button
+                            onClick={() => openVoiceUpdateConfirm(voice.id)}
+                            className="flex-1 text-left min-w-0 flex items-center justify-between"
+                          >
+                            <div className="flex-1 min-w-0">
+                              <div className="text-sm text-white">{voice.name}</div>
+                              {voice.labels && formatVoiceLabels(voice.labels) && (
+                                <div className="text-xs text-gray-500 truncate">
+                                  {formatVoiceLabels(voice.labels)}
+                                </div>
+                              )}
+                            </div>
+                            {(story?.voice_id || "21m00Tcm4TlvDq8ikWAM") === voice.id && (
+                              <Check className="w-4 h-4 text-orange-400 flex-shrink-0 ml-2" />
+                            )}
+                          </button>
+                          {voice.preview_url && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                playVoicePreview(voice.id, voice.preview_url);
+                              }}
+                              className={`px-2 py-1 rounded text-xs font-medium transition-colors flex-shrink-0 w-16 ${
+                                playingPreviewId === voice.id
+                                  ? 'bg-orange-600 text-white'
+                                  : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
+                              }`}
+                            >
+                              {playingPreviewId === voice.id ? 'Stop' : 'Preview'}
+                            </button>
                           )}
-                        </button>
+                        </div>
                       ))
                     ) : (
                       <div className="px-3 py-2 text-sm text-gray-500">No voices available</div>
@@ -3380,11 +3270,18 @@ export default function StoryDetailsPage() {
                             : 'hover:bg-gray-700'
                         }`}
                       >
-                        <div className="flex items-center gap-2 flex-1">
+                        <div className="flex items-center gap-2 flex-1 min-w-0">
                           {selectedVoiceId === voice.id && (
-                            <Check className="w-4 h-4 text-orange-400" />
+                            <Check className="w-4 h-4 text-orange-400 flex-shrink-0" />
                           )}
-                          <span className="text-sm text-white">{voice.name}</span>
+                          <div className="flex-1 min-w-0">
+                            <div className="text-sm text-white">{voice.name}</div>
+                            {voice.labels && formatVoiceLabels(voice.labels) && (
+                              <div className="text-xs text-gray-500 truncate">
+                                {formatVoiceLabels(voice.labels)}
+                              </div>
+                            )}
+                          </div>
                         </div>
                         {voice.preview_url && (
                           <button
@@ -3392,18 +3289,14 @@ export default function StoryDetailsPage() {
                               e.stopPropagation();
                               playVoicePreview(voice.id, voice.preview_url);
                             }}
-                            className={`p-1.5 rounded-full transition-colors ${
+                            className={`px-2 py-1 rounded text-xs font-medium transition-colors flex-shrink-0 w-16 ${
                               playingPreviewId === voice.id
                                 ? 'bg-orange-600 text-white'
                                 : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
                             }`}
                             title="Preview voice"
                           >
-                            {playingPreviewId === voice.id ? (
-                              <Pause className="w-4 h-4" />
-                            ) : (
-                              <PlayCircle className="w-4 h-4" />
-                            )}
+                            {playingPreviewId === voice.id ? 'Stop' : 'Preview'}
                           </button>
                         )}
                       </div>
@@ -3837,11 +3730,18 @@ export default function StoryDetailsPage() {
                             : 'hover:bg-gray-700'
                         }`}
                       >
-                        <div className="flex items-center gap-2 flex-1">
+                        <div className="flex items-center gap-2 flex-1 min-w-0">
                           {selectedVoiceId === voice.id && (
-                            <Check className="w-4 h-4 text-orange-400" />
+                            <Check className="w-4 h-4 text-orange-400 flex-shrink-0" />
                           )}
-                          <span className="text-sm text-white">{voice.name}</span>
+                          <div className="flex-1 min-w-0">
+                            <div className="text-sm text-white">{voice.name}</div>
+                            {voice.labels && formatVoiceLabels(voice.labels) && (
+                              <div className="text-xs text-gray-500 truncate">
+                                {formatVoiceLabels(voice.labels)}
+                              </div>
+                            )}
+                          </div>
                         </div>
                         {voice.preview_url && (
                           <button
@@ -3849,18 +3749,14 @@ export default function StoryDetailsPage() {
                               e.stopPropagation();
                               playVoicePreview(voice.id, voice.preview_url);
                             }}
-                            className={`p-1.5 rounded-full transition-colors ${
+                            className={`px-2 py-1 rounded text-xs font-medium transition-colors flex-shrink-0 w-16 ${
                               playingPreviewId === voice.id
                                 ? 'bg-orange-600 text-white'
                                 : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
                             }`}
                             title="Preview voice"
                           >
-                            {playingPreviewId === voice.id ? (
-                              <Pause className="w-4 h-4" />
-                            ) : (
-                              <PlayCircle className="w-4 h-4" />
-                            )}
+                            {playingPreviewId === voice.id ? 'Stop' : 'Preview'}
                           </button>
                         )}
                       </div>

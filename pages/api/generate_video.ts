@@ -97,11 +97,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .maybeSingle();
 
     if (existingJob) {
-      // Check if job is stale (older than 30 minutes) - assume it crashed
+      // Check if job is stale (older than 5 minutes) - assume it crashed
       const jobAge = Date.now() - new Date(existingJob.started_at).getTime();
-      const thirtyMinutes = 30 * 60 * 1000;
+      const fiveMinutes = 5 * 60 * 1000;
 
-      if (jobAge > thirtyMinutes) {
+      if (jobAge > fiveMinutes) {
         // Job is stale - mark as failed and allow new generation
         console.log(`⚠️ Stale job detected (${Math.floor(jobAge / 60000)} minutes old), marking as failed`);
         await supabaseAdmin
@@ -109,14 +109,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           .update({
             status: 'failed',
             completed_at: new Date().toISOString(),
-            error: 'Job timed out (stale for more than 30 minutes)'
+            error: `Job timed out (stale for more than 5 minutes)`
           })
           .eq('id', existingJob.id);
+
+        console.log(`✅ Cleared stale job, proceeding with new generation`);
       } else {
         // Job is recent - still processing
         const startedAt = new Date(existingJob.started_at).toLocaleTimeString();
+        const ageMinutes = Math.floor(jobAge / 60000);
+        const ageSeconds = Math.floor((jobAge % 60000) / 1000);
         return res.status(409).json({
-          error: `Video generation already in progress for this story (started at ${startedAt})`,
+          error: `Video generation already in progress for this story (started ${ageMinutes}m ${ageSeconds}s ago)`,
           job_id: existingJob.id
         });
       }

@@ -162,11 +162,13 @@ Visual Description: ${visualDescriptions[i]}`
 
     const images: string[] = [];
 
-    // Generate each scene individually
-    for (let i = 0; i < scenes.length; i++) {
+    // Generate all scenes in parallel for speed
+    logger.log(`⚡ Generating all ${scenes.length} images in parallel...`);
+
+    const generateImage = async (i: number) => {
       const scene = scenes[i];
       const sceneDescription = visualDescriptions[i];
-      logger.log(`\n📸 Generating image ${i + 1}/${scenes.length} for: "${scene.text.substring(0, 50)}..."`);
+      logger?.log(`📸 Starting image ${i + 1}/${scenes.length} for: "${scene.text.substring(0, 50)}..."`);
 
       const scenePrompt = `You are a professional ${finalStyle} illustrator. Create a single high-quality image for this scene.
 
@@ -211,7 +213,7 @@ Generate one beautiful image for Scene ${i + 1} in "${finalStyle}" style.`;
       const responseText = await resp.text();
 
       if (!resp.ok) {
-        logger.error(`❌ API error for scene ${i + 1}:`, responseText.substring(0, 300));
+        logger?.error(`❌ API error for scene ${i + 1}:`, responseText.substring(0, 300));
         throw new Error(`Image generation failed for scene ${i + 1} (${resp.status})`);
       }
 
@@ -219,7 +221,7 @@ Generate one beautiful image for Scene ${i + 1} in "${finalStyle}" style.`;
       try {
         data = JSON.parse(responseText);
       } catch (parseErr) {
-        logger.error(`❌ Failed to parse response for scene ${i + 1}`, responseText.substring(0, 300));
+        logger?.error(`❌ Failed to parse response for scene ${i + 1}`, responseText.substring(0, 300));
         throw new Error(`Invalid JSON response for scene ${i + 1}`);
       }
 
@@ -241,13 +243,22 @@ Generate one beautiful image for Scene ${i + 1} in "${finalStyle}" style.`;
       }
 
       if (!imageUrl) {
-        logger.error(`❌ No image returned for scene ${i + 1}`);
+        logger?.error(`❌ No image returned for scene ${i + 1}`);
         throw new Error(`No image generated for scene ${i + 1}`);
       }
 
-      images.push(imageUrl);
-      logger.log(`✅ Scene ${i + 1} image generated successfully (${images.length}/${scenes.length})`);
-    }
+      logger?.log(`✅ Scene ${i + 1} image generated successfully`);
+      return { index: i, imageUrl };
+    };
+
+    // Generate all images in parallel
+    const imagePromises = scenes.map((_, i) => generateImage(i));
+    const results = await Promise.all(imagePromises);
+
+    // Sort by index to maintain scene order
+    results.sort((a, b) => a.index - b.index);
+    const sortedImages = results.map(r => r.imageUrl);
+    images.push(...sortedImages);
 
     logger.log(`\n🖼️ Successfully generated ${images.length} unique images for ${scenes.length} scenes`);
 
@@ -275,23 +286,26 @@ Generate one beautiful image for Scene ${i + 1} in "${finalStyle}" style.`;
       if (uploadErr) throw uploadErr;
 
       const publicUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/images/${fileName}`;
-      
+
+      const imageGeneratedAt = new Date().toISOString();
+
       // 8️⃣ Update scene with image URL and set image_generated_at timestamp
       const { error: updateErr } = await supabaseAdmin
         .from("scenes")
         .update({
           image_url: publicUrl,
-          image_generated_at: new Date().toISOString()
+          image_generated_at: imageGeneratedAt
         })
         .eq("id", scenes[i].id);
-        
+
       if (updateErr) throw updateErr;
-      
+
       uploads.push({
         id: scenes[i].id,
         scene_id: scenes[i].id,
         scene_order: i + 1,
-        image_url: publicUrl
+        image_url: publicUrl,
+        image_generated_at: imageGeneratedAt
       });
       logger.log(`✅ Updated scene ${i + 1} with image → ${publicUrl}`);
     }

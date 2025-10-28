@@ -7,6 +7,7 @@ import { supabaseAdmin } from "../../lib/supabaseAdmin";
 import { JobLogger } from "../../lib/logger";
 import { updateStoryMetadata } from "../../lib/updateStoryMetadata";
 import * as Echogarden from "echogarden";
+import { textToSSML } from "../../lib/ssmlHelper";
 
 const ELEVENLABS_API = "https://api.elevenlabs.io/v1/text-to-speech";
 
@@ -43,6 +44,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const sceneText = scene.text;
     logger.log(`📖 Scene text length: ${sceneText.length} chars`);
 
+    // Use fixed defaults for voice parameters (same for all stories)
+    const voiceStability = 0.4;
+    const voiceSimilarity = 0.7;
+    logger.log(`🎤 Voice settings: stability=${voiceStability}, similarity=${voiceSimilarity}`);
+
+    // 2️⃣ Convert text to SSML with intelligent pauses
+    const ssmlText = textToSSML(sceneText, {
+      sentencePause: 500, // 0.5s after sentences
+      endPause: 800, // 0.8s at scene end
+      commaPause: 300, // 0.3s after commas
+    });
+    logger.log(`📝 Using SSML for better narration flow`);
+    logger.log(`🔍 SSML preview: ${ssmlText.substring(0, 100)}...`);
+
     // 3️⃣ Generate audio
     logger.log(`🧠 Generating TTS with ElevenLabs voice: ${voiceId}`);
     const ttsRes = await fetch(`${ELEVENLABS_API}/${voiceId}`, {
@@ -52,9 +67,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        text: sceneText,
+        text: ssmlText,
         model_id: "eleven_multilingual_v2",
-        voice_settings: { stability: 0.4, similarity_boost: 0.7 },
+        voice_settings: {
+          stability: voiceStability,
+          similarity_boost: voiceSimilarity
+        },
+        enable_ssml: true,
       }),
     });
 
@@ -73,7 +92,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const duration = info.format?.duration || 0;
     logger.log(`⏱ Audio duration: ${duration.toFixed(2)} seconds`);
 
-    // 5.5️⃣ Generate word-level timestamps using forced alignment
+    // 6️⃣ Generate word-level timestamps using forced alignment
     logger.log(`🔍 Generating word-level timestamps with forced alignment...`);
     let wordTimestamps = null;
     try {
@@ -95,7 +114,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // Continue without timestamps rather than failing completely
     }
 
-    // 6️⃣ Delete old audio if exists and upload new one
+    // 7️⃣ Delete old audio if exists and upload new one
     const fileName = `scene-${scene_id}.mp3`;
 
     // Always delete first to avoid "resource already exists" error
@@ -103,7 +122,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await supabaseAdmin.storage.from("audio").remove([fileName]);
     logger.log(`✅ Cleanup completed`);
 
-    // 7️⃣ Upload new audio to Supabase
+    // 8️⃣ Upload new audio to Supabase
     logger.log(`☁️ Uploading new audio file: ${fileName}`);
     const { error: uploadErr } = await supabaseAdmin.storage
       .from("audio")
@@ -116,7 +135,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const audioUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/audio/${fileName}`;
 
-    // 8️⃣ Update scene with audio URL, voice_id, duration, word timestamps, and set audio_generated_at timestamp
+    // 9️⃣ Update scene with audio URL, voice_id, duration, word timestamps, and set audio_generated_at timestamp
     const { error: updateErr } = await supabaseAdmin
       .from("scenes")
       .update({
