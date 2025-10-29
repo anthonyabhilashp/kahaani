@@ -8,6 +8,7 @@ import { JobLogger } from "../../lib/logger";
 import { updateStoryMetadata } from "../../lib/updateStoryMetadata";
 import * as Echogarden from "echogarden";
 import { textToSSML } from "../../lib/ssmlHelper";
+import { getUserCredits, deductCredits, refundCredits, CREDIT_COSTS } from "../../lib/credits";
 
 const ELEVENLABS_API = "https://api.elevenlabs.io/v1/text-to-speech";
 
@@ -24,6 +25,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!scene_id) return res.status(400).json({ error: "scene_id is required" });
 
   let logger: JobLogger | null = null;
+  let creditsDeducted = false; // Track if credits were deducted for refund
+  let storyIdForRefund: string | null = null;
+  let userIdForRefund: string | null = null;
 
   try {
     logger = new JobLogger(scene_id, "generate_audio");
@@ -43,6 +47,58 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const sceneText = scene.text;
     logger.log(`📖 Scene text length: ${sceneText.length} chars`);
+
+    // 💳 Credit check: Get user ID from story
+    const { data: story, error: storyError } = await supabaseAdmin
+      .from("stories")
+      .select("user_id, title")
+      .eq("id", scene.story_id)
+      .single();
+
+    if (storyError || !story) {
+      throw new Error("Story not found");
+    }
+
+    const userId = story.user_id;
+    logger.log(`👤 User ID: ${userId}`);
+
+    // 💳 Charge 1 credit per audio scene
+    const creditsNeeded = CREDIT_COSTS.AUDIO_PER_SCENE;
+    logger.log(`💳 Credits needed: ${creditsNeeded} (1 credit per audio)`);
+
+    // Check credit balance
+    const currentBalance = await getUserCredits(userId);
+    logger.log(`💰 Current balance: ${currentBalance} credits`);
+
+    if (currentBalance < creditsNeeded) {
+      logger.log(`❌ Insufficient credits: need ${creditsNeeded}, have ${currentBalance}`);
+      return res.status(402).json({
+        error: `Insufficient credits. You need ${creditsNeeded} credit for audio generation, but you only have ${currentBalance}.`,
+        required_credits: creditsNeeded,
+        current_balance: currentBalance
+      });
+    }
+
+    // Deduct credits for this audio scene
+    const deductResult = await deductCredits(
+      userId,
+      creditsNeeded,
+      'deduction_audio',
+      `Audio generation for scene in story: ${story.title || scene.story_id}`,
+      scene.story_id
+    );
+
+    if (!deductResult.success) {
+      logger.log(`❌ Failed to deduct credits: ${deductResult.error}`);
+      return res.status(500).json({ error: deductResult.error });
+    }
+
+    logger.log(`✅ Deducted ${creditsNeeded} credit. New balance: ${deductResult.newBalance}`);
+
+    // Track for potential refund if generation fails
+    creditsDeducted = true;
+    storyIdForRefund = scene.story_id;
+    userIdForRefund = userId;
 
     // Use fixed defaults for voice parameters (same for all stories)
     const voiceStability = 0.4;
@@ -165,6 +221,36 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   } catch (err: any) {
     if (logger) logger.error("❌ Error during audio generation", err);
+
+    // 💳 Auto-refund credits if generation failed and credits were deducted
+    if (creditsDeducted && userIdForRefund && storyIdForRefund) {
+      try {
+        const refundAmount = CREDIT_COSTS.AUDIO_PER_SCENE;
+        logger?.log(`💸 Refunding ${refundAmount} credit due to generation failure...`);
+
+        const { data: story } = await supabaseAdmin
+          .from("stories")
+          .select("title")
+          .eq("id", storyIdForRefund)
+          .single();
+
+        const refundResult = await refundCredits(
+          userIdForRefund,
+          refundAmount,
+          `Refund: Audio generation failed for story ${story?.title || storyIdForRefund}`,
+          storyIdForRefund
+        );
+
+        if (refundResult.success) {
+          logger?.log(`✅ Refunded ${refundAmount} credit. New balance: ${refundResult.newBalance}`);
+        } else {
+          logger?.error(`❌ Failed to refund credits`);
+        }
+      } catch (refundErr: any) {
+        logger?.error(`❌ Error during refund process: ${refundErr.message}`);
+      }
+    }
+
     res.status(500).json({ error: err.message });
   }
 }

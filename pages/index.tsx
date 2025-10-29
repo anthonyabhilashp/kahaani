@@ -6,13 +6,15 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Plus, Loader2, PlayCircle, Clock, Film, Image as ImageIcon, Video, Settings, User, LogOut, Trash2, MoreHorizontal, Smartphone, Square, Monitor } from "lucide-react";
+import { Plus, Loader2, PlayCircle, Clock, Film, Image as ImageIcon, Video, Settings, User, LogOut, Trash2, MoreHorizontal, Smartphone, Square, Monitor, Coins } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { LandingPage } from "@/components/LandingPage";
+import { useCredits } from "../hooks/useCredits";
 
 type Story = {
   id: string;
@@ -30,6 +32,7 @@ type Story = {
 export default function Dashboard() {
   const router = useRouter();
   const { user, loading: authLoading, signOut } = useAuth();
+  const { balance: creditBalance, loading: creditsLoading } = useCredits();
   const [stories, setStories] = useState<Story[]>([]);
   const [loading, setLoading] = useState(true);
   const [newPrompt, setNewPrompt] = useState("");
@@ -43,7 +46,9 @@ export default function Dashboard() {
   const hasFetchedRef = useRef(false);
 
   // New story creation options
-  const [targetDuration, setTargetDuration] = useState<30 | 60 | 120 | 180>(60); // in seconds
+  const [targetDuration, setTargetDuration] = useState<30 | 60 | 120 | 180>(
+    creditBalance <= 15 ? 30 : 60
+  ); // in seconds - default to 30s if low credits
   const [selectedVoiceId, setSelectedVoiceId] = useState<string>("21m00Tcm4TlvDq8ikWAM"); // Rachel - default
   const [aspectRatio, setAspectRatio] = useState<"9:16" | "1:1" | "16:9">("9:16");
   const [voices, setVoices] = useState<any[]>([]);
@@ -51,12 +56,8 @@ export default function Dashboard() {
   const [playingPreviewId, setPlayingPreviewId] = useState<string | null>(null);
   const voicePreviewAudioRef = useRef<HTMLAudioElement | null>(null);
 
-  // Protect route - redirect to login if not authenticated
-  useEffect(() => {
-    if (!authLoading && !user) {
-      router.push('/login');
-    }
-  }, [user, authLoading, router]);
+  // Show landing page for non-authenticated users
+  // (Removed redirect to /login - will show landing page instead)
 
   useEffect(() => {
     // Prevent duplicate fetches (React Strict Mode calls useEffect twice)
@@ -273,6 +274,20 @@ export default function Dashboard() {
       .join(' • ');
   }
 
+  // Show landing page if user is not authenticated
+  if (!authLoading && !user) {
+    return <LandingPage />;
+  }
+
+  // Show loading state while checking authentication
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-black flex items-center justify-center">
+        <Loader2 className="animate-spin h-8 w-8 text-orange-500" />
+      </div>
+    );
+  }
+
   // Render the create story dialog content
   const renderDialogContent = () => (
     <div className="space-y-4 mt-4">
@@ -298,23 +313,37 @@ export default function Dashboard() {
         <div className="grid grid-cols-4 gap-2">
           {[30, 60, 120, 180].map((duration) => {
             const sceneEstimate = Math.max(3, Math.round(duration / 6));
+            const isDisabled = creditBalance <= 15 && duration > 30;
             return (
               <button
                 key={duration}
                 type="button"
-                onClick={() => setTargetDuration(duration as 30 | 60 | 120 | 180)}
-                className={`p-2 rounded-lg border transition-all ${
+                onClick={() => !isDisabled && setTargetDuration(duration as 30 | 60 | 120 | 180)}
+                disabled={isDisabled}
+                className={`p-2 pt-5 rounded-lg border transition-all relative ${
                   targetDuration === duration
                     ? 'border-orange-500 bg-orange-500/20 text-orange-400'
+                    : isDisabled
+                    ? 'border-gray-800 bg-gray-900 text-gray-600 cursor-not-allowed opacity-50'
                     : 'border-gray-700 bg-gray-800 text-gray-400 hover:border-gray-600'
                 }`}
               >
+                {isDisabled && (
+                  <div className="absolute top-0 left-0 right-0 bg-orange-900/30 text-orange-400 text-[9px] font-medium py-0.5 rounded-t-lg text-center">
+                    Low credits
+                  </div>
+                )}
                 <div className="text-sm font-medium">{formatTargetDuration(duration)}</div>
                 <div className="text-xs opacity-75">({sceneEstimate} scenes)</div>
               </button>
             );
           })}
         </div>
+        {creditBalance <= 15 && (
+          <p className="text-xs text-orange-400 mt-2">
+            You have {creditBalance} credits. Get more credits to create longer stories.
+          </p>
+        )}
       </div>
 
       {/* Format */}
@@ -474,6 +503,33 @@ export default function Dashboard() {
             </button>
           </div>
         </nav>
+
+        {/* Credit Balance Section */}
+        <div className="border-t border-gray-800 p-4">
+          <div className="bg-gradient-to-br from-orange-600/20 to-pink-600/20 border border-orange-600/30 rounded-lg p-4">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-full bg-orange-600/30 flex items-center justify-center">
+                  <Coins className="w-4 h-4 text-orange-400" />
+                </div>
+                <span className="text-xs font-medium text-gray-400 uppercase tracking-wider">Credits</span>
+              </div>
+            </div>
+            <div className="flex items-baseline gap-1">
+              {creditsLoading ? (
+                <Loader2 className="w-5 h-5 animate-spin text-orange-400" />
+              ) : (
+                <>
+                  <span className="text-3xl font-bold text-white">{creditBalance}</span>
+                  <span className="text-sm text-gray-400">available</span>
+                </>
+              )}
+            </div>
+            <p className="text-xs text-gray-500 mt-2">
+              1 story = 10 credits
+            </p>
+          </div>
+        </div>
 
         {/* User Profile Section */}
         <div className="border-t border-gray-800 p-4">

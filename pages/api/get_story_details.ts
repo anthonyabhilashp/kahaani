@@ -8,7 +8,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     // Try to fetch with background music support first
     let storyResult = await supabaseAdmin.from("stories").select(`
-      id, title, prompt, status, created_at, updated_at, voice_id, default_image_style, image_instructions, caption_settings,
+      id, title, prompt, status, created_at, updated_at, voice_id, aspect_ratio, default_image_style, image_instructions, caption_settings,
       background_music_id, background_music_volume, background_music_enabled,
       background_music:background_music_library(id, name, description, file_url, duration, category)
     `).eq("id", id).single();

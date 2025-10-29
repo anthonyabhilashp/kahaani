@@ -1,17 +1,27 @@
-import { useState, FormEvent } from 'react';
+import { useState, FormEvent, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import Link from 'next/link';
 import { useRouter } from 'next/router';
+import Link from 'next/link';
 
-export default function Signup() {
-  const [email, setEmail] = useState('');
+export default function ResetPassword() {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
-  const { signUp } = useAuth();
+  const { updatePassword } = useAuth();
   const router = useRouter();
+
+  // Check if we have a valid session (user clicked the email link)
+  useEffect(() => {
+    // Hash fragment will contain access_token if redirected from email
+    const hashParams = new URLSearchParams(window.location.hash.substring(1));
+    const accessToken = hashParams.get('access_token');
+
+    if (!accessToken) {
+      setError('Invalid or expired reset link. Please request a new password reset.');
+    }
+  }, []);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -29,17 +39,11 @@ export default function Signup() {
 
     setLoading(true);
 
-    const { error } = await signUp(email, password);
+    const { error } = await updatePassword(password);
 
     if (error) {
-      const errorMessage = error.message || 'Failed to create account';
-      setError(errorMessage);
+      setError(error.message || 'Failed to update password');
       setLoading(false);
-
-      // If account already exists, redirect to login after 3 seconds
-      if (errorMessage.includes('already exists')) {
-        setTimeout(() => router.push('/login'), 3000);
-      }
     } else {
       setSuccess(true);
       setLoading(false);
@@ -56,21 +60,21 @@ export default function Signup() {
           <div className="w-16 h-16 bg-gradient-to-br from-orange-500 to-orange-600 rounded-2xl flex items-center justify-center text-white font-bold text-2xl mx-auto mb-4">
             K
           </div>
-          <h2 className="text-3xl font-bold text-white">Create your account</h2>
+          <h2 className="text-3xl font-bold text-white">Set new password</h2>
           <p className="mt-2 text-sm text-gray-400">
-            Start creating amazing AI-powered stories
+            Enter your new password below
           </p>
         </div>
 
-        {/* Signup Form */}
+        {/* Reset Password Form */}
         <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
           {error && (
             <div className="bg-red-900/20 border border-red-700 text-red-400 px-4 py-3 rounded-lg text-sm">
               {error}
-              {error.includes('already exists') && (
+              {error.includes('Invalid or expired') && (
                 <div className="mt-2">
-                  <Link href="/login" className="text-orange-400 hover:text-orange-300 underline font-medium">
-                    Click here to sign in
+                  <Link href="/forgot-password" className="text-orange-400 hover:text-orange-300 underline font-medium">
+                    Request a new reset link
                   </Link>
                 </div>
               )}
@@ -79,31 +83,14 @@ export default function Signup() {
 
           {success && (
             <div className="bg-green-900/20 border border-green-700 text-green-400 px-4 py-3 rounded-lg text-sm">
-              Account created successfully! Check your email to verify your account. Redirecting to login...
+              Password updated successfully! Redirecting to login...
             </div>
           )}
 
           <div className="space-y-4">
             <div>
-              <label htmlFor="email" className="block text-sm font-medium text-gray-300 mb-2">
-                Email address
-              </label>
-              <input
-                id="email"
-                name="email"
-                type="email"
-                autoComplete="email"
-                required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="appearance-none relative block w-full px-3 py-3 border border-gray-700 bg-gray-900 placeholder-gray-500 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent"
-                placeholder="Enter your email"
-              />
-            </div>
-
-            <div>
               <label htmlFor="password" className="block text-sm font-medium text-gray-300 mb-2">
-                Password
+                New Password
               </label>
               <input
                 id="password"
@@ -113,14 +100,15 @@ export default function Signup() {
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="appearance-none relative block w-full px-3 py-3 border border-gray-700 bg-gray-900 placeholder-gray-500 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent"
-                placeholder="Create a password (min 6 characters)"
+                disabled={success}
+                className="appearance-none relative block w-full px-3 py-3 border border-gray-700 bg-gray-900 placeholder-gray-500 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
+                placeholder="Enter new password (min 6 characters)"
               />
             </div>
 
             <div>
               <label htmlFor="confirm-password" className="block text-sm font-medium text-gray-300 mb-2">
-                Confirm Password
+                Confirm New Password
               </label>
               <input
                 id="confirm-password"
@@ -130,8 +118,9 @@ export default function Signup() {
                 required
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
-                className="appearance-none relative block w-full px-3 py-3 border border-gray-700 bg-gray-900 placeholder-gray-500 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent"
-                placeholder="Confirm your password"
+                disabled={success}
+                className="appearance-none relative block w-full px-3 py-3 border border-gray-700 bg-gray-900 placeholder-gray-500 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
+                placeholder="Confirm new password"
               />
             </div>
           </div>
@@ -141,16 +130,16 @@ export default function Signup() {
             disabled={loading || success}
             className="w-full flex justify-center py-3 px-4 border border-transparent rounded-lg text-sm font-medium text-white bg-orange-600 hover:bg-orange-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-orange-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
-            {loading ? 'Creating account...' : 'Sign up'}
+            {loading ? 'Updating password...' : success ? 'Password updated!' : 'Update password'}
           </button>
 
           <div className="text-center">
-            <p className="text-sm text-gray-400">
-              Already have an account?{' '}
-              <Link href="/login" className="font-medium text-orange-400 hover:text-orange-300 transition-colors">
-                Sign in
-              </Link>
-            </p>
+            <Link
+              href="/login"
+              className="text-sm text-gray-400 hover:text-white transition-colors"
+            >
+              Back to sign in
+            </Link>
           </div>
         </form>
       </div>

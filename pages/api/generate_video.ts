@@ -9,6 +9,7 @@ import { generateWordByWordASS, type WordTimestamp } from "../../lib/assSubtitle
 import { updateStoryMetadata } from "../../lib/updateStoryMetadata";
 import { getEffect } from "../../lib/videoEffects";
 import { generateEffectFrames, cleanupFrames } from "../../lib/frameGenerator";
+import { getUserCredits, deductCredits, refundCredits, CREDIT_COSTS } from "../../lib/credits";
 
 export const config = { api: { bodyParser: { sizeLimit: "4mb" } } };
 
@@ -97,11 +98,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .maybeSingle();
 
     if (existingJob) {
-      // Check if job is stale (older than 5 minutes) - assume it crashed
+      // Check if job is stale (older than 2 minutes) - assume it crashed or timed out
       const jobAge = Date.now() - new Date(existingJob.started_at).getTime();
-      const fiveMinutes = 5 * 60 * 1000;
+      const twoMinutes = 2 * 60 * 1000;
 
-      if (jobAge > fiveMinutes) {
+      if (jobAge > twoMinutes) {
         // Job is stale - mark as failed and allow new generation
         console.log(`⚠️ Stale job detected (${Math.floor(jobAge / 60000)} minutes old), marking as failed`);
         await supabaseAdmin
@@ -109,7 +110,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           .update({
             status: 'failed',
             completed_at: new Date().toISOString(),
-            error: `Job timed out (stale for more than 5 minutes)`
+            error: `Job timed out (stale for more than 2 minutes)`
           })
           .eq('id', existingJob.id);
 
@@ -154,6 +155,71 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (background_music?.enabled) {
       logger.log(`🎵 Background music enabled at ${background_music.volume}% volume`);
     }
+
+    // 💳 Credit check: Get user ID from story
+    const { data: story, error: storyError } = await supabaseAdmin
+      .from("stories")
+      .select("user_id, title")
+      .eq("id", story_id)
+      .single();
+
+    if (storyError || !story) {
+      throw new Error("Story not found");
+    }
+
+    const userId = story.user_id;
+    logger.log(`👤 User ID: ${userId}`);
+
+    // 💳 Check credit balance
+    const currentBalance = await getUserCredits(userId);
+    logger.log(`💰 Current balance: ${currentBalance} credits`);
+
+    if (currentBalance < CREDIT_COSTS.VIDEO_GENERATION) {
+      logger.log(`❌ Insufficient credits: need ${CREDIT_COSTS.VIDEO_GENERATION}, have ${currentBalance}`);
+
+      // Mark job as failed before returning
+      await supabaseAdmin
+        .from('video_generation_jobs')
+        .update({
+          status: 'failed',
+          completed_at: new Date().toISOString(),
+          error: 'Insufficient credits'
+        })
+        .eq('id', jobId);
+
+      return res.status(402).json({
+        error: `Insufficient credits. You need ${CREDIT_COSTS.VIDEO_GENERATION} credit for video generation, but you only have ${currentBalance}.`,
+        required_credits: CREDIT_COSTS.VIDEO_GENERATION,
+        current_balance: currentBalance
+      });
+    }
+
+    // 💳 Deduct credits before starting generation
+    const deductResult = await deductCredits(
+      userId,
+      CREDIT_COSTS.VIDEO_GENERATION,
+      'deduction_video',
+      `Video generation for story: ${story.title || story_id}`,
+      story_id
+    );
+
+    if (!deductResult.success) {
+      logger.log(`❌ Failed to deduct credits: ${deductResult.error}`);
+
+      // Mark job as failed before returning
+      await supabaseAdmin
+        .from('video_generation_jobs')
+        .update({
+          status: 'failed',
+          completed_at: new Date().toISOString(),
+          error: 'Failed to deduct credits'
+        })
+        .eq('id', jobId);
+
+      return res.status(500).json({ error: deductResult.error });
+    }
+
+    logger.log(`✅ Deducted ${CREDIT_COSTS.VIDEO_GENERATION} credit. New balance: ${deductResult.newBalance}`);
 
     const tmpDir = path.join(process.cwd(), "tmp", story_id);
     fs.mkdirSync(tmpDir, { recursive: true });
@@ -674,6 +740,34 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       } catch (updateErr) {
         console.error("Failed to update job status:", updateErr);
       }
+    }
+
+    // 💳 Auto-refund credits if generation failed
+    try {
+      // Get user ID from story for refund
+      const { data: story } = await supabaseAdmin
+        .from("stories")
+        .select("user_id, title")
+        .eq("id", story_id)
+        .single();
+
+      if (story && story.user_id) {
+        logger?.log(`💸 Refunding ${CREDIT_COSTS.VIDEO_GENERATION} credit due to generation failure...`);
+        const refundResult = await refundCredits(
+          story.user_id,
+          CREDIT_COSTS.VIDEO_GENERATION,
+          `Refund: Video generation failed for story ${story.title || story_id}`,
+          story_id
+        );
+
+        if (refundResult.success) {
+          logger?.log(`✅ Refunded ${CREDIT_COSTS.VIDEO_GENERATION} credit. New balance: ${refundResult.newBalance}`);
+        } else {
+          logger?.error(`❌ Failed to refund credits`);
+        }
+      }
+    } catch (refundErr: any) {
+      logger?.error(`❌ Error during refund process: ${refundErr.message}`);
     }
 
     res.status(500).json({ error: err.message });

@@ -6,11 +6,15 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Slider } from "../../components/ui/slider";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../components/ui/tooltip";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../../components/ui/dropdown-menu";
-import { ArrowLeft, Play, Pause, Download, Volume2, VolumeX, Maximize, Loader2, ImageIcon, Image, Pencil, Trash2, Check, X, PlayCircle, ChevronDown, Plus, Type, Music, Upload, Sparkles, ExternalLink, MoreHorizontal } from "lucide-react";
+import { ArrowLeft, Play, Pause, Download, Volume2, VolumeX, Maximize, Loader2, ImageIcon, Image, Pencil, Trash2, Check, X, PlayCircle, ChevronDown, Plus, Type, Music, Upload, Sparkles, ExternalLink, MoreHorizontal, Coins } from "lucide-react";
 import { WordByWordCaption, SimpleCaption, type WordTimestamp } from "../../components/WordByWordCaption";
 import { EffectSelectionModal } from "../../components/EffectSelectionModal";
 import type { EffectType } from "../../lib/videoEffects";
 import { getEffectAnimationClass } from "../../lib/videoEffects";
+import { useCredits } from "../../hooks/useCredits";
+import { CREDIT_COSTS } from "../../lib/creditConstants";
+import { useAuth } from "../../contexts/AuthContext";
+import { supabase } from "../../lib/supabaseClient";
 
 type Scene = {
   id?: string;
@@ -45,8 +49,11 @@ const ImagePlaceholder = ({ className = "", alt = "No image" }: { className?: st
 export default function StoryDetailsPage() {
   const router = useRouter();
   const { id } = router.query;
+  const { balance: creditBalance, refetch: refetchCredits } = useCredits();
+  const { user } = useAuth();
 
   const [story, setStory] = useState<any>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
   const [scenes, setScenes] = useState<Scene[]>([]);
   const [video, setVideo] = useState<Video | null>(null);
   const [selectedScene, setSelectedScene] = useState(0);
@@ -69,6 +76,7 @@ export default function StoryDetailsPage() {
   const [modifiedScenes, setModifiedScenes] = useState<Set<number>>(new Set());
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [sceneToDelete, setSceneToDelete] = useState<number | null>(null);
+  const [deletingScene, setDeletingScene] = useState(false);
   const [isPlayingPreview, setIsPlayingPreview] = useState(false);
   const [volume, setVolume] = useState(0); // Start muted
   const [lastVolume, setLastVolume] = useState(0.7); // Remember last volume setting
@@ -90,6 +98,11 @@ export default function StoryDetailsPage() {
   // Effect selection modal state
   const [effectModalOpen, setEffectModalOpen] = useState(false);
   const [selectedEffectScene, setSelectedEffectScene] = useState<number | null>(null);
+
+  // Video generation success dialog state
+  const [videoSuccessDialogOpen, setVideoSuccessDialogOpen] = useState(false);
+  const [generatedVideoUrl, setGeneratedVideoUrl] = useState<string | null>(null);
+  const [generatedVideoDuration, setGeneratedVideoDuration] = useState<number>(0);
 
   // Helper function to calculate total video duration
   const getTotalDuration = () => {
@@ -218,6 +231,13 @@ export default function StoryDetailsPage() {
   const [imageInstructions, setImageInstructions] = useState<string>("");
   const [bulkImageDrawerOpen, setBulkImageDrawerOpen] = useState(false);
   const [bulkAudioDrawerOpen, setBulkAudioDrawerOpen] = useState(false);
+  const [creditConfirmOpen, setCreditConfirmOpen] = useState(false);
+  const [creditConfirmAction, setCreditConfirmAction] = useState<{
+    title: string;
+    message: string;
+    credits: number;
+    onConfirm: () => void | Promise<void>;
+  } | null>(null);
   const [loadingSampleImages, setLoadingSampleImages] = useState(false);
   const [sampleImagesLoaded, setSampleImagesLoaded] = useState(false);
   const [storyVoicePopoverOpen, setStoryVoicePopoverOpen] = useState(false);
@@ -440,6 +460,13 @@ export default function StoryDetailsPage() {
         console.log("🎵 Loaded background music settings from database:", bgSettings);
       }
 
+      // Load aspect ratio from database if available
+      if (data.story?.aspect_ratio) {
+        const ratio = data.story.aspect_ratio as "9:16" | "16:9" | "1:1";
+        setAspectRatio(ratio);
+        console.log("📐 Loaded aspect ratio from database:", ratio);
+      }
+
       // Load voices if not already loaded (for story voice selector)
       if (voices.length === 0) {
         fetchVoices();
@@ -482,6 +509,31 @@ export default function StoryDetailsPage() {
     fetchStory();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [router.isReady, id]); // Only depend on router.isReady and id
+
+  // Check if user is admin
+  useEffect(() => {
+    const checkAdminStatus = async () => {
+      if (!user?.id) {
+        setIsAdmin(false);
+        return;
+      }
+
+      try {
+        const { data } = await supabase
+          .from('user_profiles')
+          .select('is_admin')
+          .eq('user_id', user.id)
+          .single();
+
+        setIsAdmin(data?.is_admin === true);
+      } catch (err) {
+        console.error('Error checking admin status:', err);
+        setIsAdmin(false);
+      }
+    };
+
+    checkAdminStatus();
+  }, [user?.id]);
 
   // Enable auto-save AFTER initial data has been loaded (prevents auto-save on mount)
   useEffect(() => {
@@ -761,6 +813,9 @@ export default function StoryDetailsPage() {
       // Refetch entire story details to get fresh data with all fields
       console.log("🔄 Refetching story details to sync all data...");
       await fetchStory();
+
+      // Refetch credit balance
+      await refetchCredits();
     } catch (err) {
       console.error("Image generation error:", err);
       alert(`Image generation failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
@@ -808,6 +863,9 @@ export default function StoryDetailsPage() {
       // Refetch entire story details to get fresh data with all fields
       console.log("🔄 Refetching story details to sync all data...");
       await fetchStory();
+
+      // Refetch credit balance
+      await refetchCredits();
     } catch (err) {
       console.error("Bulk audio generation error:", err);
       alert(`Bulk audio generation failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
@@ -877,6 +935,9 @@ export default function StoryDetailsPage() {
       // Refetch entire story details to get fresh data with all fields
       console.log("🔄 Refetching story details to sync all data...");
       await fetchStory();
+
+      // Refetch credit balance
+      await refetchCredits();
 
     } catch (err) {
       console.error("Scene image generation error:", err);
@@ -1081,6 +1142,9 @@ export default function StoryDetailsPage() {
       console.log("🔄 Refetching story details to sync all data...");
       await fetchStory();
 
+      // Refetch credit balance
+      await refetchCredits();
+
     } catch (err) {
       console.error("Scene audio generation error:", err);
       alert(`Scene audio generation failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
@@ -1141,6 +1205,30 @@ export default function StoryDetailsPage() {
 
       if (!res.ok) {
         const errorData = await res.json();
+
+        // Handle stuck job error (409 Conflict)
+        if (res.status === 409 && errorData.error?.includes('already in progress')) {
+          const shouldClear = window.confirm(
+            `${errorData.error}\n\nThis might be a stuck job from a previous attempt. Would you like to clear it and try again?`
+          );
+
+          if (shouldClear) {
+            // Clear the stuck job
+            const clearRes = await fetch("/api/clear_video_job", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ story_id: id }),
+            });
+
+            if (clearRes.ok) {
+              alert('Stuck job cleared! Please try generating the video again.');
+            } else {
+              alert('Failed to clear stuck job. Please wait 2 minutes and try again.');
+            }
+          }
+          throw new Error('Video generation cancelled - stuck job detected');
+        }
+
         throw new Error(errorData.error || `Server error: ${res.status}`);
       }
 
@@ -1161,13 +1249,10 @@ export default function StoryDetailsPage() {
         duration: data.duration
       });
 
-      // Auto-download the video
-      const link = document.createElement('a');
-      link.href = data.video_url;
-      link.download = `${story?.title || 'story'}-${aspectRatio}.mp4`;
-      link.click();
-
-      alert(`✅ Video generated successfully! Duration: ${data.duration.toFixed(1)}s`);
+      // Store video info and show success dialog
+      setGeneratedVideoUrl(data.video_url);
+      setGeneratedVideoDuration(data.duration);
+      setVideoSuccessDialogOpen(true);
     } catch (err) {
       console.error("❌ Video generation error:", err);
       alert(`Video generation failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
@@ -1558,29 +1643,31 @@ export default function StoryDetailsPage() {
 
   const confirmDelete = async () => {
     if (sceneToDelete === null || !id || !scenes[sceneToDelete]) return;
-    
+
+    setDeletingScene(true);
+
     try {
       const res = await fetch("/api/delete_scene", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
-          story_id: id, 
+        body: JSON.stringify({
+          story_id: id,
           scene_id: scenes[sceneToDelete].id,
           scene_order: sceneToDelete
         }),
       });
-      
+
       if (!res.ok) throw new Error("Failed to delete scene");
-      
+
       // Update local state immediately
       const updatedScenes = scenes.filter((_, index) => index !== sceneToDelete);
       setScenes(updatedScenes);
-      
+
       // Update selected scene if necessary
       if (selectedScene >= sceneToDelete && selectedScene > 0) {
         setSelectedScene(selectedScene - 1);
       }
-      
+
       // Update modified scenes set
       const newModified = new Set<number>();
       modifiedScenes.forEach(index => {
@@ -1591,16 +1678,18 @@ export default function StoryDetailsPage() {
         }
       });
       setModifiedScenes(newModified);
-      
+
       // Close dialog and reset state
       setDeleteDialogOpen(false);
       setSceneToDelete(null);
-      
+      setDeletingScene(false);
+
     } catch (err) {
       console.error("Scene delete error:", err);
       alert(`Failed to delete scene: ${err instanceof Error ? err.message : 'Unknown error'}`);
       setDeleteDialogOpen(false);
       setSceneToDelete(null);
+      setDeletingScene(false);
     }
   };
 
@@ -1846,6 +1935,40 @@ export default function StoryDetailsPage() {
               </AlertDialogContent>
             </AlertDialog>
 
+            {/* Reusable Credit Confirmation Dialog */}
+            <AlertDialog open={creditConfirmOpen} onOpenChange={setCreditConfirmOpen}>
+              <AlertDialogContent className="bg-gray-900 border-gray-700 text-white">
+                <AlertDialogHeader>
+                  <AlertDialogTitle>{creditConfirmAction?.title}</AlertDialogTitle>
+                  <AlertDialogDescription className="text-gray-400">
+                    {creditConfirmAction?.message}
+                    <br /><br />
+                    <div className="flex items-center justify-center gap-2 bg-orange-900/30 border border-orange-600/50 rounded-lg p-4">
+                      <Coins className="w-5 h-5 text-orange-400" />
+                      <span className="text-lg font-bold text-orange-400">
+                        This action will cost you {creditConfirmAction?.credits} {creditConfirmAction?.credits === 1 ? 'credit' : 'credits'}
+                      </span>
+                    </div>
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel className="bg-gray-800 border-gray-700 text-white hover:bg-gray-700 hover:text-white">
+                    Cancel
+                  </AlertDialogCancel>
+                  <AlertDialogAction
+                    onClick={async () => {
+                      await creditConfirmAction?.onConfirm();
+                      setCreditConfirmOpen(false);
+                      setCreditConfirmAction(null);
+                    }}
+                    className="bg-orange-600 hover:bg-orange-700 text-white"
+                  >
+                    Confirm
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+
             {/* Aspect Ratio Selector - Compact on mobile */}
             <Popover open={aspectRatioPopoverOpen} onOpenChange={setAspectRatioPopoverOpen}>
               <PopoverTrigger asChild>
@@ -1964,6 +2087,17 @@ export default function StoryDetailsPage() {
                 </TooltipProvider>
               )}
             </div>
+
+            {/* Credit Balance Display */}
+            <div className="flex items-center gap-1.5 px-2 md:px-3 py-1 md:py-1.5 bg-gray-800 border border-gray-700 rounded-lg">
+              <Coins className="w-3 h-3 md:w-4 md:h-4 text-orange-400" />
+              <span className="text-xs md:text-sm font-semibold text-white">
+                {creditBalance}
+              </span>
+              <span className="hidden md:inline text-xs text-gray-400">
+                credits
+              </span>
+            </div>
           </div>
         </div>
       </header>
@@ -2039,7 +2173,11 @@ export default function StoryDetailsPage() {
                             ) : (
                               <>
                                 <Image className="w-3 h-3 mr-1.5" />
-                                Images for All Scenes
+                                <span>Images for All Scenes</span>
+                                <span className="ml-1.5 px-1.5 py-0.5 bg-orange-800/50 rounded text-[10px] font-semibold flex items-center gap-0.5">
+                                  <Coins className="w-2.5 h-2.5" />
+                                  {scenes.length * CREDIT_COSTS.IMAGE_PER_SCENE}
+                                </span>
                               </>
                             )}
                           </Button>
@@ -2066,7 +2204,11 @@ export default function StoryDetailsPage() {
                             ) : (
                               <>
                                 <Volume2 className="w-3 h-3 mr-1.5" />
-                                Audio for All Scenes
+                                <span>Audio for All Scenes</span>
+                                <span className="ml-1.5 px-1.5 py-0.5 bg-orange-800/50 rounded text-[10px] font-semibold flex items-center gap-0.5">
+                                  <Coins className="w-2.5 h-2.5" />
+                                  {scenes.length * CREDIT_COSTS.AUDIO_PER_SCENE}
+                                </span>
                               </>
                             )}
                           </Button>
@@ -3089,16 +3231,27 @@ export default function StoryDetailsPage() {
                     setDeleteDialogOpen(false);
                     setSceneToDelete(null);
                   }}
+                  disabled={deletingScene}
                   className="flex-1 border-gray-700 text-gray-300 hover:bg-gray-800"
                 >
                   Cancel
                 </Button>
                 <Button
                   onClick={confirmDelete}
+                  disabled={deletingScene}
                   className="flex-1 bg-red-600 hover:bg-red-700 text-white"
                 >
-                  <Trash2 className="w-4 h-4 mr-2" />
-                  Delete Scene
+                  {deletingScene ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Deleting...
+                    </>
+                  ) : (
+                    <>
+                      <Trash2 className="w-4 h-4 mr-2" />
+                      Delete Scene
+                    </>
+                  )}
                 </Button>
               </div>
             </div>
@@ -3328,15 +3481,24 @@ export default function StoryDetailsPage() {
                   Cancel
                 </Button>
                 <Button
-                  onClick={async () => {
-                    // Stop any playing voice preview before generating
+                  onClick={() => {
+                    // Stop any playing voice preview before showing confirmation
                     if (voicePreviewAudioRef.current) {
                       voicePreviewAudioRef.current.pause();
                       voicePreviewAudioRef.current = null;
                     }
                     setPlayingPreviewId(null);
-                    await generateSceneAudio(audioDrawerScene, selectedVoiceId);
-                    setAudioDrawerOpen(false);
+
+                    setCreditConfirmAction({
+                      title: "Generate Audio for This Scene?",
+                      message: `Generate audio narration for scene ${audioDrawerScene + 1}.`,
+                      credits: CREDIT_COSTS.AUDIO_PER_SCENE,
+                      onConfirm: async () => {
+                        setAudioDrawerOpen(false);
+                        await generateSceneAudio(audioDrawerScene, selectedVoiceId);
+                      }
+                    });
+                    setCreditConfirmOpen(true);
                   }}
                   disabled={generatingSceneAudio.has(audioDrawerScene)}
                   className="flex-1 bg-orange-600 hover:bg-orange-700 text-white"
@@ -3451,13 +3613,22 @@ export default function StoryDetailsPage() {
                   Cancel
                 </Button>
                 <Button
-                  onClick={async () => {
+                  onClick={() => {
                     if (imageDrawerScene !== null) {
-                      await generateSceneImage(
-                        imageDrawerScene,
-                        undefined, // Don't pass style - will use existing scenes for consistency
-                        imageInstructions
-                      );
+                      setCreditConfirmAction({
+                        title: "Generate Image for This Scene?",
+                        message: `Generate image for scene ${imageDrawerScene + 1}.`,
+                        credits: CREDIT_COSTS.IMAGE_PER_SCENE,
+                        onConfirm: async () => {
+                          setImageDrawerOpen(false);
+                          await generateSceneImage(
+                            imageDrawerScene,
+                            undefined, // Don't pass style - will use existing scenes for consistency
+                            imageInstructions
+                          );
+                        }
+                      });
+                      setCreditConfirmOpen(true);
                     }
                   }}
                   disabled={imageDrawerScene !== null && generatingSceneImage.has(imageDrawerScene)}
@@ -3509,35 +3680,41 @@ export default function StoryDetailsPage() {
                 </button>
               </div>
 
-              {/* Load Sample Images Button */}
-              <div className="mb-4">
-                <Button
-                  onClick={loadSampleImages}
-                  disabled={loadingSampleImages}
-                  size="sm"
-                  className="w-full bg-gray-700 hover:bg-gray-600 text-white"
-                >
-                  {loadingSampleImages ? (
-                    <>
-                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                      Loading Sample Images...
-                    </>
-                  ) : sampleImagesLoaded ? (
-                    <>
-                      <Check className="w-4 h-4 mr-2" />
-                      Sample Images Loaded
-                    </>
-                  ) : (
-                    <>
-                      <Image className="w-4 h-4 mr-2" />
-                      Load Sample Images for Style Reference
-                    </>
-                  )}
-                </Button>
-                <p className="text-xs text-gray-500 mt-2 text-center">
-                  Generate example images for each style to see how they look
-                </p>
-              </div>
+              {/* Admin Section - Load Sample Images */}
+              {isAdmin && (
+                <div className="mb-4 p-3 border-2 border-yellow-500/50 bg-yellow-900/10 rounded-lg">
+                  <div className="text-xs font-semibold text-yellow-400 mb-2 flex items-center gap-1">
+                    <Sparkles className="w-3 h-3" />
+                    ADMIN ONLY
+                  </div>
+                  <Button
+                    onClick={loadSampleImages}
+                    disabled={loadingSampleImages}
+                    size="sm"
+                    className="w-full bg-gray-700 hover:bg-gray-600 text-white"
+                  >
+                    {loadingSampleImages ? (
+                      <>
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        Loading Sample Images...
+                      </>
+                    ) : sampleImagesLoaded ? (
+                      <>
+                        <Check className="w-4 h-4 mr-2" />
+                        Sample Images Loaded
+                      </>
+                    ) : (
+                      <>
+                        <Image className="w-4 h-4 mr-2" />
+                        Load Sample Images for Style Reference
+                      </>
+                    )}
+                  </Button>
+                  <p className="text-xs text-gray-500 mt-2 text-center">
+                    Generate example images for each style to see how they look
+                  </p>
+                </div>
+              )}
 
               {/* Info Cards */}
               {scenes.filter(s => s.image_url).length > 0 && (
@@ -3638,8 +3815,18 @@ export default function StoryDetailsPage() {
                   Cancel
                 </Button>
                 <Button
-                  onClick={async () => {
-                    await generateImages(selectedImageStyle, imageInstructions);
+                  onClick={() => {
+                    const credits = scenes.length * CREDIT_COSTS.IMAGE_PER_SCENE;
+                    setCreditConfirmAction({
+                      title: "Generate Images for All Scenes?",
+                      message: `Generate images for all ${scenes.length} scenes.`,
+                      credits: credits,
+                      onConfirm: async () => {
+                        setBulkImageDrawerOpen(false);
+                        await generateImages(selectedImageStyle, imageInstructions);
+                      }
+                    });
+                    setCreditConfirmOpen(true);
                   }}
                   disabled={generatingImages}
                   className="flex-1 bg-orange-600 hover:bg-orange-700 text-white"
@@ -3797,17 +3984,28 @@ export default function StoryDetailsPage() {
                   Cancel
                 </Button>
                 <Button
-                  onClick={async () => {
+                  onClick={() => {
                     console.log("🔘 Generate All Audio button clicked");
                     console.log("  Current selectedVoiceId state:", selectedVoiceId);
 
-                    // Stop any playing voice preview before generating
+                    // Stop any playing voice preview before showing confirmation
                     if (voicePreviewAudioRef.current) {
                       voicePreviewAudioRef.current.pause();
                       voicePreviewAudioRef.current = null;
                     }
                     setPlayingPreviewId(null);
-                    await generateAllAudio(selectedVoiceId);
+
+                    const credits = scenes.length * CREDIT_COSTS.AUDIO_PER_SCENE;
+                    setCreditConfirmAction({
+                      title: "Generate Audio for All Scenes?",
+                      message: `Generate audio narration for all ${scenes.length} scenes.`,
+                      credits: credits,
+                      onConfirm: async () => {
+                        setBulkAudioDrawerOpen(false);
+                        await generateAllAudio(selectedVoiceId);
+                      }
+                    });
+                    setCreditConfirmOpen(true);
                   }}
                   disabled={generatingAudios}
                   className="flex-1 bg-orange-600 hover:bg-orange-700 text-white"
@@ -4034,6 +4232,99 @@ export default function StoryDetailsPage() {
             updateSceneEffect(selectedEffectScene, effectId);
           }}
         />
+      )}
+
+      {/* Video Generation Success Dialog */}
+      {videoSuccessDialogOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          {/* Background overlay */}
+          <div
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            onClick={() => setVideoSuccessDialogOpen(false)}
+          />
+
+          {/* Dialog content */}
+          <div className="relative bg-gray-900 rounded-2xl shadow-2xl border border-gray-700 max-w-md w-full">
+            <div className="p-6">
+              {/* Close button */}
+              <button
+                onClick={() => setVideoSuccessDialogOpen(false)}
+                className="absolute top-4 right-4 text-gray-400 hover:text-white transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+
+              {/* Header */}
+              <div className="mb-6">
+                <h2 className="text-xl font-semibold text-white mb-4">
+                  Video Generation Complete
+                </h2>
+
+                {/* Video info */}
+                <div className="space-y-2">
+                  <div className="flex justify-between items-center py-2 border-b border-gray-800">
+                    <span className="text-sm text-gray-400">Duration</span>
+                    <span className="text-sm font-medium text-white">{generatedVideoDuration.toFixed(1)}s</span>
+                  </div>
+                  <div className="flex justify-between items-center py-2 border-b border-gray-800">
+                    <span className="text-sm text-gray-400">Format</span>
+                    <span className="text-sm font-medium text-white">{aspectRatio}</span>
+                  </div>
+                  <div className="flex justify-between items-center py-2">
+                    <span className="text-sm text-gray-400">Status</span>
+                    <span className="text-sm font-medium text-green-400">Ready</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Action buttons */}
+              <div className="space-y-2">
+                <Button
+                  onClick={() => {
+                    if (generatedVideoUrl) {
+                      window.open(generatedVideoUrl, '_blank');
+                    }
+                  }}
+                  className="w-full bg-orange-600 hover:bg-orange-700 text-white"
+                >
+                  <ExternalLink className="w-4 h-4 mr-2" />
+                  Open in New Tab
+                </Button>
+                <Button
+                  onClick={async () => {
+                    if (generatedVideoUrl) {
+                      try {
+                        // Fetch the video as a blob to force download
+                        const response = await fetch(generatedVideoUrl);
+                        const blob = await response.blob();
+                        const blobUrl = URL.createObjectURL(blob);
+
+                        const link = document.createElement('a');
+                        link.href = blobUrl;
+                        link.download = `${story?.title || 'story'}-${aspectRatio}.mp4`;
+                        document.body.appendChild(link);
+                        link.click();
+                        document.body.removeChild(link);
+
+                        // Clean up the blob URL after a short delay
+                        setTimeout(() => URL.revokeObjectURL(blobUrl), 100);
+                      } catch (error) {
+                        console.error('Download failed:', error);
+                        // Fallback: open in new tab
+                        window.open(generatedVideoUrl, '_blank');
+                      }
+                    }
+                  }}
+                  variant="outline"
+                  className="w-full border-gray-700 text-white hover:bg-gray-800"
+                >
+                  <Download className="w-4 h-4 mr-2" />
+                  Download Video
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
