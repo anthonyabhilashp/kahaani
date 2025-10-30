@@ -310,10 +310,11 @@ export default function StoryDetailsPage() {
   // Update background music volume when it changes
   useEffect(() => {
     if (bgMusicAudioRef.current) {
-      // Apply background music volume proportionally with video preview volume (master volume)
-      bgMusicAudioRef.current.volume = (bgMusicVolume / 100) * volume;
+      // Apply background music volume directly (not affected by master volume slider)
+      // This matches what will be in the generated video
+      bgMusicAudioRef.current.volume = bgMusicVolume / 100;
     }
-  }, [bgMusicVolume, volume]);
+  }, [bgMusicVolume]);
 
 
   // Scroll to selected voice when drawer opens (for individual scene)
@@ -817,8 +818,8 @@ export default function StoryDetailsPage() {
       setTimeout(() => {
         // Create new audio element with the new music
         const newAudio = new Audio(music.file_url);
-        // Apply background music volume proportionally with video preview volume
-        newAudio.volume = (bgMusicVolume / 100) * volume;
+        // Apply background music volume directly (matches generated video)
+        newAudio.volume = bgMusicVolume / 100;
         newAudio.loop = false;
         bgMusicAudioRef.current = newAudio;
 
@@ -1090,14 +1091,6 @@ export default function StoryDetailsPage() {
       musicPreviewAudioRef.current = null;
     };
   };
-
-  // Update bg music volume (duplicate check - applies proportionally)
-  useEffect(() => {
-    if (bgMusicAudioRef.current) {
-      // Apply background music volume proportionally with video preview volume
-      bgMusicAudioRef.current.volume = (bgMusicVolume / 100) * volume;
-    }
-  }, [bgMusicVolume, volume]);
 
   // Debug state changes
   useEffect(() => {
@@ -2037,8 +2030,8 @@ export default function StoryDetailsPage() {
         bgMusicAudioRef.current = new Audio(bgMusicUrl);
         bgMusicAudioRef.current.loop = false; // Don't loop - stop when video ends
       }
-      // Apply background music volume proportionally with video preview volume
-      bgMusicAudioRef.current.volume = (bgMusicVolume / 100) * volume;
+      // Apply background music volume directly (matches generated video)
+      bgMusicAudioRef.current.volume = bgMusicVolume / 100;
       bgMusicAudioRef.current.currentTime = 0;
       bgMusicAudioRef.current.play().catch(err => {
         console.error("Failed to play background music in preview:", err);
@@ -3551,8 +3544,8 @@ export default function StoryDetailsPage() {
                       onValueChange={(value) => {
                         setBgMusicVolume(value[0]);
                         if (bgMusicAudioRef.current) {
-                          // Apply background music volume proportionally with video preview volume
-                          bgMusicAudioRef.current.volume = (value[0] / 100) * volume;
+                          // Apply background music volume directly (matches generated video)
+                          bgMusicAudioRef.current.volume = value[0] / 100;
                         }
                       }}
                       min={0}

@@ -29,7 +29,7 @@ export const config = { api: { bodyParser: { sizeLimit: "4mb" } } };
 
 // --- Handler ---
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const { prompt, title, story_id, sceneCount = 5, manualScenes, isManual = false, voice_id, aspect_ratio } = req.body;
+  const { prompt, title, story_id, sceneCount = 5, manualScenes, isManual = false, voice_id, aspect_ratio, isBlank = false } = req.body;
   if (!prompt) return res.status(400).json({ error: "Prompt required" });
 
   let logger: JobLogger | null = null;
@@ -53,6 +53,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     logger.log(`👤 User: ${user.email} (${user.id})`);
     logger.log(`🎙️ Voice ID: ${voice_id || 'alloy'}`);
     logger.log(`📐 Aspect Ratio: ${aspect_ratio || '9:16'}`);
+    if (isBlank) {
+      logger.log(`📄 Creating blank story`);
+    }
 
     if (story_id) {
       logger.log(`♻️ Overwriting scenes for existing story: ${storyId}`);
@@ -60,6 +63,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       await supabaseAdmin.from("scenes").delete().eq("story_id", storyId);
       await supabaseAdmin.from("stories").update({
         prompt,
+        user_id: user.id,  // 🔑 Ensure user_id is set (fixes old stories without user_id)
         voice_id: voice_id || 'alloy',
         aspect_ratio: aspect_ratio || '9:16'
       }).eq("id", storyId);
@@ -69,9 +73,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .from("stories")
         .insert([{
           id: storyId,
-          title: title || null,
+          title: isBlank ? (title || "MyAwesomeStory") : (title || null),  // Use title for blank stories, or default
           prompt,
-          status: "processing",
+          status: isBlank ? "complete" : "processing",  // Blank stories are complete immediately
           user_id: user.id,  // 🔑 Link story to authenticated user
           voice_id: voice_id || 'alloy',
           aspect_ratio: aspect_ratio || '9:16'
@@ -80,6 +84,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     let scenes: { text: string }[] = [];
+
+    // 🔹 Handle blank story - create one empty scene
+    if (isBlank) {
+      scenes = [{ text: "" }];  // Single empty scene
+      logger.log(`✅ Created blank story with 1 empty scene`);
+    }
 
     // Handle manual scenes input
     if (isManual && manualScenes && Array.isArray(manualScenes)) {
@@ -92,7 +102,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .from("stories")
         .update({ title: generatedTitle })
         .eq("id", storyId);
-    } else {
+    } else if (!isBlank) {  // Skip LLM generation for blank stories
 
       if (isLongText(prompt)) {
         logger.log("📖 Long story detected — splitting into sentences...");
@@ -171,18 +181,21 @@ Story: ${prompt}
       }
     }
 
-    logger.log(`✅ Generated ${scenes.length} scenes`);
+    logger.log(`✅ ${isBlank ? 'Created' : 'Generated'} ${scenes.length} scene(s)`);
 
     const sceneRecords = scenes.map((s, i) => ({
       story_id: storyId,
-      order: i + 1,
+      order: i,  // Use 0-based ordering (consistent with rest of app)
       text: s.text,
     }));
 
     const { error: insertErr } = await supabaseAdmin.from("scenes").insert(sceneRecords);
     if (insertErr) throw insertErr;
 
-    await supabaseAdmin.from("stories").update({ status: "ready" }).eq("id", storyId);
+    // Blank stories are already complete, others need to be marked as ready
+    await supabaseAdmin.from("stories").update({
+      status: isBlank ? "complete" : "ready"
+    }).eq("id", storyId);
 
     logger.log(`📚 Saved ${scenes.length} scenes for story ${storyId}`);
     res.status(200).json({ story_id: storyId, scenes });

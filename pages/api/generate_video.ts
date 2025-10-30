@@ -14,7 +14,8 @@ import { getUserCredits, deductCredits, refundCredits, CREDIT_COSTS } from "../.
 export const config = { api: { bodyParser: { sizeLimit: "4mb" } } };
 
 // --- Helper to update job progress ---
-async function updateJobProgress(jobId: string, progress: number) {
+async function updateJobProgress(jobId: string | null, progress: number) {
+  if (!jobId) return; // Skip if jobId is null
   try {
     await supabaseAdmin
       .from('video_generation_jobs')
@@ -167,8 +168,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       throw new Error("Story not found");
     }
 
-    const userId = story.user_id;
-    logger.log(`👤 User ID: ${userId}`);
+    logger.log(`👤 User ID: ${story.user_id}`);
+
+    // 🚨 Validate user_id exists
+    if (!story.user_id) {
+      logger.log(`❌ Story has no user_id - cannot check credits`);
+
+      // Mark job as failed
+      await supabaseAdmin
+        .from('video_generation_jobs')
+        .update({
+          status: 'failed',
+          completed_at: new Date().toISOString(),
+          error: 'Story has no user association - please recreate the story'
+        })
+        .eq('id', jobId);
+
+      return res.status(400).json({
+        error: `This story has no user association. Please create a new story while logged in.`,
+      });
+    }
+
+    // At this point, we know userId is not null
+    const userId: string = story.user_id;
 
     // 💳 Check credit balance
     const currentBalance = await getUserCredits(userId);
@@ -591,8 +613,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       let finalAudioTrack = mergedNarrationAudio;
 
-      // Mix background music if enabled
-      if (background_music?.enabled && background_music?.music_url) {
+      // Mix background music if enabled and volume > 0
+      if (background_music?.enabled && background_music?.music_url && (background_music.volume ?? 30) > 0) {
         logger.log("🎵 Downloading background music...");
 
         const bgMusicPath = path.join(tmpDir, "background-music.mp3");
@@ -602,10 +624,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         // Get total video duration
         const totalDuration = mediaPaths.reduce((sum, scene) => sum + scene.duration, 0);
-        const bgVolume = (background_music.volume || 30) / 100; // Convert percentage to 0-1 scale
+        // Use nullish coalescing to properly handle 0 volume (0 || 30 = 30, but 0 ?? 30 = 0)
+        const bgVolume = (background_music.volume ?? 30) / 100; // Convert percentage to 0-1 scale
         const narrationVolume = 1.0; // Narration already normalized in concat step
 
-        logger.log(`🎵 Mixing background music (${background_music.volume}% volume) with narration for ${totalDuration.toFixed(2)}s`);
+        logger.log(`🎵 Mixing background music (${background_music.volume ?? 30}% volume) with narration for ${totalDuration.toFixed(2)}s`);
 
         // Mix background music with narration
         const mixedAudio = path.join(tmpDir, "mixed-audio.m4a");

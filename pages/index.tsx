@@ -55,6 +55,7 @@ export default function Dashboard() {
   const [loadingVoices, setLoadingVoices] = useState(false);
   const [playingPreviewId, setPlayingPreviewId] = useState<string | null>(null);
   const voicePreviewAudioRef = useRef<HTMLAudioElement | null>(null);
+  const [isBlankStory, setIsBlankStory] = useState(false); // Toggle for blank story mode
 
   // Show landing page for non-authenticated users
   // (Removed redirect to /login - will show landing page instead)
@@ -155,7 +156,9 @@ export default function Dashboard() {
   };
 
   async function createStory() {
-    if (!newPrompt.trim()) return;
+    // Validate: blank story doesn't need prompt, AI-generated does
+    if (!isBlankStory && !newPrompt.trim()) return;
+
     setCreating(true);
 
     try {
@@ -174,10 +177,12 @@ export default function Dashboard() {
           "Authorization": `Bearer ${session.access_token}`
         },
         body: JSON.stringify({
-          prompt: newPrompt,
-          sceneCount: sceneCount,
+          prompt: isBlankStory ? "MyAwesomeStory" : newPrompt,
+          title: isBlankStory ? "MyAwesomeStory" : null,
+          sceneCount: isBlankStory ? 1 : sceneCount,
           voice_id: selectedVoiceId,
-          aspect_ratio: aspectRatio
+          aspect_ratio: aspectRatio,
+          isBlank: isBlankStory  // Flag to indicate blank story creation
         }),
       });
 
@@ -191,6 +196,7 @@ export default function Dashboard() {
         setTargetDuration(60);
         setSelectedVoiceId("alloy");
         setAspectRatio("9:16");
+        setIsBlankStory(false);
 
         // Navigate to story page
         if (storyId) {
@@ -291,60 +297,128 @@ export default function Dashboard() {
   // Render the create story dialog content
   const renderDialogContent = () => (
     <div className="space-y-4 mt-4">
-      {/* Story Input */}
-      <div>
-        <label className="block text-sm font-medium text-gray-200 mb-2">
-          Story Idea
-        </label>
-        <textarea
-          placeholder="E.g., 'A young adventurer discovers a magical compass that leads to hidden treasures'"
-          value={newPrompt}
-          onChange={(e) => setNewPrompt(e.target.value)}
-          rows={4}
-          className="w-full p-3 bg-gray-800 border border-gray-700 rounded-lg resize-none focus:ring-2 focus:ring-orange-500 focus:border-transparent text-white placeholder:text-gray-500 text-sm"
-        />
-      </div>
+      {/* Story Input with inline Story Type toggle - Only show for AI Generated */}
+      {!isBlankStory && (
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <label className="text-sm font-medium text-gray-200">
+              Add your story or an idea
+            </label>
 
-      {/* Duration */}
-      <div>
-        <label className="block text-sm font-medium text-gray-200 mb-2">
-          Duration
-        </label>
-        <div className="grid grid-cols-4 gap-2">
-          {[30, 60, 120, 180].map((duration) => {
-            const sceneEstimate = Math.max(3, Math.round(duration / 6));
-            const isDisabled = creditBalance <= 15 && duration > 30;
-            return (
+            {/* Compact Toggle Buttons */}
+            <div className="inline-flex gap-2">
               <button
-                key={duration}
                 type="button"
-                onClick={() => !isDisabled && setTargetDuration(duration as 30 | 60 | 120 | 180)}
-                disabled={isDisabled}
-                className={`p-2 pt-5 rounded-lg border transition-all relative ${
-                  targetDuration === duration
+                onClick={() => setIsBlankStory(false)}
+                className={`px-3 py-1 text-xs font-medium rounded-lg border transition-all ${
+                  !isBlankStory
                     ? 'border-orange-500 bg-orange-500/20 text-orange-400'
-                    : isDisabled
-                    ? 'border-gray-800 bg-gray-900 text-gray-600 cursor-not-allowed opacity-50'
                     : 'border-gray-700 bg-gray-800 text-gray-400 hover:border-gray-600'
                 }`}
               >
-                {isDisabled && (
-                  <div className="absolute top-0 left-0 right-0 bg-orange-900/30 text-orange-400 text-[9px] font-medium py-0.5 rounded-t-lg text-center">
-                    Low credits
-                  </div>
-                )}
-                <div className="text-sm font-medium">{formatTargetDuration(duration)}</div>
-                <div className="text-xs opacity-75">({sceneEstimate} scenes)</div>
+                AI Generated
               </button>
-            );
-          })}
+              <button
+                type="button"
+                onClick={() => setIsBlankStory(true)}
+                className={`px-3 py-1 text-xs font-medium rounded-lg border transition-all ${
+                  isBlankStory
+                    ? 'border-orange-500 bg-orange-500/20 text-orange-400'
+                    : 'border-gray-700 bg-gray-800 text-gray-400 hover:border-gray-600'
+                }`}
+              >
+                Blank
+              </button>
+            </div>
+          </div>
+
+          <textarea
+            placeholder="A young blacksmith forges a sword from fallen stars, awakening an ancient power that will either save the kingdom or doom it forever."
+            value={newPrompt}
+            onChange={(e) => setNewPrompt(e.target.value)}
+            rows={4}
+            className="w-full p-3 bg-gray-800 border border-gray-700 rounded-lg resize-none focus:ring-2 focus:ring-orange-500 focus:border-transparent text-white placeholder:text-gray-500 text-sm"
+          />
         </div>
-        {creditBalance <= 15 && (
-          <p className="text-xs text-orange-400 mt-2">
-            You have {creditBalance} credits. Get more credits to create longer stories.
-          </p>
-        )}
-      </div>
+      )}
+
+      {/* Show toggle for Blank story mode */}
+      {isBlankStory && (
+        <div className="flex items-center justify-between">
+          <label className="text-sm font-medium text-gray-200">
+            Story Type
+          </label>
+
+          {/* Compact Toggle Buttons */}
+          <div className="inline-flex gap-2">
+            <button
+              type="button"
+              onClick={() => setIsBlankStory(false)}
+              className={`px-3 py-1 text-xs font-medium rounded-lg border transition-all ${
+                !isBlankStory
+                  ? 'border-orange-500 bg-orange-500/20 text-orange-400'
+                  : 'border-gray-700 bg-gray-800 text-gray-400 hover:border-gray-600'
+              }`}
+            >
+              AI Generated
+            </button>
+            <button
+              type="button"
+              onClick={() => setIsBlankStory(true)}
+              className={`px-3 py-1 text-xs font-medium rounded-lg border transition-all ${
+                isBlankStory
+                  ? 'border-orange-500 bg-orange-500/20 text-orange-400'
+                  : 'border-gray-700 bg-gray-800 text-gray-400 hover:border-gray-600'
+              }`}
+            >
+              Blank
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Duration - Only show for AI-generated stories */}
+      {!isBlankStory && (
+        <div>
+          <label className="block text-sm font-medium text-gray-200 mb-2">
+            Duration
+          </label>
+          <div className="grid grid-cols-4 gap-2">
+            {[30, 60, 120, 180].map((duration) => {
+              const sceneEstimate = Math.max(3, Math.round(duration / 6));
+              const isDisabled = creditBalance <= 15 && duration > 30;
+              return (
+                <button
+                  key={duration}
+                  type="button"
+                  onClick={() => !isDisabled && setTargetDuration(duration as 30 | 60 | 120 | 180)}
+                  disabled={isDisabled}
+                  className={`p-2 pt-5 rounded-lg border transition-all relative ${
+                    targetDuration === duration
+                      ? 'border-orange-500 bg-orange-500/20 text-orange-400'
+                      : isDisabled
+                      ? 'border-gray-800 bg-gray-900 text-gray-600 cursor-not-allowed opacity-50'
+                      : 'border-gray-700 bg-gray-800 text-gray-400 hover:border-gray-600'
+                  }`}
+                >
+                  {isDisabled && (
+                    <div className="absolute top-0 left-0 right-0 bg-orange-900/30 text-orange-400 text-[9px] font-medium py-0.5 rounded-t-lg text-center">
+                      Low credits
+                    </div>
+                  )}
+                  <div className="text-sm font-medium">{formatTargetDuration(duration)}</div>
+                  <div className="text-xs opacity-75">({sceneEstimate} scenes)</div>
+                </button>
+              );
+            })}
+          </div>
+          {creditBalance <= 15 && (
+            <p className="text-xs text-orange-400 mt-2">
+              You have {creditBalance} credits. Get more credits to create longer stories.
+            </p>
+          )}
+        </div>
+      )}
 
       {/* Format */}
       <div>
