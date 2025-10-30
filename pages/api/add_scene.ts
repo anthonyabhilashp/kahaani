@@ -34,6 +34,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     logger.log(`📚 Found ${existingScenes?.length || 0} existing scenes`);
 
     // 2️⃣ Update order of existing scenes that come after the insertion position
+    // Strategy: Use negative temporary values to avoid unique constraint violations
     // If position = 0, shift all scenes down
     // If position = 1, keep scene 0 at 0, shift scenes 1+ to 2+
     // If position = n, keep scenes 0 to n-1, shift scenes n+ to n+1+
@@ -41,21 +42,40 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const scenesToUpdate = existingScenes.filter(scene => scene.order >= position);
 
       if (scenesToUpdate.length > 0) {
-        logger.log(`🔄 Updating order for ${scenesToUpdate.length} scenes...`);
+        logger.log(`🔄 Updating order for ${scenesToUpdate.length} scenes (avoiding constraint violations)...`);
 
-        // Update each scene's order (increment by 1)
-        for (const scene of scenesToUpdate) {
-          const { error: updateError } = await supabaseAdmin
+        // Step 1: Move scenes to negative temporary positions (to avoid unique constraint violations)
+        for (let i = 0; i < scenesToUpdate.length; i++) {
+          const scene = scenesToUpdate[i];
+          const tempOrder = -(i + 1); // Use negative numbers as temporary positions
+
+          const { error: tempUpdateError } = await supabaseAdmin
             .from("scenes")
-            .update({ order: scene.order + 1 })
+            .update({ order: tempOrder })
             .eq("id", scene.id);
 
-          if (updateError) {
-            throw new Error(`Failed to update scene order: ${updateError.message}`);
+          if (tempUpdateError) {
+            throw new Error(`Failed to move scene to temp position: ${tempUpdateError.message}`);
           }
         }
 
-        logger.log(`✅ Updated order for ${scenesToUpdate.length} scenes`);
+        logger.log(`📦 Moved ${scenesToUpdate.length} scenes to temporary positions`);
+
+        // Step 2: Move scenes to final positions (original order + 1)
+        for (const scene of scenesToUpdate) {
+          const finalOrder = scene.order + 1;
+
+          const { error: finalUpdateError } = await supabaseAdmin
+            .from("scenes")
+            .update({ order: finalOrder })
+            .eq("id", scene.id);
+
+          if (finalUpdateError) {
+            throw new Error(`Failed to update scene to final order: ${finalUpdateError.message}`);
+          }
+        }
+
+        logger.log(`✅ Updated order for ${scenesToUpdate.length} scenes to final positions`);
       }
     }
 

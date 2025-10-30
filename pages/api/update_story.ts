@@ -17,10 +17,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    // Update story with provided fields
+    // Update story with provided fields and set updated_at timestamp
     const { error: updateErr } = await supabaseAdmin
       .from("stories")
-      .update(updateFields)
+      .update({
+        ...updateFields,
+        updated_at: new Date().toISOString()
+      })
       .eq("id", story_id);
 
     if (updateErr) throw updateErr;

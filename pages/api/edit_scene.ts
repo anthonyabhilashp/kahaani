@@ -8,9 +8,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const { story_id, scene_id, scene_order, text } = req.body;
-  
-  if (!story_id || (!scene_id && scene_order === undefined) || !text) {
-    return res.status(400).json({ error: "story_id, scene identifier, and text are required" });
+
+  if (!story_id || (!scene_id && scene_order === undefined)) {
+    return res.status(400).json({ error: "story_id and scene identifier are required" });
   }
 
   let logger: JobLogger | null = null;
@@ -21,11 +21,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Update the scene in the database
     // Note: The database trigger will automatically invalidate the video
-    const updateData = {
-      text,
-      last_modified_at: new Date().toISOString(),
-      scene_text_modified_at: new Date().toISOString()
+    const updateData: any = {
+      last_modified_at: new Date().toISOString()
     };
+
+    // Update text if provided
+    if (text !== undefined) {
+      updateData.text = text;
+      updateData.scene_text_modified_at = new Date().toISOString();
+    }
 
     let updateResult;
     if (scene_id) {

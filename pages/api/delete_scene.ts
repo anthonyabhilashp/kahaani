@@ -151,7 +151,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    // Reorder remaining scenes
+    // Reorder remaining scenes (avoiding unique constraint violations)
     const { data: remainingScenes, error: fetchError } = await supabaseAdmin
       .from("scenes")
       .select("id, order")
@@ -160,17 +160,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (fetchError) {
       logger.log(`⚠️ Warning: Could not fetch remaining scenes for reordering: ${fetchError.message}`);
-    } else if (remainingScenes) {
-      // Update the order of remaining scenes
+    } else if (remainingScenes && remainingScenes.length > 0) {
+      logger.log(`🔄 Reordering ${remainingScenes.length} remaining scenes (avoiding constraint violations)...`);
+
+      // Step 1: Move all scenes to negative temporary positions
       for (let i = 0; i < remainingScenes.length; i++) {
         const scene = remainingScenes[i];
-        if (scene.order !== i) {
-          await supabaseAdmin
-            .from("scenes")
-            .update({ order: i })
-            .eq("id", scene.id);
-        }
+        const tempOrder = -(i + 1000); // Use large negative numbers to avoid conflicts
+
+        await supabaseAdmin
+          .from("scenes")
+          .update({ order: tempOrder })
+          .eq("id", scene.id);
       }
+
+      logger.log(`📦 Moved ${remainingScenes.length} scenes to temporary positions`);
+
+      // Step 2: Update to final sequential order (0, 1, 2, ...)
+      for (let i = 0; i < remainingScenes.length; i++) {
+        const scene = remainingScenes[i];
+        await supabaseAdmin
+          .from("scenes")
+          .update({ order: i })
+          .eq("id", scene.id);
+      }
+
+      logger.log(`✅ Reordered ${remainingScenes.length} scenes to sequential order`);
 
       // Also reorder images
       const { data: remainingImages } = await supabaseAdmin
@@ -179,16 +194,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .eq("story_id", story_id)
         .order("scene_order", { ascending: true });
 
-      if (remainingImages) {
+      if (remainingImages && remainingImages.length > 0) {
+        logger.log(`🔄 Reordering ${remainingImages.length} images...`);
+
+        // Step 1: Move to temporary positions
         for (let i = 0; i < remainingImages.length; i++) {
           const image = remainingImages[i];
-          if (image.scene_order !== i) {
-            await supabaseAdmin
-              .from("images")
-              .update({ scene_order: i })
-              .eq("id", image.id);
-          }
+          await supabaseAdmin
+            .from("images")
+            .update({ scene_order: -(i + 2000) })
+            .eq("id", image.id);
         }
+
+        // Step 2: Move to final positions
+        for (let i = 0; i < remainingImages.length; i++) {
+          const image = remainingImages[i];
+          await supabaseAdmin
+            .from("images")
+            .update({ scene_order: i })
+            .eq("id", image.id);
+        }
+
+        logger.log(`✅ Reordered ${remainingImages.length} images`);
       }
     }
 

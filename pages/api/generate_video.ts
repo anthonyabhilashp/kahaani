@@ -389,13 +389,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         await new Promise<void>((resolve, reject) => {
           ffmpeg()
             .input(scene.imagePath!)
-            .inputOptions(["-loop 1"])
+            .inputOptions(["-loop 1", "-framerate 15"]) // Match effect clips framerate
             .videoCodec("libx264")
             .noAudio()
             .outputOptions([
               "-pix_fmt yuv420p",
               `-vf ${videoFilter}`,
               `-t ${scene.duration}`,
+              "-r 15", // Set output framerate to match effect clips
+              "-preset medium", // Match effect clips preset
+              "-crf 15", // Match effect clips quality
             ])
             .save(clipPath)
             .on("end", () => resolve())
@@ -565,19 +568,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .map(p => `file '${p}'`);
       fs.writeFileSync(audioConcat, audioFiles.join("\n"));
 
-      // Concat audio files (narration)
+      // Concat audio files (narration) with high quality settings and normalization
       const mergedNarrationAudio = path.join(tmpDir, "merged-narration.m4a");
       await new Promise<void>((resolve, reject) => {
         ffmpeg()
           .input(audioConcat)
           .inputOptions(["-f concat", "-safe 0"])
+          .audioFilters([
+            "volume=0.85", // Reduce volume slightly to prevent clipping
+            "acompressor=threshold=-18dB:ratio=3:attack=5:release=50" // Gentle compression for consistent levels
+          ])
           .audioCodec("aac")
+          .audioBitrate("256k") // High quality audio bitrate
+          .audioChannels(2) // Stereo
+          .audioFrequency(48000) // 48kHz sample rate for better quality
           .save(mergedNarrationAudio)
           .on("end", () => resolve())
           .on("error", reject);
       });
 
-      logger.log("🎵 Concatenated all scene audio files");
+      logger.log("🎵 Concatenated all scene audio files with normalization (85% volume + gentle compression for clarity)");
 
       let finalAudioTrack = mergedNarrationAudio;
 
@@ -593,7 +603,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // Get total video duration
         const totalDuration = mediaPaths.reduce((sum, scene) => sum + scene.duration, 0);
         const bgVolume = (background_music.volume || 30) / 100; // Convert percentage to 0-1 scale
-        const narrationVolume = 1.0; // Keep narration at full volume
+        const narrationVolume = 1.0; // Narration already normalized in concat step
 
         logger.log(`🎵 Mixing background music (${background_music.volume}% volume) with narration for ${totalDuration.toFixed(2)}s`);
 
@@ -609,14 +619,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               // Adjust volumes
               `[0:a]volume=${narrationVolume}[narration]`,
               `[bg]volume=${bgVolume}[bgadjusted]`,
-              // Mix both audios
-              `[narration][bgadjusted]amix=inputs=2:duration=first:dropout_transition=2[mixed]`
+              // Mix both audios - no normalization to preserve dynamics
+              `[narration][bgadjusted]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[mixed]`
             ])
             .outputOptions([
               "-map [mixed]",
               `-t ${totalDuration}`, // Trim to video duration
               "-c:a aac",
-              "-b:a 192k"
+              "-b:a 256k", // High quality audio bitrate
+              "-ar 48000" // 48kHz sample rate
             ])
             .save(mixedAudio);
 
@@ -642,6 +653,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           .outputOptions([
             "-c:v copy",  // Copy video without re-encoding
             "-c:a aac",
+            "-b:a 256k",  // High quality audio bitrate
+            "-ar 48000",  // 48kHz sample rate
             "-map 0:v:0",
             "-map 1:a:0",
             "-shortest",  // End when shortest stream ends

@@ -20,6 +20,7 @@ import { supabase } from "../../lib/supabaseClient";
 type Scene = {
   id?: string;
   text: string;
+  scene_description?: string;
   order: number;
   image_url?: string;
   audio_url?: string;
@@ -71,6 +72,8 @@ export default function StoryDetailsPage() {
   const [imageStyle, setImageStyle] = useState<string>("cinematic illustration");
   const [editingScene, setEditingScene] = useState<number | null>(null);
   const [editText, setEditText] = useState("");
+  const [editSceneDescription, setEditSceneDescription] = useState("");
+  const [generatingDescription, setGeneratingDescription] = useState(false);
   const [editingTitle, setEditingTitle] = useState(false);
   const [editTitleText, setEditTitleText] = useState("");
   const [savingTitle, setSavingTitle] = useState(false);
@@ -1147,7 +1150,7 @@ export default function StoryDetailsPage() {
         const errorData = await res.json();
         throw new Error(errorData.error || "Image generation failed");
       }
-      await res.json();
+      const result = await res.json();
 
       // Set progress to complete
       setImageProgress({ current: scenes.length, total: scenes.length });
@@ -1158,8 +1161,15 @@ export default function StoryDetailsPage() {
       // Refetch credit balance
       await refetchCredits();
 
-      // Show success toast
-      showToast(`✨ Images generated for all ${scenes.length} scenes!`, 'success');
+      // Show success or partial success toast
+      if (result.partial_failure) {
+        showToast(
+          `⚠️ Generated ${result.success_count}/${result.total_scenes} images. Failed scenes: ${result.failed_scenes.join(', ')}`,
+          'error'
+        );
+      } else {
+        showToast(`✨ Images generated for all ${scenes.length} scenes!`, 'success');
+      }
     } catch (err) {
       console.error("Image generation error:", err);
       showToast(`Failed to generate images: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error');
@@ -1954,8 +1964,8 @@ export default function StoryDetailsPage() {
               if (progressIntervalRef.current) {
                 clearInterval(progressIntervalRef.current);
               }
-              setSceneProgress(0);
-              setCurrentTime(0);
+              // Don't reset progress here - it causes the previous scene image to flash
+              // The next scene will set its own progress when it starts
               resolve();
             };
             audio.onerror = () => {
@@ -2039,6 +2049,12 @@ export default function StoryDetailsPage() {
       if (previewCancelledRef.current) return false;
 
       console.log(`🎬 Playing scene ${sceneIndex + 1}`);
+
+      // Wait for next animation frame to ensure clean transition
+      await new Promise(resolve => requestAnimationFrame(() => resolve(void 0)));
+
+      if (previewCancelledRef.current) return false;
+
       setSelectedScene(sceneIndex);
 
       const scene = scenes[sceneIndex];
@@ -2090,8 +2106,8 @@ export default function StoryDetailsPage() {
               if (progressIntervalRef.current) {
                 clearInterval(progressIntervalRef.current);
               }
-              setSceneProgress(0); // Reset for next scene
-              setCurrentTime(0); // Reset caption time
+              // Don't reset progress here - it causes the previous scene image to flash
+              // The next scene will set its own progress when it starts
               resolve();
             };
             audio.onerror = () => {
@@ -2164,7 +2180,7 @@ export default function StoryDetailsPage() {
           story_id: id,
           scene_id: scenes[sceneIndex].id,
           scene_order: sceneIndex,
-          text: newText
+          text: newText,
         }),
       });
 
@@ -2172,7 +2188,10 @@ export default function StoryDetailsPage() {
 
       // Update local state immediately
       const updatedScenes = [...scenes];
-      updatedScenes[sceneIndex] = { ...updatedScenes[sceneIndex], text: newText };
+      updatedScenes[sceneIndex] = {
+        ...updatedScenes[sceneIndex],
+        text: newText,
+      };
       setScenes(updatedScenes);
 
       // Mark scene as modified
@@ -2182,6 +2201,7 @@ export default function StoryDetailsPage() {
 
       setEditingScene(null);
       setEditText("");
+      setEditSceneDescription("");
     } catch (err) {
       console.error("Scene edit error:", err);
       alert(`Failed to edit scene: ${err instanceof Error ? err.message : 'Unknown error'}`);
@@ -2246,6 +2266,32 @@ export default function StoryDetailsPage() {
       alert(`Failed to update title: ${err instanceof Error ? err.message : 'Unknown error'}`);
     } finally {
       setSavingTitle(false);
+    }
+  };
+
+  const updateAspectRatio = async (newRatio: "9:16" | "16:9" | "1:1") => {
+    if (!id) return;
+
+    try {
+      const headers = await getAuthHeaders();
+      const res = await fetch("/api/update_story", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          story_id: id,
+          aspect_ratio: newRatio
+        }),
+      });
+
+      if (!res.ok) throw new Error("Failed to update aspect ratio");
+
+      // Update local state immediately
+      setAspectRatio(newRatio);
+      setStory({ ...story, aspect_ratio: newRatio });
+      console.log(`✅ Updated story aspect ratio to: ${newRatio}`);
+    } catch (err) {
+      console.error("Aspect ratio update error:", err);
+      alert(`Failed to update aspect ratio: ${err instanceof Error ? err.message : 'Unknown error'}`);
     }
   };
 
@@ -2364,11 +2410,50 @@ export default function StoryDetailsPage() {
   const startEditing = (sceneIndex: number) => {
     setEditingScene(sceneIndex);
     setEditText(scenes[sceneIndex]?.text || "");
+    setEditSceneDescription(""); // Scene descriptions no longer stored in DB
   };
 
   const cancelEditing = () => {
     setEditingScene(null);
     setEditText("");
+    setEditSceneDescription("");
+  };
+
+  const generateSceneDescription = async () => {
+    if (!editText.trim() || generatingDescription) return;
+
+    setGeneratingDescription(true);
+    try {
+      const headers = await getAuthHeaders();
+      const response = await fetch("/api/generate_scene_description", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          narration: editText,
+          style: imageStyle,
+          instructions: imageInstructions,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to generate description");
+      }
+
+      const data = await response.json();
+
+      if (data.description) {
+        setEditSceneDescription(data.description);
+        showToast("Scene description generated successfully", "success");
+      } else {
+        throw new Error("No description returned");
+      }
+    } catch (err) {
+      console.error("Error generating description:", err);
+      showToast("Failed to generate description with AI", "error");
+    } finally {
+      setGeneratingDescription(false);
+    }
   };
 
   // Show toast notification
@@ -2639,7 +2724,7 @@ export default function StoryDetailsPage() {
                   <div className="space-y-1">
                     <button
                       onClick={() => {
-                        setAspectRatio("9:16");
+                        updateAspectRatio("9:16");
                         setAspectRatioPopoverOpen(false);
                       }}
                       className={`w-full flex items-center justify-between px-3 py-2 text-sm rounded-md transition-colors ${
@@ -2655,7 +2740,7 @@ export default function StoryDetailsPage() {
                     </button>
                     <button
                       onClick={() => {
-                        setAspectRatio("16:9");
+                        updateAspectRatio("16:9");
                         setAspectRatioPopoverOpen(false);
                       }}
                       className={`w-full flex items-center justify-between px-3 py-2 text-sm rounded-md transition-colors ${
@@ -2671,7 +2756,7 @@ export default function StoryDetailsPage() {
                     </button>
                     <button
                       onClick={() => {
-                        setAspectRatio("1:1");
+                        updateAspectRatio("1:1");
                         setAspectRatioPopoverOpen(false);
                       }}
                       className={`w-full flex items-center justify-between px-3 py-2 text-sm rounded-md transition-colors ${
@@ -2950,21 +3035,57 @@ export default function StoryDetailsPage() {
                         {/* Inline editing or text display */}
                         {editingScene === index ? (
                           <div className="flex flex-col gap-2 mb-2">
-                            <textarea
-                              value={editText}
-                              onChange={(e) => setEditText(e.target.value)}
-                              onClick={(e) => e.stopPropagation()}
-                              className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-gray-300 text-xs focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent resize-none"
-                              rows={4}
-                              autoFocus
-                            />
+                            <div>
+                              <label className="text-[10px] text-gray-500 mb-1 block">Narration (Audio)</label>
+                              <textarea
+                                value={editText}
+                                onChange={(e) => setEditText(e.target.value)}
+                                onClick={(e) => e.stopPropagation()}
+                                className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-gray-300 text-xs focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent resize-none"
+                                rows={3}
+                                autoFocus
+                              />
+                            </div>
+                            <div>
+                              <div className="flex items-center justify-between mb-1">
+                                <label className="text-[10px] text-gray-500">Scene Description (Image)</label>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    generateSceneDescription();
+                                  }}
+                                  disabled={!editText.trim() || generatingDescription}
+                                  className="text-[10px] text-orange-400 hover:text-orange-300 disabled:text-gray-600 disabled:cursor-not-allowed flex items-center gap-1"
+                                >
+                                  {generatingDescription ? (
+                                    <>
+                                      <Loader2 className="w-3 h-3 animate-spin" />
+                                      Generating...
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Sparkles className="w-3 h-3" />
+                                      AI Generate
+                                    </>
+                                  )}
+                                </button>
+                              </div>
+                              <textarea
+                                value={editSceneDescription}
+                                onChange={(e) => setEditSceneDescription(e.target.value)}
+                                onClick={(e) => e.stopPropagation()}
+                                placeholder="Visual description for image generation (optional)"
+                                className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-gray-300 text-xs focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent resize-none"
+                                rows={3}
+                              />
+                            </div>
                             <div className="flex gap-1">
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   editScene(index, editText);
                                 }}
-                                disabled={!editText.trim() || editText === scene.text}
+                                disabled={!editText.trim()}
                                 className="px-2 py-1 bg-orange-600 hover:bg-orange-700 text-white text-xs rounded transition-colors flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
                               >
                                 <Check className="w-3 h-3" />
@@ -2975,6 +3096,7 @@ export default function StoryDetailsPage() {
                                   e.stopPropagation();
                                   setEditingScene(null);
                                   setEditText("");
+                                  setEditSceneDescription("");
                                 }}
                                 className="px-2 py-1 bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs rounded transition-colors flex items-center gap-1"
                               >
@@ -2984,8 +3106,13 @@ export default function StoryDetailsPage() {
                             </div>
                           </div>
                         ) : (
-                          <div className="text-gray-400 text-xs line-clamp-4 mb-2">
-                            {scene.text}
+                          <div className="flex flex-col gap-2 mb-2">
+                            {/* Narration Text */}
+                            <div className="text-gray-400 text-xs line-clamp-3">
+                              {scene.text}
+                            </div>
+
+                            {/* Scene Description hidden per user request */}
                           </div>
                         )}
                         <div className="text-gray-500 text-xs mt-auto flex items-center gap-1">
@@ -3146,6 +3273,7 @@ export default function StoryDetailsPage() {
                               e.stopPropagation();
                               setEditingScene(index);
                               setEditText(scene.text);
+                              setEditSceneDescription(""); // Scene descriptions no longer stored in DB
                             }}
                             className="flex items-center gap-2 text-gray-300 hover:text-white hover:bg-gray-800 cursor-pointer"
                           >
@@ -3628,17 +3756,26 @@ export default function StoryDetailsPage() {
                       height: `${getPreviewDimensions().height}px`
                     }}
                   >
-                    <img
-                      src={scenes[selectedScene].image_url}
-                      alt="Scene preview"
-                      className={`w-full h-full object-cover ${getEffectAnimationClass(scenes[selectedScene]?.effects?.motion || "none")}`}
-                      style={{
-                        transformOrigin: "center center",
-                        animationDuration: `${scenes[selectedScene]?.duration || 5}s`
-                      }}
-                      loading="eager"
-                      decoding="async"
-                    />
+                    {/* Render all scene images but only show the selected one */}
+                    {/* This prevents animation restart issues by mounting each image once */}
+                    {scenes.map((scene, index) => (
+                      scene.image_url && (
+                        <img
+                          key={`scene-${index}-${scene.image_url}`}
+                          src={scene.image_url}
+                          alt={`Scene ${index + 1} preview`}
+                          className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 ${
+                            index === selectedScene ? 'opacity-100' : 'opacity-0 pointer-events-none'
+                          } ${index === selectedScene ? getEffectAnimationClass(scene?.effects?.motion || "none") : ''}`}
+                          style={{
+                            transformOrigin: "center center",
+                            animationDuration: `${scene?.duration || 5}s`,
+                          }}
+                          loading="eager"
+                          decoding="async"
+                        />
+                      )
+                    ))}
 
                     {/* Caption Overlay */}
                     {captionsEnabled && scenes[selectedScene]?.text && (() => {
@@ -5275,7 +5412,7 @@ export default function StoryDetailsPage() {
 
                 <div className="p-3 bg-yellow-900/20 border border-yellow-900/50 rounded">
                   <p className="text-xs text-yellow-400">
-                    <strong>Note:</strong> Requires yt-dlp or youtube-dl to be installed on the server. Only use copyright-free or properly licensed music.
+                    <strong>Note:</strong> Only use copyright-free or properly licensed music.
                   </p>
                 </div>
               </div>
