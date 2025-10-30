@@ -7,7 +7,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Slider } from "../../components/ui/slider";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../components/ui/tooltip";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../../components/ui/dropdown-menu";
-import { ArrowLeft, Play, Pause, Download, Volume2, VolumeX, Maximize, Loader2, ImageIcon, Image, Pencil, Trash2, Check, X, PlayCircle, ChevronDown, Plus, Type, Music, Upload, Sparkles, ExternalLink, MoreHorizontal, Coins } from "lucide-react";
+import { ArrowLeft, Play, Pause, Download, Volume2, VolumeX, Maximize, Loader2, ImageIcon, Image, Pencil, Trash2, Check, X, PlayCircle, ChevronDown, Plus, Type, Music, Upload, Sparkles, ExternalLink, MoreHorizontal, Coins, Info, Copy } from "lucide-react";
 import { WordByWordCaption, SimpleCaption, type WordTimestamp } from "../../components/WordByWordCaption";
 import { EffectSelectionModal } from "../../components/EffectSelectionModal";
 import type { EffectType } from "../../lib/videoEffects";
@@ -274,7 +274,7 @@ export default function StoryDetailsPage() {
   const [bgMusicId, setBgMusicId] = useState<string | null>(null);
   const [bgMusicUrl, setBgMusicUrl] = useState<string | null>(null);
   const [bgMusicName, setBgMusicName] = useState<string | null>(null);
-  const [bgMusicVolume, setBgMusicVolume] = useState(4); // Default 4% volume
+  const [bgMusicVolume, setBgMusicVolume] = useState(15); // Default 15% volume
   const [bgMusicUploading, setBgMusicUploading] = useState(false);
   const [bgMusicPlaying, setBgMusicPlaying] = useState(false);
   const bgMusicAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -295,6 +295,7 @@ export default function StoryDetailsPage() {
   const [importYoutubeDialog, setImportYoutubeDialog] = useState(false);
   const [importUrl, setImportUrl] = useState("");
   const [importName, setImportName] = useState("");
+  const [importNotes, setImportNotes] = useState("");
   const [importing, setImporting] = useState(false);
 
   // Use ref for immediate cancellation without state delays
@@ -903,6 +904,7 @@ export default function StoryDetailsPage() {
           name: importName,
           description: `Imported from URL on ${new Date().toLocaleDateString()}`,
           category: "other",
+          notes: importNotes,
           uploaded_by: user.id,
         }),
       });
@@ -920,6 +922,7 @@ export default function StoryDetailsPage() {
         setImportUrlDialog(false);
         setImportUrl("");
         setImportName("");
+        setImportNotes("");
       } else {
         const error = await res.json();
         showToast(error.error || "Failed to import music", "error");
@@ -951,6 +954,7 @@ export default function StoryDetailsPage() {
           name: importName,
           description: `Imported from YouTube on ${new Date().toLocaleDateString()}`,
           category: "other",
+          notes: importNotes,
           uploaded_by: user.id,
         }),
       });
@@ -968,6 +972,7 @@ export default function StoryDetailsPage() {
         setImportYoutubeDialog(false);
         setImportUrl("");
         setImportName("");
+        setImportNotes("");
       } else {
         const error = await res.json();
         showToast(error.error || "Failed to import music from YouTube", "error");
@@ -2143,7 +2148,7 @@ export default function StoryDetailsPage() {
           return;
         }
       }
-      
+
       console.log("🎬 Preview completed!");
 
       // Stop background music when preview completes
@@ -3039,39 +3044,6 @@ export default function StoryDetailsPage() {
                                 autoFocus
                               />
                             </div>
-                            <div>
-                              <div className="flex items-center justify-between mb-1">
-                                <label className="text-[10px] text-gray-500">Scene Description (Image)</label>
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    generateSceneDescription();
-                                  }}
-                                  disabled={!editText.trim() || generatingDescription}
-                                  className="text-[10px] text-orange-400 hover:text-orange-300 disabled:text-gray-600 disabled:cursor-not-allowed flex items-center gap-1"
-                                >
-                                  {generatingDescription ? (
-                                    <>
-                                      <Loader2 className="w-3 h-3 animate-spin" />
-                                      Generating...
-                                    </>
-                                  ) : (
-                                    <>
-                                      <Sparkles className="w-3 h-3" />
-                                      AI Generate
-                                    </>
-                                  )}
-                                </button>
-                              </div>
-                              <textarea
-                                value={editSceneDescription}
-                                onChange={(e) => setEditSceneDescription(e.target.value)}
-                                onClick={(e) => e.stopPropagation()}
-                                placeholder="Visual description for image generation (optional)"
-                                className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-gray-300 text-xs focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent resize-none"
-                                rows={3}
-                              />
-                            </div>
                             <div className="flex gap-1">
                               <button
                                 onClick={(e) => {
@@ -3694,6 +3666,30 @@ export default function StoryDetailsPage() {
                         </div>
 
                         <div className="flex items-center gap-2">
+                          {/* Info Button - Show notes tooltip and copy on click */}
+                          {music.notes && music.notes.trim() && (
+                            <TooltipProvider>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      navigator.clipboard.writeText(music.notes);
+                                      showToast("Notes copied to clipboard", "success");
+                                    }}
+                                    className="w-8 h-8 flex items-center justify-center rounded bg-blue-600/10 hover:bg-blue-600/20 text-blue-400 opacity-0 group-hover:opacity-100 transition-all"
+                                    title="Copy notes"
+                                  >
+                                    <Info className="w-4 h-4" />
+                                  </button>
+                                </TooltipTrigger>
+                                <TooltipContent side="left" className="max-w-xs bg-gray-800 border-gray-700 text-white">
+                                  <p className="text-sm">{music.notes}</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
+                          )}
+
                           {/* Play/Pause Button - Preview at volume 20% */}
                           <button
                             onClick={(e) => {
@@ -5261,6 +5257,7 @@ export default function StoryDetailsPage() {
               setImportUrlDialog(false);
               setImportUrl("");
               setImportName("");
+              setImportNotes("");
             }}
           />
 
@@ -5306,6 +5303,20 @@ export default function StoryDetailsPage() {
                     className="bg-gray-800 border-gray-600 text-white placeholder:text-gray-500"
                   />
                 </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">
+                    Notes (Optional)
+                  </label>
+                  <textarea
+                    value={importNotes}
+                    onChange={(e) => setImportNotes(e.target.value)}
+                    placeholder="License info, attribution, etc."
+                    rows={3}
+                    className="w-full bg-gray-800 border border-gray-600 rounded-md px-3 py-2 text-white placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent resize-none"
+                  />
+                  <p className="text-xs text-gray-400 mt-1">Add license information or other notes</p>
+                </div>
               </div>
 
               {/* Action Buttons */}
@@ -5316,6 +5327,7 @@ export default function StoryDetailsPage() {
                     setImportUrlDialog(false);
                     setImportUrl("");
                     setImportName("");
+                    setImportNotes("");
                   }}
                   disabled={importing}
                   className="flex-1 border-gray-700 text-gray-300 hover:bg-gray-800"
@@ -5355,6 +5367,7 @@ export default function StoryDetailsPage() {
               setImportYoutubeDialog(false);
               setImportUrl("");
               setImportName("");
+              setImportNotes("");
             }}
           />
 
@@ -5403,6 +5416,20 @@ export default function StoryDetailsPage() {
                   />
                 </div>
 
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">
+                    Notes (Optional)
+                  </label>
+                  <textarea
+                    value={importNotes}
+                    onChange={(e) => setImportNotes(e.target.value)}
+                    placeholder="License info, attribution, etc."
+                    rows={3}
+                    className="w-full bg-gray-800 border border-gray-600 rounded-md px-3 py-2 text-white placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent resize-none"
+                  />
+                  <p className="text-xs text-gray-400 mt-1">Add license information or other notes</p>
+                </div>
+
                 <div className="p-3 bg-yellow-900/20 border border-yellow-900/50 rounded">
                   <p className="text-xs text-yellow-400">
                     <strong>Note:</strong> Only use copyright-free or properly licensed music.
@@ -5418,6 +5445,7 @@ export default function StoryDetailsPage() {
                     setImportYoutubeDialog(false);
                     setImportUrl("");
                     setImportName("");
+                    setImportNotes("");
                   }}
                   disabled={importing}
                   className="flex-1 border-gray-700 text-gray-300 hover:bg-gray-800"

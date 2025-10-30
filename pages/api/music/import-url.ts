@@ -72,7 +72,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const { url, name, description, category, uploaded_by } = req.body;
+    const { url, name, description, category, notes, uploaded_by } = req.body;
 
     if (!url) {
       return res.status(400).json({ error: "URL is required" });
@@ -126,6 +126,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         file_url: publicUrl,
         duration,
         category: category || "other",
+        notes: notes || "",
         is_preset: false,
         uploaded_by: uploaded_by || "anonymous",
       })

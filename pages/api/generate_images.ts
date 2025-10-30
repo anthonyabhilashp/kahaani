@@ -303,25 +303,38 @@ Return exactly ${scenes.length} visual descriptions in the visual_descriptions a
     // 🎯 Use story-specific aspect ratio
     const aspect = storyAspectRatio;
 
-    // Calculate dimensions based on aspect ratio
-    let videoWidth: number, videoHeight: number;
-    switch (aspect) {
-      case "16:9":
-        videoWidth = 1920;
-        videoHeight = 1080;
-        break;
-      case "1:1":
-        videoWidth = 1080;
-        videoHeight = 1080;
-        break;
-      case "9:16":
-      default:
-        videoWidth = 1080;
-        videoHeight = 1920;
-        break;
-    }
+    // Get base dimensions from environment variables
+    const envWidth = parseInt(process.env.VIDEO_WIDTH || "1080");
+    const envHeight = parseInt(process.env.VIDEO_HEIGHT || "1920");
+    const envAspect = process.env.ASPECT_RATIO || "9:16";
 
-    logger.log(`📐 Using dimensions: ${videoWidth}x${videoHeight} (${aspect})`);
+    let videoWidth: number, videoHeight: number;
+
+    // If story aspect matches env aspect, use env dimensions exactly
+    // Otherwise, calculate 4K equivalent for the story's aspect ratio
+    if (aspect === envAspect) {
+      videoWidth = envWidth;
+      videoHeight = envHeight;
+      logger.log(`📐 Story aspect matches env (${aspect}): using ${videoWidth}x${videoHeight}`);
+    } else {
+      // Calculate 4K equivalent dimensions for each aspect ratio
+      switch (aspect) {
+        case "16:9":
+          videoWidth = 3840;
+          videoHeight = 2160;
+          break;
+        case "1:1":
+          videoWidth = 3840;
+          videoHeight = 3840;
+          break;
+        case "9:16":
+        default:
+          videoWidth = 2160;
+          videoHeight = 3840;
+          break;
+      }
+      logger.log(`📐 Story aspect (${aspect}) differs from env (${envAspect}): using 4K equivalent ${videoWidth}x${videoHeight}`);
+    }
 
     // 📱 Generate images with EXACT same dimensions as final video
     const imageSize = `${videoWidth}x${videoHeight}`;

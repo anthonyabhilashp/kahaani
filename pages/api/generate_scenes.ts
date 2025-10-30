@@ -113,36 +113,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         logger.log(`🧠 Generating ${sceneCount} scenes with ${SCENE_MODEL} (${PROVIDER})...`);
 
         const storyPrompt = `
-You are a JSON generator. Break the following story idea into exactly ${sceneCount} short, visual, and ENGAGING scenes with a catchy title.
+You are a JSON generator. Break the following content into exactly ${sceneCount} scenes with a title.
 
 RULES:
-- Each scene must be MAXIMUM 30 WORDS (strictly enforce this limit!)
-- Each scene must be ONLY 1-2 sentences maximum
-- Make scenes ENGAGING: use vivid action verbs, sensory details, emotion, and drama
-- Use varied sentence types: statements, exclamations (!), questions (?)
+- RESPECT THE USER'S INTENT: If they want facts, provide facts. If they want a story, provide a story.
+- Match the tone and style to the user's request (educational, narrative, dramatic, informative, etc.)
 - Use proper punctuation: periods, commas, exclamation marks, question marks
-- Write complete sentences that sound exciting when read aloud
-- Use commas for natural pauses in longer sentences
-- Create visual, cinematic moments that capture the imagination
-- IMPORTANT: The LAST scene must provide a satisfying conclusion with a definitive ending tone (use words like "finally", "at last", "and so")
-
-Examples of engaging vs boring:
-- Boring: "The hero went to the castle."
-- Engaging: "The hero charged toward the dark castle, sword gleaming in the moonlight!"
-
-For each scene, provide a vivid, engaging narrative description.
+- Write complete sentences that work well when read aloud
+- Make each scene clear and easy to visualize
+- The LAST scene should provide closure appropriate to the content type
 
 Return ONLY valid JSON in this exact format:
 {
-  "title": "A catchy title for the story",
+  "title": "A title that matches the content type and topic",
   "scenes": [
     {
-      "text": "One or two exciting, well-punctuated sentences describing what happens."
+      "text": "Clear, well-punctuated sentences."
     }
   ]
 }
 
-Story: ${prompt}
+User request: ${prompt}
         `;
 
       const response = await fetch(OPENROUTER_URL, {

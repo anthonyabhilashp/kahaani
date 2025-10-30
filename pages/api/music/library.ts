@@ -91,6 +91,7 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
     const name = fields.name?.[0];
     const description = fields.description?.[0] || "";
     const category = fields.category?.[0] || "other";
+    const notes = fields.notes?.[0] || "";
     const uploaded_by = fields.uploaded_by?.[0] || "anonymous";
     const uploadedFile = files.file?.[0];
 
@@ -145,6 +146,7 @@ async function handlePost(req: NextApiRequest, res: NextApiResponse) {
         file_url: publicUrl,
         duration,
         category,
+        notes,
         is_preset: false,
         uploaded_by,
       })
