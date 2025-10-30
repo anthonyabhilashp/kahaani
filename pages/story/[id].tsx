@@ -95,6 +95,9 @@ export default function StoryDetailsPage() {
   const hasFetchedRef = useRef(false); // Track if story has been fetched to prevent duplicates
   const currentStoryIdRef = useRef<string | null>(null); // Track current story ID
 
+  // Toast notification state
+  const [toasts, setToasts] = useState<Array<{id: string, message: string, type: 'success' | 'error'}>>([]);
+
   // Effect selection modal state
   const [effectModalOpen, setEffectModalOpen] = useState(false);
   const [selectedEffectScene, setSelectedEffectScene] = useState<number | null>(null);
@@ -213,7 +216,7 @@ export default function StoryDetailsPage() {
   // Audio drawer state
   const [audioDrawerOpen, setAudioDrawerOpen] = useState(false);
   const [audioDrawerScene, setAudioDrawerScene] = useState<number | null>(null);
-  const [selectedVoiceId, setSelectedVoiceId] = useState<string>("21m00Tcm4TlvDq8ikWAM"); // Default voice
+  const [selectedVoiceId, setSelectedVoiceId] = useState<string>("alloy"); // Default OpenAI voice
   const [voices, setVoices] = useState<Array<{id: string; name: string; preview_url?: string; labels?: Record<string, any>}>>([]);
   const [loadingVoices, setLoadingVoices] = useState(false);
   const [playingPreviewId, setPlayingPreviewId] = useState<string | null>(null);
@@ -344,10 +347,22 @@ export default function StoryDetailsPage() {
     }
   };
 
+  // Helper function to get authenticated headers
+  const getAuthHeaders = async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) {
+      throw new Error("Please log in to continue");
+    }
+    return {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${session.access_token}`
+    };
+  };
+
   // Preload images and audio for better performance
   const preloadMedia = useCallback(async (scenes: Scene[]) => {
     console.log("🚀 Preloading media assets...");
-    
+
     try {
       // Preload images from scenes
       const imagePromises = scenes
@@ -393,23 +408,32 @@ export default function StoryDetailsPage() {
     }
   }, []); // Remove mediaPreloaded dependency
 
-  const fetchStory = useCallback(async () => {
+  const fetchStory = useCallback(async (showLoading = true) => {
     if (!id) return;
-    
+
     console.log("📡 Fetching story details for ID:", id);
-    setLoading(true);
-    
+    if (showLoading) {
+      setLoading(true);
+    }
+
     try {
-      const res = await fetch(`/api/get_story_details?id=${id}`);
+      const { data: { session } } = await supabase.auth.getSession();
+      const headers: HeadersInit = session
+        ? { "Authorization": `Bearer ${session.access_token}` }
+        : {};
+
+      const res = await fetch(`/api/get_story_details?id=${id}`, { headers });
       const data = await res.json();
       console.log("📊 Story data received:", data);
 
       // Add cache-busting timestamp to all images and audio to force browser to reload
+      // Use timestamp + random to ensure uniqueness even if fetched multiple times in same millisecond
       const timestamp = Date.now();
+      const random = Math.random().toString(36).substring(7);
       const scenesWithTimestamp = (data.scenes || []).map((scene: any) => ({
         ...scene,
-        image_url: scene.image_url ? `${scene.image_url}?t=${timestamp}` : scene.image_url,
-        audio_url: scene.audio_url ? `${scene.audio_url}?t=${timestamp}` : scene.audio_url
+        image_url: scene.image_url ? `${scene.image_url}?t=${timestamp}&r=${random}` : scene.image_url,
+        audio_url: scene.audio_url ? `${scene.audio_url}?t=${timestamp}&r=${random}` : scene.audio_url
       }));
 
       setStory(data.story);
@@ -484,6 +508,48 @@ export default function StoryDetailsPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]); // Only depend on id to prevent infinite loops
+
+  // Fetch and update a single scene's details
+  const fetchAndUpdateScene = useCallback(async (sceneId: string): Promise<{scene: any, index: number} | null> => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const headers: HeadersInit = session
+        ? { "Authorization": `Bearer ${session.access_token}` }
+        : {};
+
+      const res = await fetch(`/api/get_scene_details?id=${sceneId}`, { headers });
+      const data = await res.json();
+
+      if (!data.scene) return null;
+
+      // Add cache-busting to URLs
+      const timestamp = Date.now();
+      const random = Math.random().toString(36).substring(7);
+      const updatedScene = {
+        ...data.scene,
+        image_url: data.scene.image_url ? `${data.scene.image_url}?t=${timestamp}&r=${random}` : data.scene.image_url,
+        audio_url: data.scene.audio_url ? `${data.scene.audio_url}?t=${timestamp}&r=${random}` : data.scene.audio_url
+      };
+
+      let sceneIndex = -1;
+
+      // Update only this scene in the scenes array
+      setScenes(prevScenes => {
+        sceneIndex = prevScenes.findIndex(s => s.id === sceneId);
+        if (sceneIndex === -1) return prevScenes;
+
+        const newScenes = [...prevScenes];
+        newScenes[sceneIndex] = updatedScene;
+        return newScenes;
+      });
+
+      return sceneIndex >= 0 ? { scene: updatedScene, index: sceneIndex } : null;
+
+    } catch (err) {
+      console.error("Error fetching scene:", err);
+      return null;
+    }
+  }, []);
 
   // Fetch story only once when component mounts or id changes
   useEffect(() => {
@@ -567,9 +633,10 @@ export default function StoryDetailsPage() {
     };
 
     try {
+      const headers = await getAuthHeaders();
       const res = await fetch("/api/save_caption_settings", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({
           story_id: id,
           caption_settings: captionSettings,
@@ -648,9 +715,10 @@ export default function StoryDetailsPage() {
     if (!id) return;
 
     try {
+      const headers = await getAuthHeaders();
       const res = await fetch("/api/save_background_music_settings", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({
           story_id: id,
           music_id: bgMusicId,
@@ -715,8 +783,16 @@ export default function StoryDetailsPage() {
       formData.append("category", "other");
       formData.append("uploaded_by", "user");
 
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        throw new Error("Please log in to upload music");
+      }
+
       const res = await fetch("/api/upload_music_to_library", {
         method: "POST",
+        headers: {
+          "Authorization": `Bearer ${session.access_token}`
+        },
         body: formData,
       });
 
@@ -784,16 +860,29 @@ export default function StoryDetailsPage() {
     setImageProgress({ current: 0, total: scenes.length });
     setBulkImageDrawerOpen(false); // Close drawer when generation starts
 
-    try {
-      console.log("Starting image generation for story:", id);
-      console.log(`  Generating images for ${scenes.length} scenes`);
+    // Show spinners on all scene tile buttons
+    setGeneratingSceneImage(prev => {
+      const newSet = new Set(prev);
+      scenes.forEach((_, index) => newSet.add(index));
+      return newSet;
+    });
 
+    try {
       // Show progress as processing
       setImageProgress({ current: 1, total: scenes.length });
 
+      // Get session token for authentication
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        throw new Error("Please log in to generate images");
+      }
+
       const res = await fetch("/api/generate_images", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${session.access_token}`
+        },
         body: JSON.stringify({
           story_id: id,
           style: style || selectedImageStyle || imageStyle,
@@ -804,24 +893,27 @@ export default function StoryDetailsPage() {
         const errorData = await res.json();
         throw new Error(errorData.error || "Image generation failed");
       }
-      const result = await res.json();
-      console.log("✅ Image generation completed:", result);
+      await res.json();
 
       // Set progress to complete
       setImageProgress({ current: scenes.length, total: scenes.length });
 
-      // Refetch entire story details to get fresh data with all fields
-      console.log("🔄 Refetching story details to sync all data...");
-      await fetchStory();
+      // Refetch entire story details to get fresh data with all fields (without showing loading screen)
+      await fetchStory(false);
 
       // Refetch credit balance
       await refetchCredits();
+
+      // Show success toast
+      showToast(`✨ Images generated for all ${scenes.length} scenes!`, 'success');
     } catch (err) {
       console.error("Image generation error:", err);
-      alert(`Image generation failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      showToast(`Failed to generate images: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error');
     } finally {
       setGeneratingImages(false);
       setImageProgress({ current: 0, total: 0 });
+      // Clear all scene spinners
+      setGeneratingSceneImage(new Set());
     }
   };
 
@@ -831,20 +923,31 @@ export default function StoryDetailsPage() {
     setAudioProgress({ current: 0, total: scenes.length });
     setBulkAudioDrawerOpen(false); // Close drawer when generation starts
 
+    // Show spinners on all scene tile buttons
+    setGeneratingSceneAudio(prev => {
+      const newSet = new Set(prev);
+      scenes.forEach((_, index) => newSet.add(index));
+      return newSet;
+    });
+
     try {
-      const finalVoiceId = voiceId || story?.voice_id || "21m00Tcm4TlvDq8ikWAM";
-      console.log("🎙️ Starting bulk audio generation");
-      console.log("  Story ID:", id);
-      console.log("  Selected Voice ID:", voiceId);
-      console.log("  Story Voice ID:", story?.voice_id);
-      console.log("  Final Voice ID:", finalVoiceId);
+      const finalVoiceId = voiceId || story?.voice_id || "alloy";
 
       // Show progress as the API processes
       setAudioProgress({ current: 1, total: scenes.length });
 
+      // Get session token for authentication
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        throw new Error("Please log in to generate audio");
+      }
+
       const res = await fetch("/api/generate_all_audio", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${session.access_token}`
+        },
         body: JSON.stringify({
           story_id: id,
           voice_id: finalVoiceId
@@ -854,24 +957,71 @@ export default function StoryDetailsPage() {
         const errorData = await res.json();
         throw new Error(errorData.error || "Audio generation failed");
       }
-      const result = await res.json();
-      console.log("✅ Bulk audio generation completed:", result);
+      await res.json();
 
       // Set complete
       setAudioProgress({ current: scenes.length, total: scenes.length });
 
-      // Refetch entire story details to get fresh data with all fields
-      console.log("🔄 Refetching story details to sync all data...");
-      await fetchStory();
+      // Update story voice to the selected voice (only for bulk generation)
+      try {
+        const headers = await getAuthHeaders();
+        const voiceUpdateRes = await fetch("/api/update_story_voice", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            story_id: id,
+            voice_id: finalVoiceId
+          }),
+        });
+
+        if (voiceUpdateRes.ok) {
+          console.log(`✅ Story voice updated to: ${finalVoiceId}`);
+        }
+      } catch (voiceErr) {
+        console.error("⚠️ Failed to update story voice:", voiceErr);
+        // Don't fail the whole operation if voice update fails
+      }
+
+      // Stop any currently playing audio
+      if (currentAudioRef.current) {
+        currentAudioRef.current.pause();
+        currentAudioRef.current.currentTime = 0;
+        currentAudioRef.current = null;
+      }
+      if (progressIntervalRef.current) {
+        clearInterval(progressIntervalRef.current);
+        progressIntervalRef.current = null;
+      }
+      setIsPlayingPreview(false);
+      setSelectedScene(0);
+
+      // Refetch entire story details to get fresh data with all fields (without showing loading screen)
+      const storyRes = await fetch(`/api/get_story_details?id=${id}`);
+      const data = await storyRes.json();
+
+      if (data.story && data.scenes) {
+        setStory(data.story);
+        setScenes(data.scenes);
+        setVideo(data.video || null);
+
+        // Explicitly reload audio for all scenes
+        console.log("🔄 Reloading audio after bulk generation...");
+        await preloadMedia(data.scenes);
+      }
 
       // Refetch credit balance
       await refetchCredits();
+
+      // Show success toast
+      showToast(`🎙️ Audio generated for all ${scenes.length} scenes!`, 'success');
     } catch (err) {
       console.error("Bulk audio generation error:", err);
-      alert(`Bulk audio generation failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      showToast(`Failed to generate audio: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error');
     } finally {
       setGeneratingAudios(false);
       setAudioProgress({ current: 0, total: 0 });
+      // Clear all scene spinners
+      setGeneratingSceneAudio(new Set());
     }
   };
 
@@ -880,9 +1030,10 @@ export default function StoryDetailsPage() {
     console.log("🎨 Loading sample images for all styles...");
 
     try {
+      const headers = await getAuthHeaders();
       const res = await fetch("/api/generate_sample_images", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
       });
 
       if (!res.ok) {
@@ -907,18 +1058,25 @@ export default function StoryDetailsPage() {
   const generateSceneImage = async (sceneIndex: number, style?: string, instructions?: string) => {
     if (!scenes[sceneIndex]) return;
 
-    const newGenerating = new Set(generatingSceneImage);
-    newGenerating.add(sceneIndex);
-    setGeneratingSceneImage(newGenerating);
-
-    // Close the drawer when generation starts
-    setImageDrawerOpen(false);
+    setGeneratingSceneImage(prev => {
+      const newSet = new Set(prev);
+      newSet.add(sceneIndex);
+      return newSet;
+    });
 
     try {
-      console.log("Starting image generation for scene:", sceneIndex);
+      // Get session token for authentication
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        throw new Error("Please log in to generate image");
+      }
+
       const res = await fetch("/api/generate_scene_image", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${session.access_token}`
+        },
         body: JSON.stringify({
           scene_id: scenes[sceneIndex].id,
           style: style || selectedImageStyle || imageStyle,
@@ -929,23 +1087,29 @@ export default function StoryDetailsPage() {
         const errorData = await res.json();
         throw new Error(errorData.error || "Scene image generation failed");
       }
-      const result = await res.json();
-      console.log("Scene image generation completed:", result);
+      await res.json();
 
-      // Refetch entire story details to get fresh data with all fields
-      console.log("🔄 Refetching story details to sync all data...");
-      await fetchStory();
+      // Refetch only this scene's details (incremental update)
+      const sceneId = scenes[sceneIndex]?.id;
+      if (sceneId) {
+        await fetchAndUpdateScene(sceneId);
+      }
 
       // Refetch credit balance
       await refetchCredits();
 
+      // Show success toast
+      showToast(`✨ Image generated for scene ${sceneIndex + 1}`, 'success');
+
     } catch (err) {
       console.error("Scene image generation error:", err);
-      alert(`Image generation failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      showToast(`Failed to generate image: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error');
     } finally {
-      const newGenerating = new Set(generatingSceneImage);
-      newGenerating.delete(sceneIndex);
-      setGeneratingSceneImage(newGenerating);
+      setGeneratingSceneImage(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(sceneIndex);
+        return newSet;
+      });
     }
   };
 
@@ -973,21 +1137,16 @@ export default function StoryDetailsPage() {
     // 3. Global default voice_id
     const scene = scenes[sceneIndex];
 
-    // Check if scene has a valid voice_id (should be alphanumeric, not "text" or other invalid values)
+    // Valid OpenAI voices: alloy, echo, fable, onyx, nova, shimmer, ash, coral, sage
+    // Also support old ElevenLabs voice IDs (20+ character alphanumeric strings)
     const isValidVoiceId = (voiceId: string | undefined) => {
       if (!voiceId) return false;
-      // Valid ElevenLabs voice IDs are typically alphanumeric strings of reasonable length
-      // Filter out invalid values like "text", empty strings, etc.
-      return voiceId.length > 10 && /^[a-zA-Z0-9]+$/.test(voiceId);
+      // OpenAI voices (4-7 characters) or ElevenLabs IDs (20+ characters)
+      return /^[a-zA-Z0-9]+$/.test(voiceId) && voiceId.length >= 3;
     };
 
     const sceneVoiceId = isValidVoiceId(scene?.voice_id) ? scene.voice_id : null;
-    const voiceToUse = sceneVoiceId || story?.voice_id || "21m00Tcm4TlvDq8ikWAM";
-
-    console.log("🎤 Opening audio drawer for scene", sceneIndex);
-    console.log("🎤 Scene voice_id:", scene?.voice_id, "Valid:", isValidVoiceId(scene?.voice_id));
-    console.log("🎤 Story voice_id:", story?.voice_id);
-    console.log("🎤 Voice to use:", voiceToUse);
+    const voiceToUse = sceneVoiceId || story?.voice_id || "alloy";
 
     setSelectedVoiceId(voiceToUse);
 
@@ -1026,9 +1185,10 @@ export default function StoryDetailsPage() {
   // Update story voice (called after confirmation)
   const updateStoryVoice = async () => {
     try {
+      const headers = await getAuthHeaders();
       const res = await fetch("/api/update_story_voice", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({
           story_id: id,
           voice_id: pendingVoiceId
@@ -1117,41 +1277,91 @@ export default function StoryDetailsPage() {
   const generateSceneAudio = async (sceneIndex: number, voiceId?: string) => {
     if (!scenes[sceneIndex]) return;
 
-    const newGenerating = new Set(generatingSceneAudio);
-    newGenerating.add(sceneIndex);
-    setGeneratingSceneAudio(newGenerating);
+    setGeneratingSceneAudio(prev => {
+      const newSet = new Set(prev);
+      newSet.add(sceneIndex);
+      return newSet;
+    });
 
     try {
-      console.log("Starting audio generation for scene:", sceneIndex, "with voice:", voiceId || selectedVoiceId);
+      const voiceToUse = voiceId || selectedVoiceId;
+
+      // Get session token for authentication
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        throw new Error("Please log in to generate audio");
+      }
+
       const res = await fetch("/api/generate_audio", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${session.access_token}`
+        },
         body: JSON.stringify({
           scene_id: scenes[sceneIndex].id,
-          voice_id: voiceId || selectedVoiceId
+          voice_id: voiceToUse
         }),
       });
       if (!res.ok) {
         const errorData = await res.json();
         throw new Error(errorData.error || "Scene audio generation failed");
       }
-      const result = await res.json();
-      console.log("Scene audio generation completed:", result);
 
-      // Refetch entire story details to get fresh data with all fields
-      console.log("🔄 Refetching story details to sync all data...");
-      await fetchStory();
+      await res.json(); // Consume response
+
+      // Stop any currently playing audio
+      if (currentAudioRef.current) {
+        currentAudioRef.current.pause();
+        currentAudioRef.current.currentTime = 0;
+        currentAudioRef.current = null;
+      }
+      if (progressIntervalRef.current) {
+        clearInterval(progressIntervalRef.current);
+        progressIntervalRef.current = null;
+      }
+      setIsPlayingPreview(false);
+      setSelectedScene(0);
+
+      // Refetch only this scene's details (incremental update)
+      const sceneId = scenes[sceneIndex]?.id;
+      if (sceneId) {
+        const result = await fetchAndUpdateScene(sceneId);
+
+        // Reload just this scene's audio
+        if (result) {
+          setPreloadedAudio(prev => {
+            const updated = {...prev};
+            delete updated[result.index]; // Remove old audio
+
+            // Preload new audio for this scene
+            if (result.scene.audio_url) {
+              const audioElement = new Audio(result.scene.audio_url);
+              audioElement.volume = volume;
+              audioElement.preload = 'metadata';
+              updated[result.index] = audioElement;
+            }
+
+            return updated;
+          });
+        }
+      }
 
       // Refetch credit balance
       await refetchCredits();
 
+      // Show success toast
+      showToast(`🎙️ Audio generated for scene ${sceneIndex + 1}`, 'success');
+
     } catch (err) {
       console.error("Scene audio generation error:", err);
-      alert(`Scene audio generation failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      showToast(`Failed to generate audio: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error');
     } finally {
-      const newGenerating = new Set(generatingSceneAudio);
-      newGenerating.delete(sceneIndex);
-      setGeneratingSceneAudio(newGenerating);
+      setGeneratingSceneAudio(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(sceneIndex);
+        return newSet;
+      });
     }
   };
 
@@ -1176,9 +1386,10 @@ export default function StoryDetailsPage() {
     try {
       console.log("🎬 Starting SERVER-SIDE video generation for story:", id);
 
+      const headers = await getAuthHeaders();
       const res = await fetch("/api/generate_video", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({
           story_id: id,
           aspect_ratio: aspectRatio,
@@ -1214,9 +1425,10 @@ export default function StoryDetailsPage() {
 
           if (shouldClear) {
             // Clear the stuck job
+            const clearHeaders = await getAuthHeaders();
             const clearRes = await fetch("/api/clear_video_job", {
               method: "POST",
-              headers: { "Content-Type": "application/json" },
+              headers: clearHeaders,
               body: JSON.stringify({ story_id: id }),
             });
 
@@ -1253,9 +1465,12 @@ export default function StoryDetailsPage() {
       setGeneratedVideoUrl(data.video_url);
       setGeneratedVideoDuration(data.duration);
       setVideoSuccessDialogOpen(true);
+
+      // Show success toast
+      showToast(`🎬 Video generated successfully! Duration: ${Math.floor(data.duration)}s`, 'success');
     } catch (err) {
       console.error("❌ Video generation error:", err);
-      alert(`Video generation failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      showToast(`Failed to generate video: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error');
     } finally {
       // Clean up progress interval
       if (videoProgressIntervalRef.current) {
@@ -1536,9 +1751,10 @@ export default function StoryDetailsPage() {
     if (!id || !scenes[sceneIndex]) return;
 
     try {
+      const headers = await getAuthHeaders();
       const res = await fetch("/api/edit_scene", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({
           story_id: id,
           scene_id: scenes[sceneIndex].id,
@@ -1571,9 +1787,10 @@ export default function StoryDetailsPage() {
     if (!scenes[sceneIndex]?.id) return;
 
     try {
+      const headers = await getAuthHeaders();
       const res = await fetch("/api/update_scene_effect", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({
           scene_id: scenes[sceneIndex].id,
           effect_id: effectId,
@@ -1603,9 +1820,10 @@ export default function StoryDetailsPage() {
     setSavingTitle(true);
 
     try {
+      const headers = await getAuthHeaders();
       const res = await fetch("/api/update_story_title", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({
           story_id: id,
           title: editTitleText.trim()
@@ -1647,9 +1865,10 @@ export default function StoryDetailsPage() {
     setDeletingScene(true);
 
     try {
+      const headers = await getAuthHeaders();
       const res = await fetch("/api/delete_scene", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({
           story_id: id,
           scene_id: scenes[sceneToDelete].id,
@@ -1698,9 +1917,10 @@ export default function StoryDetailsPage() {
 
     setAddingScene(true);
     try {
+      const headers = await getAuthHeaders();
       const res = await fetch("/api/add_scene", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({
           story_id: id,
           scene_text: newSceneText.trim(),
@@ -1744,6 +1964,17 @@ export default function StoryDetailsPage() {
   const cancelEditing = () => {
     setEditingScene(null);
     setEditText("");
+  };
+
+  // Show toast notification
+  const showToast = (message: string, type: 'success' | 'error' = 'success') => {
+    const id = Date.now().toString();
+    setToasts(prev => [...prev, { id, message, type }]);
+
+    // Auto dismiss after 5 seconds
+    setTimeout(() => {
+      setToasts(prev => prev.filter(t => t.id !== id));
+    }, 5000);
   };
 
   if (loading) {
@@ -1836,6 +2067,17 @@ export default function StoryDetailsPage() {
 
           {/* Right side: Controls - Compact on mobile */}
           <div className="flex items-center gap-1.5 md:gap-3 flex-shrink-0">
+            {/* Credit Balance Display */}
+            <div className="flex items-center gap-1.5 px-2 md:px-3 py-1 md:py-1.5 bg-gray-800 border border-gray-700 rounded-lg">
+              <Coins className="w-3 h-3 md:w-4 md:h-4 text-orange-400" />
+              <span className="text-xs md:text-sm font-semibold text-white">
+                {creditBalance}
+              </span>
+              <span className="hidden md:inline text-xs text-gray-400">
+                credits
+              </span>
+            </div>
+
             {/* Story Default Voice Selector - Compact on mobile */}
             <Popover open={storyVoicePopoverOpen} onOpenChange={setStoryVoicePopoverOpen}>
               <PopoverTrigger asChild>
@@ -1845,7 +2087,7 @@ export default function StoryDetailsPage() {
                   className="bg-gray-800 border-gray-700 text-white hover:bg-gray-700 hover:text-white px-2 md:px-3"
                 >
                   <Volume2 className="w-3 h-3 md:w-4 md:h-4 md:mr-2" />
-                  <span className="hidden md:inline text-xs md:text-sm">{voices.find(v => v.id === (story?.voice_id || "21m00Tcm4TlvDq8ikWAM"))?.name || "Select Voice"}</span>
+                  <span className="hidden md:inline text-xs md:text-sm">{voices.find(v => v.id === (story?.voice_id || "alloy"))?.name || "Select Voice"}</span>
                   <ChevronDown className="w-3 h-3 md:w-4 md:h-4 ml-1 md:ml-2 opacity-50" />
                 </Button>
               </PopoverTrigger>
@@ -1864,7 +2106,7 @@ export default function StoryDetailsPage() {
                         <div
                           key={voice.id}
                           className={`flex items-center gap-2 px-3 py-2 rounded-md transition-colors ${
-                            (story?.voice_id || "21m00Tcm4TlvDq8ikWAM") === voice.id
+                            (story?.voice_id || "alloy") === voice.id
                               ? "bg-orange-900/30"
                               : "hover:bg-gray-800"
                           }`}
@@ -1881,7 +2123,7 @@ export default function StoryDetailsPage() {
                                 </div>
                               )}
                             </div>
-                            {(story?.voice_id || "21m00Tcm4TlvDq8ikWAM") === voice.id && (
+                            {(story?.voice_id || "alloy") === voice.id && (
                               <Check className="w-4 h-4 text-orange-400 flex-shrink-0 ml-2" />
                             )}
                           </button>
@@ -1915,10 +2157,9 @@ export default function StoryDetailsPage() {
               <AlertDialogContent className="bg-gray-900 border-gray-700 text-white">
                 <AlertDialogHeader>
                   <AlertDialogTitle>Update Story Default Voice?</AlertDialogTitle>
-                  <AlertDialogDescription className="text-gray-400">
-                    Change story default voice to <span className="font-semibold text-orange-400">{pendingVoiceName}</span>?
-                    <br /><br />
-                    All new scenes will use this voice by default. Existing scenes will keep their current voice unless regenerated.
+                  <AlertDialogDescription className="text-gray-400 space-y-2">
+                    <span>Change story default voice to <span className="font-semibold text-orange-400">{pendingVoiceName}</span>?</span>
+                    <span className="block">All new scenes will use this voice by default. Existing scenes will keep their current voice unless regenerated.</span>
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
@@ -1942,22 +2183,21 @@ export default function StoryDetailsPage() {
                   <AlertDialogTitle>{creditConfirmAction?.title}</AlertDialogTitle>
                   <AlertDialogDescription className="text-gray-400">
                     {creditConfirmAction?.message}
-                    <br /><br />
-                    <div className="flex items-center justify-center gap-2 bg-orange-900/30 border border-orange-600/50 rounded-lg p-4">
-                      <Coins className="w-5 h-5 text-orange-400" />
-                      <span className="text-lg font-bold text-orange-400">
-                        This action will cost you {creditConfirmAction?.credits} {creditConfirmAction?.credits === 1 ? 'credit' : 'credits'}
-                      </span>
-                    </div>
                   </AlertDialogDescription>
+                  <div className="flex items-center justify-center gap-2 bg-orange-900/30 border border-orange-600/50 rounded-lg p-4 mt-4">
+                    <Coins className="w-5 h-5 text-orange-400" />
+                    <span className="text-lg font-bold text-orange-400">
+                      This action will cost you {creditConfirmAction?.credits} {creditConfirmAction?.credits === 1 ? 'credit' : 'credits'}
+                    </span>
+                  </div>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
                   <AlertDialogCancel className="bg-gray-800 border-gray-700 text-white hover:bg-gray-700 hover:text-white">
                     Cancel
                   </AlertDialogCancel>
                   <AlertDialogAction
-                    onClick={async () => {
-                      await creditConfirmAction?.onConfirm();
+                    onClick={() => {
+                      creditConfirmAction?.onConfirm();
                       setCreditConfirmOpen(false);
                       setCreditConfirmAction(null);
                     }}
@@ -2086,17 +2326,6 @@ export default function StoryDetailsPage() {
                   </Tooltip>
                 </TooltipProvider>
               )}
-            </div>
-
-            {/* Credit Balance Display */}
-            <div className="flex items-center gap-1.5 px-2 md:px-3 py-1 md:py-1.5 bg-gray-800 border border-gray-700 rounded-lg">
-              <Coins className="w-3 h-3 md:w-4 md:h-4 text-orange-400" />
-              <span className="text-xs md:text-sm font-semibold text-white">
-                {creditBalance}
-              </span>
-              <span className="hidden md:inline text-xs text-gray-400">
-                credits
-              </span>
             </div>
           </div>
         </div>
@@ -2372,14 +2601,24 @@ export default function StoryDetailsPage() {
                                   e.stopPropagation();
                                   openAudioDrawer(index);
                                 }}
-                                className={`px-2 lg:px-3 py-1.5 text-xs rounded transition-colors flex items-center gap-1 lg:gap-1.5 ${
+                                disabled={generatingSceneAudio.has(index)}
+                                className={`px-2 lg:px-3 py-1.5 text-xs rounded transition-colors flex items-center gap-1 lg:gap-1.5 disabled:opacity-50 ${
                                   isAudioOutdated(scene)
                                     ? 'bg-yellow-900/50 hover:bg-yellow-800/60 border border-yellow-700/50 text-yellow-400'
                                     : 'bg-green-800 hover:bg-green-700 text-white'
                                 }`}
                               >
-                                <Check className="w-3 h-3" />
-                                <span className="text-[10px] lg:text-xs">Audio</span>
+                                {generatingSceneAudio.has(index) ? (
+                                  <>
+                                    <Loader2 className="w-3 h-3 animate-spin" />
+                                    <span className="text-[10px] lg:text-xs">Audio...</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Check className="w-3 h-3" />
+                                    <span className="text-[10px] lg:text-xs">Audio</span>
+                                  </>
+                                )}
                               </button>
                             ) : (
                               <button
@@ -3489,16 +3728,24 @@ export default function StoryDetailsPage() {
                     }
                     setPlayingPreviewId(null);
 
-                    setCreditConfirmAction({
-                      title: "Generate Audio for This Scene?",
-                      message: `Generate audio narration for scene ${audioDrawerScene + 1}.`,
-                      credits: CREDIT_COSTS.AUDIO_PER_SCENE,
-                      onConfirm: async () => {
-                        setAudioDrawerOpen(false);
-                        await generateSceneAudio(audioDrawerScene, selectedVoiceId);
-                      }
-                    });
-                    setCreditConfirmOpen(true);
+                    if (audioDrawerScene !== null) {
+                      const sceneToGenerate = audioDrawerScene;
+                      const voiceToGenerate = selectedVoiceId;
+
+                      setCreditConfirmAction({
+                        title: "Generate Audio for This Scene?",
+                        message: `Generate audio narration for scene ${sceneToGenerate + 1}.`,
+                        credits: CREDIT_COSTS.AUDIO_PER_SCENE,
+                        onConfirm: () => {
+                          // Close audio drawer
+                          setAudioDrawerOpen(false);
+
+                          // Generate audio in background (sets loading state internally)
+                          generateSceneAudio(sceneToGenerate, voiceToGenerate);
+                        }
+                      });
+                      setCreditConfirmOpen(true);
+                    }
                   }}
                   disabled={generatingSceneAudio.has(audioDrawerScene)}
                   className="flex-1 bg-orange-600 hover:bg-orange-700 text-white"
@@ -3619,9 +3866,12 @@ export default function StoryDetailsPage() {
                         title: "Generate Image for This Scene?",
                         message: `Generate image for scene ${imageDrawerScene + 1}.`,
                         credits: CREDIT_COSTS.IMAGE_PER_SCENE,
-                        onConfirm: async () => {
+                        onConfirm: () => {
+                          // Close image drawer
                           setImageDrawerOpen(false);
-                          await generateSceneImage(
+
+                          // Generate image in background (sets loading state internally)
+                          generateSceneImage(
                             imageDrawerScene,
                             undefined, // Don't pass style - will use existing scenes for consistency
                             imageInstructions
@@ -4326,6 +4576,33 @@ export default function StoryDetailsPage() {
           </div>
         </div>
       )}
+
+      {/* Toast Notifications - Bottom Left */}
+      <div className="fixed bottom-4 left-4 z-50 space-y-2">
+        {toasts.map((toast) => (
+          <div
+            key={toast.id}
+            className={`flex items-center gap-3 px-4 py-3 rounded-lg shadow-lg backdrop-blur-sm border animate-in slide-in-from-left duration-300 ${
+              toast.type === 'success'
+                ? 'bg-green-900/90 border-green-700 text-green-100'
+                : 'bg-red-900/90 border-red-700 text-red-100'
+            }`}
+          >
+            {toast.type === 'success' ? (
+              <Check className="w-5 h-5 flex-shrink-0" />
+            ) : (
+              <X className="w-5 h-5 flex-shrink-0" />
+            )}
+            <p className="text-sm font-medium">{toast.message}</p>
+            <button
+              onClick={() => setToasts(prev => prev.filter(t => t.id !== toast.id))}
+              className="ml-2 hover:opacity-70 transition-opacity"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

@@ -51,7 +51,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let storyId = story_id || uuidv4();
     logger = new JobLogger(storyId, "generate_scenes");
     logger.log(`👤 User: ${user.email} (${user.id})`);
-    logger.log(`🎙️ Voice ID: ${voice_id || '21m00Tcm4TlvDq8ikWAM'}`);
+    logger.log(`🎙️ Voice ID: ${voice_id || 'alloy'}`);
     logger.log(`📐 Aspect Ratio: ${aspect_ratio || '9:16'}`);
 
     if (story_id) {
@@ -60,7 +60,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       await supabaseAdmin.from("scenes").delete().eq("story_id", storyId);
       await supabaseAdmin.from("stories").update({
         prompt,
-        voice_id: voice_id || '21m00Tcm4TlvDq8ikWAM',
+        voice_id: voice_id || 'alloy',
         aspect_ratio: aspect_ratio || '9:16'
       }).eq("id", storyId);
     } else {
@@ -73,7 +73,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           prompt,
           status: "processing",
           user_id: user.id,  // 🔑 Link story to authenticated user
-          voice_id: voice_id || '21m00Tcm4TlvDq8ikWAM',
+          voice_id: voice_id || 'alloy',
           aspect_ratio: aspect_ratio || '9:16'
         }]);
       if (storyErr) throw storyErr;
@@ -106,6 +106,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 You are a JSON generator. Break the following story idea into exactly ${sceneCount} short, visual, and ENGAGING scenes with a catchy title.
 
 RULES:
+- Each scene must be MAXIMUM 30 WORDS (strictly enforce this limit!)
 - Each scene must be ONLY 1-2 sentences maximum
 - Make scenes ENGAGING: use vivid action verbs, sensory details, emotion, and drama
 - Use varied sentence types: statements, exclamations (!), questions (?)

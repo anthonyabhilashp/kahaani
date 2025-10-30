@@ -7,10 +7,33 @@ import { supabaseAdmin } from "../../lib/supabaseAdmin";
 import { JobLogger } from "../../lib/logger";
 import { updateStoryMetadata } from "../../lib/updateStoryMetadata";
 import * as Echogarden from "echogarden";
-import { textToSSML } from "../../lib/ssmlHelper";
 import { getUserCredits, deductCredits, refundCredits, CREDIT_COSTS } from "../../lib/credits";
 
-const ELEVENLABS_API = "https://api.elevenlabs.io/v1/text-to-speech";
+const OPENAI_TTS_API = "https://api.openai.com/v1/audio/speech";
+
+// OpenAI voice mapping - supports both OpenAI voice names and old ElevenLabs IDs
+// Valid OpenAI voices: alloy, echo, fable, onyx, nova, shimmer, ash, coral, sage
+const VOICE_MAPPING: { [key: string]: string } = {
+  // OpenAI voice IDs (direct pass-through)
+  "alloy": "alloy",
+  "echo": "echo",
+  "fable": "fable",
+  "onyx": "onyx",
+  "nova": "nova",
+  "shimmer": "shimmer",
+  "ash": "ash",
+  "coral": "coral",
+  "sage": "sage",
+  // Legacy ElevenLabs IDs (for backward compatibility)
+  "21m00Tcm4TlvDq8ikWAM": "alloy",  // Rachel → alloy
+  "EXAVITQu4vr4xnSDxMaL": "nova",   // Bella → nova
+  "MF3mGyEYCl7XYWbV9V6O": "echo",   // Elli → echo
+  "TxGEqnHWrfWFTfGW9XjX": "fable",  // Josh → fable
+  "VR6AewLTigWG4xSOukaG": "onyx",   // Arnold → onyx
+  "pNInz6obpgDQGcFmaJgB": "shimmer", // Adam → shimmer
+  // Default fallback
+  "default": "alloy"
+};
 
 function ffprobeAsync(filePath: string): Promise<ffmpeg.FfprobeData> {
   return new Promise((resolve, reject) => {
@@ -32,8 +55,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     logger = new JobLogger(scene_id, "generate_audio");
     logger.log(`🎙️ Starting audio generation for scene: ${scene_id}`);
+    logger.log(`🎤 Received voice_id from request: ${voice_id}`);
 
-    const voiceId = voice_id || "21m00Tcm4TlvDq8ikWAM";
+    const voiceId = voice_id || "alloy"; // Default to OpenAI's Alloy voice
+    logger.log(`🎤 Using voice_id (after default): ${voiceId}`);
 
     // 1️⃣ Fetch scene data
     const { data: scene, error: sceneErr } = await supabaseAdmin
@@ -48,19 +73,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const sceneText = scene.text;
     logger.log(`📖 Scene text length: ${sceneText.length} chars`);
 
-    // 💳 Credit check: Get user ID from story
+    // 🔐 Get authenticated user from session
+    const authHeader = req.headers.authorization;
+    if (!authHeader) {
+      return res.status(401).json({ error: "Unauthorized - Please log in" });
+    }
+
+    const token = authHeader.replace('Bearer ', '');
+    const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(token);
+
+    if (authError || !user) {
+      return res.status(401).json({ error: "Unauthorized - Invalid session" });
+    }
+
+    const userId = user.id;
+    logger.log(`👤 User ID: ${userId} (${user.email})`);
+
+    // Fetch story for title (for logging)
     const { data: story, error: storyError } = await supabaseAdmin
       .from("stories")
-      .select("user_id, title")
+      .select("title")
       .eq("id", scene.story_id)
       .single();
 
     if (storyError || !story) {
       throw new Error("Story not found");
     }
-
-    const userId = story.user_id;
-    logger.log(`👤 User ID: ${userId}`);
 
     // 💳 Charge 1 credit per audio scene
     const creditsNeeded = CREDIT_COSTS.AUDIO_PER_SCENE;
@@ -95,60 +133,54 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     logger.log(`✅ Deducted ${creditsNeeded} credit. New balance: ${deductResult.newBalance}`);
 
+    // Map voice ID to OpenAI voice name
+    const openaiVoice = VOICE_MAPPING[voiceId] || VOICE_MAPPING["default"];
+    logger.log(`🎤 Mapped voice to OpenAI: ${openaiVoice}`);
+
     // Track for potential refund if generation fails
     creditsDeducted = true;
     storyIdForRefund = scene.story_id;
     userIdForRefund = userId;
 
-    // Use fixed defaults for voice parameters (same for all stories)
-    const voiceStability = 0.4;
-    const voiceSimilarity = 0.7;
-    logger.log(`🎤 Voice settings: stability=${voiceStability}, similarity=${voiceSimilarity}`);
-
-    // 2️⃣ Convert text to SSML with intelligent pauses
-    const ssmlText = textToSSML(sceneText, {
-      sentencePause: 500, // 0.5s after sentences
-      endPause: 800, // 0.8s at scene end
-      commaPause: 300, // 0.3s after commas
-    });
-    logger.log(`📝 Using SSML for better narration flow`);
-    logger.log(`🔍 SSML preview: ${ssmlText.substring(0, 100)}...`);
-
-    // 3️⃣ Generate audio
-    logger.log(`🧠 Generating TTS with ElevenLabs voice: ${voiceId}`);
-    const ttsRes = await fetch(`${ELEVENLABS_API}/${voiceId}`, {
+    // 2️⃣ Generate audio with OpenAI TTS
+    const audioModel = process.env.AUDIO_MODEL || "tts-1-hd";
+    logger.log(`🧠 Generating TTS with OpenAI voice: ${openaiVoice} (model: ${audioModel})`);
+    const ttsRes = await fetch(OPENAI_TTS_API, {
       method: "POST",
       headers: {
-        "xi-api-key": process.env.ELEVENLABS_API_KEY!,
+        "Authorization": `Bearer ${process.env.OPENAI_API_KEY!}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        text: ssmlText,
-        model_id: "eleven_multilingual_v2",
-        voice_settings: {
-          stability: voiceStability,
-          similarity_boost: voiceSimilarity
-        },
-        enable_ssml: true,
+        model: audioModel,
+        input: sceneText,
+        voice: openaiVoice,
+        response_format: "mp3",
+        speed: 1.0 // Normal speed
       }),
     });
 
-    if (!ttsRes.ok) throw new Error(await ttsRes.text());
+    if (!ttsRes.ok) {
+      const errorText = await ttsRes.text();
+      logger.error(`❌ OpenAI TTS error: ${errorText}`);
+      throw new Error(`OpenAI TTS failed: ${errorText}`);
+    }
 
     const audioBuffer = Buffer.from(await ttsRes.arrayBuffer());
+    logger.log(`✅ Audio generated successfully`);
 
-    // 4️⃣ Save locally
+    // 3️⃣ Save locally
     const tempDir = path.join(process.cwd(), "tmp", scene_id);
     fs.mkdirSync(tempDir, { recursive: true });
     const audioPath = path.join(tempDir, `scene-${scene_id}.mp3`);
     fs.writeFileSync(audioPath, audioBuffer);
 
-    // 5️⃣ Get duration
+    // 4️⃣ Get duration
     const info = await ffprobeAsync(audioPath);
     const duration = info.format?.duration || 0;
     logger.log(`⏱ Audio duration: ${duration.toFixed(2)} seconds`);
 
-    // 6️⃣ Generate word-level timestamps using forced alignment
+    // 5️⃣ Generate word-level timestamps using forced alignment
     logger.log(`🔍 Generating word-level timestamps with forced alignment...`);
     let wordTimestamps = null;
     try {
@@ -170,28 +202,44 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // Continue without timestamps rather than failing completely
     }
 
-    // 7️⃣ Delete old audio if exists and upload new one
-    const fileName = `scene-${scene_id}.mp3`;
+    // 6️⃣ Delete old audio files for this scene (all versions)
+    const oldFilePattern = `scene-${scene_id}`;
+    logger.log(`🗑️ Removing any existing audio files for scene: ${oldFilePattern}*`);
 
-    // Always delete first to avoid "resource already exists" error
-    logger.log(`🗑️ Removing any existing audio file: ${fileName}`);
-    await supabaseAdmin.storage.from("audio").remove([fileName]);
-    logger.log(`✅ Cleanup completed`);
+    // List and delete all files matching this scene
+    const { data: existingFiles } = await supabaseAdmin.storage
+      .from("audio")
+      .list();
 
-    // 8️⃣ Upload new audio to Supabase
+    if (existingFiles) {
+      const filesToDelete = existingFiles
+        .filter(file => file.name.startsWith(oldFilePattern))
+        .map(file => file.name);
+
+      if (filesToDelete.length > 0) {
+        await supabaseAdmin.storage.from("audio").remove(filesToDelete);
+        logger.log(`🗑️ Deleted ${filesToDelete.length} old file(s)`);
+      }
+    }
+
+    // 7️⃣ Upload new audio to Supabase with timestamp to prevent caching
+    const timestamp = Date.now();
+    const fileName = `scene-${scene_id}-${timestamp}.mp3`;
     logger.log(`☁️ Uploading new audio file: ${fileName}`);
     const { error: uploadErr } = await supabaseAdmin.storage
       .from("audio")
       .upload(fileName, fs.readFileSync(audioPath), {
         contentType: "audio/mpeg",
         upsert: false,
+        cacheControl: 'no-cache, no-store, must-revalidate' // Prevent browser caching
       });
     if (uploadErr) throw uploadErr;
     logger.log(`✅ Audio uploaded successfully`);
 
     const audioUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/audio/${fileName}`;
 
-    // 9️⃣ Update scene with audio URL, voice_id, duration, word timestamps, and set audio_generated_at timestamp
+    // 8️⃣ Update scene with audio URL, voice_id, duration, word timestamps, and set audio_generated_at timestamp
+    logger.log(`💾 Updating scene ${scene_id} with voice_id: ${voiceId}`);
     const { error: updateErr } = await supabaseAdmin
       .from("scenes")
       .update({
@@ -203,7 +251,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       })
       .eq("id", scene_id);
 
-    if (updateErr) throw updateErr;
+    if (updateErr) {
+      logger.error(`❌ Database update error:`, updateErr);
+      throw updateErr;
+    }
+    logger.log(`✅ Scene updated successfully with voice_id: ${voiceId}`);
 
     // 9️⃣ Update story metadata (duration and completion status)
     logger.log(`📊 Updating story metadata...`);

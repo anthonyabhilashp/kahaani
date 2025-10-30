@@ -49,7 +49,7 @@ export default function Dashboard() {
   const [targetDuration, setTargetDuration] = useState<30 | 60 | 120 | 180>(
     creditBalance <= 15 ? 30 : 60
   ); // in seconds - default to 30s if low credits
-  const [selectedVoiceId, setSelectedVoiceId] = useState<string>("21m00Tcm4TlvDq8ikWAM"); // Rachel - default
+  const [selectedVoiceId, setSelectedVoiceId] = useState<string>("alloy"); // OpenAI Alloy - default
   const [aspectRatio, setAspectRatio] = useState<"9:16" | "1:1" | "16:9">("9:16");
   const [voices, setVoices] = useState<any[]>([]);
   const [loadingVoices, setLoadingVoices] = useState(false);
@@ -189,7 +189,7 @@ export default function Dashboard() {
         setDialogOpen(false);
         setNewPrompt("");
         setTargetDuration(60);
-        setSelectedVoiceId("21m00Tcm4TlvDq8ikWAM");
+        setSelectedVoiceId("alloy");
         setAspectRatio("9:16");
 
         // Navigate to story page

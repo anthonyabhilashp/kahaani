@@ -21,10 +21,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     logger = new JobLogger(story_id, "generate_images");
     logger.log(`🎨 Starting image generation for story: ${story_id}`);
 
-    // 💳 Credit check: Get user ID from story
+    // 🔐 Get authenticated user from session
+    const authHeader = req.headers.authorization;
+    if (!authHeader) {
+      return res.status(401).json({ error: "Unauthorized - Please log in" });
+    }
+
+    const token = authHeader.replace('Bearer ', '');
+    const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(token);
+
+    if (authError || !user) {
+      return res.status(401).json({ error: "Unauthorized - Invalid session" });
+    }
+
+    const userId = user.id;
+    logger.log(`👤 User ID: ${userId} (${user.email})`);
+
+    // Get story metadata (title, aspect ratio)
     const { data: story, error: storyErr } = await supabaseAdmin
       .from("stories")
-      .select("user_id, title")
+      .select("title, aspect_ratio")
       .eq("id", story_id)
       .single();
 
@@ -32,8 +48,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       throw new Error("Story not found");
     }
 
-    const userId = story.user_id;
-    logger.log(`👤 User ID: ${userId}`);
+    const storyAspectRatio = story.aspect_ratio || "9:16";
+    logger.log(`📐 Story aspect ratio: ${storyAspectRatio}`);
 
     // 1️⃣ Fetch story scenes first to calculate credit cost
     const { data: scenes, error: sceneErr } = await supabaseAdmin
@@ -216,10 +232,28 @@ Return exactly ${scenes.length} visual descriptions in the visual_descriptions a
     const provider = process.env.PROVIDER || "openrouter";
     const model = process.env.IMAGE_MODEL || "google/gemini-2.5-flash-image-preview";
 
-    // 🎯 Use same aspect ratio system as video generation
-    const aspect = process.env.ASPECT_RATIO || "9:16";
-    const videoWidth = parseInt(process.env.VIDEO_WIDTH || "1080");
-    const videoHeight = parseInt(process.env.VIDEO_HEIGHT || "1920");
+    // 🎯 Use story-specific aspect ratio
+    const aspect = storyAspectRatio;
+
+    // Calculate dimensions based on aspect ratio
+    let videoWidth: number, videoHeight: number;
+    switch (aspect) {
+      case "16:9":
+        videoWidth = 1920;
+        videoHeight = 1080;
+        break;
+      case "1:1":
+        videoWidth = 1080;
+        videoHeight = 1080;
+        break;
+      case "9:16":
+      default:
+        videoWidth = 1080;
+        videoHeight = 1920;
+        break;
+    }
+
+    logger.log(`📐 Using dimensions: ${videoWidth}x${videoHeight} (${aspect})`);
 
     // 📱 Generate images with EXACT same dimensions as final video
     const imageSize = `${videoWidth}x${videoHeight}`;
@@ -468,10 +502,32 @@ Generate one beautiful image for Scene ${i + 1} in "${finalStyle}" style${refere
 
     const uploads: any[] = [];
 
+    // Generate timestamp once for all images in this batch
+    const batchTimestamp = Date.now();
+
     for (let i = 0; i < scenes.length; i++) {
       const imgUrl = images[i] || images[images.length - 1];
       const buffer = Buffer.from(await (await fetch(imgUrl)).arrayBuffer());
-      const fileName = `scene-${story_id}-${i + 1}.png`;
+
+      // Delete old images for this scene first
+      const oldFilePattern = `scene-${story_id}-${i + 1}`;
+      const { data: existingFiles } = await supabaseAdmin.storage
+        .from("images")
+        .list();
+
+      if (existingFiles) {
+        const filesToDelete = existingFiles
+          .filter(file => file.name.startsWith(oldFilePattern))
+          .map(file => file.name);
+
+        if (filesToDelete.length > 0) {
+          await supabaseAdmin.storage.from("images").remove(filesToDelete);
+          logger.log(`🗑️ Deleted ${filesToDelete.length} old image(s) for scene ${i + 1}`);
+        }
+      }
+
+      // Use timestamp in filename to prevent browser caching
+      const fileName = `scene-${story_id}-${i + 1}-${batchTimestamp}.png`;
       const filePath = path.join(tmpDir, fileName);
       fs.writeFileSync(filePath, buffer);
 
@@ -480,7 +536,8 @@ Generate one beautiful image for Scene ${i + 1} in "${finalStyle}" style${refere
         .from("images")
         .upload(fileName, buffer, {
           contentType: "image/png",
-          upsert: true,
+          upsert: false,
+          cacheControl: 'no-cache, no-store, must-revalidate' // Prevent browser caching
         });
 
       if (uploadErr) throw uploadErr;
@@ -512,23 +569,17 @@ Generate one beautiful image for Scene ${i + 1} in "${finalStyle}" style${refere
 
     logger.log(`📸 Updated ${uploads.length} scenes with image URLs`);
 
-    // Save reference image URL and character data to story
-    if (referenceImageUrl || characters.length > 0) {
-      logger.log(`💾 Saving reference image and character data to story...`);
+    // Save character data to story (if any)
+    if (characters.length > 0 || environments.length > 0 || props.length > 0) {
+      logger.log(`💾 Saving character data to story...`);
 
-      const updateData: any = {};
-
-      if (referenceImageUrl) {
-        updateData.reference_image_url = referenceImageUrl;
-      }
-
-      if (characters.length > 0 || environments.length > 0 || props.length > 0) {
-        updateData.story_elements = {
+      const updateData: any = {
+        story_elements: {
           characters: characters,
           environments: environments,
           props: props
-        };
-      }
+        }
+      };
 
       const { error: storyUpdateErr } = await supabaseAdmin
         .from("stories")
@@ -536,9 +587,9 @@ Generate one beautiful image for Scene ${i + 1} in "${finalStyle}" style${refere
         .eq("id", story_id);
 
       if (storyUpdateErr) {
-        logger.error("⚠️ Failed to save reference data to story", storyUpdateErr);
+        logger.error("⚠️ Failed to save character data to story", storyUpdateErr);
       } else {
-        logger.log(`✅ Reference data saved to story`);
+        logger.log(`✅ Character data saved to story`);
       }
     }
 
@@ -550,7 +601,6 @@ Generate one beautiful image for Scene ${i + 1} in "${finalStyle}" style${refere
     res.status(200).json({
       story_id,
       updated_scenes: uploads,
-      reference_image_url: referenceImageUrl,
       story_elements: { characters, environments, props }
     });
 
