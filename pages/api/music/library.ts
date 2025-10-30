@@ -1,5 +1,5 @@
 import type { NextApiRequest, NextApiResponse } from "next";
-import { supabaseAdmin } from "../../lib/supabaseAdmin";
+import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import formidable from "formidable";
 import fs from "fs";
 import path from "path";
@@ -7,7 +7,7 @@ import ffmpeg from "fluent-ffmpeg";
 
 export const config = {
   api: {
-    bodyParser: false, // Disable body parser for file upload
+    bodyParser: false, // Disable for file uploads
   },
 };
 
@@ -26,10 +26,60 @@ async function getAudioDuration(filePath: string): Promise<number> {
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed" });
+  switch (req.method) {
+    case "GET":
+      return handleGet(req, res);
+    case "POST":
+      return handlePost(req, res);
+    default:
+      return res.status(405).json({ error: "Method not allowed" });
   }
+}
 
+// GET /api/music/library - Get music library
+async function handleGet(req: NextApiRequest, res: NextApiResponse) {
+  try {
+    const { category, user_id, search, preset_only } = req.query;
+
+    let query = supabaseAdmin
+      .from("background_music_library")
+      .select("*")
+      .order("created_at", { ascending: false });
+
+    // Apply filters
+    if (category && typeof category === "string") {
+      query = query.eq("category", category);
+    }
+
+    if (preset_only === "true") {
+      query = query.eq("is_preset", true);
+    } else if (user_id && typeof user_id === "string") {
+      // Show user's music + presets
+      query = query.or(`uploaded_by.eq.${user_id},is_preset.eq.true`);
+    }
+
+    if (search && typeof search === "string") {
+      query = query.ilike("name", `%${search}%`);
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      throw error;
+    }
+
+    return res.status(200).json({
+      music: data || [],
+      count: data?.length || 0
+    });
+  } catch (err: any) {
+    console.error("Error fetching music library:", err);
+    return res.status(500).json({ error: err.message });
+  }
+}
+
+// POST /api/music/library - Upload music to library
+async function handlePost(req: NextApiRequest, res: NextApiResponse) {
   try {
     // Parse the multipart form data
     const form = formidable({
@@ -65,12 +115,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const fileBuffer = fs.readFileSync(uploadedFile.filepath);
     const fileExtension = path.extname(uploadedFile.originalFilename || "music.mp3");
     const fileName = `${Date.now()}-${name.replace(/[^a-z0-9]/gi, '-').toLowerCase()}${fileExtension}`;
-    const filePath = `background_music/${fileName}`;
 
     // Upload to Supabase Storage
     const { data: uploadData, error: uploadError } = await supabaseAdmin.storage
       .from("background_music")
-      .upload(filePath, fileBuffer, {
+      .upload(fileName, fileBuffer, {
         contentType: uploadedFile.mimetype || "audio/mpeg",
         upsert: false,
       });
@@ -83,7 +132,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Get public URL
     const { data: urlData } = supabaseAdmin.storage
       .from("background_music")
-      .getPublicUrl(filePath);
+      .getPublicUrl(fileName);
 
     const publicUrl = urlData.publicUrl;
 
@@ -110,13 +159,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Clean up temp file
     fs.unlinkSync(uploadedFile.filepath);
 
-    return res.status(200).json({
+    return res.status(201).json({
       success: true,
       music: musicData,
       message: "Music uploaded to library successfully",
     });
   } catch (err: any) {
-    console.error("Error in upload_music_to_library:", err);
+    console.error("Error in upload music to library:", err);
     return res.status(500).json({ error: err.message });
   }
 }

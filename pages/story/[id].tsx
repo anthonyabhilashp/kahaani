@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/router";
 import { Button } from "../../components/ui/button";
+import { Input } from "../../components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "../../components/ui/popover";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../components/ui/alert-dialog";
 import { Slider } from "../../components/ui/slider";
@@ -270,15 +271,28 @@ export default function StoryDetailsPage() {
   const [bgMusicId, setBgMusicId] = useState<string | null>(null);
   const [bgMusicUrl, setBgMusicUrl] = useState<string | null>(null);
   const [bgMusicName, setBgMusicName] = useState<string | null>(null);
-  const [bgMusicVolume, setBgMusicVolume] = useState(30); // Default 30% volume
+  const [bgMusicVolume, setBgMusicVolume] = useState(4); // Default 4% volume
   const [bgMusicUploading, setBgMusicUploading] = useState(false);
   const [bgMusicPlaying, setBgMusicPlaying] = useState(false);
   const bgMusicAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  // Music Library Preview (separate from story playback)
+  const [musicPreviewPlaying, setMusicPreviewPlaying] = useState<string | null>(null);
+  const musicPreviewAudioRef = useRef<HTMLAudioElement | null>(null);
 
   // Music Library State
   const [musicLibrary, setMusicLibrary] = useState<any[]>([]);
   const [musicLibraryLoading, setMusicLibraryLoading] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [deleteMusicDialog, setDeleteMusicDialog] = useState<{open: boolean; music: any | null}>({open: false, music: null});
+  const [deletingMusic, setDeletingMusic] = useState(false);
+
+  // Import dialogs
+  const [importUrlDialog, setImportUrlDialog] = useState(false);
+  const [importYoutubeDialog, setImportYoutubeDialog] = useState(false);
+  const [importUrl, setImportUrl] = useState("");
+  const [importName, setImportName] = useState("");
+  const [importing, setImporting] = useState(false);
 
   // Use ref for immediate cancellation without state delays
   const previewCancelledRef = useRef(false);
@@ -289,6 +303,15 @@ export default function StoryDetailsPage() {
   useEffect(() => {
     volumeRef.current = volume;
   }, [volume]);
+
+  // Update background music volume when it changes
+  useEffect(() => {
+    if (bgMusicAudioRef.current) {
+      // Apply background music volume proportionally with video preview volume (master volume)
+      bgMusicAudioRef.current.volume = (bgMusicVolume / 100) * volume;
+    }
+  }, [bgMusicVolume, volume]);
+
 
   // Scroll to selected voice when drawer opens (for individual scene)
   useEffect(() => {
@@ -480,7 +503,7 @@ export default function StoryDetailsPage() {
         setBgMusicId(bgSettings.music_id ?? null);
         setBgMusicUrl(bgSettings.music_url ?? null);
         setBgMusicName(bgSettings.music_name ?? null);
-        setBgMusicVolume(bgSettings.volume ?? 30);
+        setBgMusicVolume(bgSettings.volume ?? 4);
         console.log("🎵 Loaded background music settings from database:", bgSettings);
       }
 
@@ -694,12 +717,13 @@ export default function StoryDetailsPage() {
     try {
       const params = new URLSearchParams();
       if (category) params.append("category", category);
+      if (user?.id) params.append("user_id", user.id);
 
-      const res = await fetch(`/api/get_music_library?${params.toString()}`);
+      const res = await fetch(`/api/music/library?${params.toString()}`);
       if (res.ok) {
         const data = await res.json();
-        setMusicLibrary(data.music_library || []);
-        console.log("🎵 Loaded music library:", data.music_library?.length, "tracks");
+        setMusicLibrary(data.music || []);
+        console.log("🎵 Loaded music library:", data.music?.length, "tracks");
       } else {
         console.error("❌ Failed to fetch music library");
       }
@@ -708,7 +732,7 @@ export default function StoryDetailsPage() {
     } finally {
       setMusicLibraryLoading(false);
     }
-  }, []);
+  }, [user?.id]);
 
   // Save background music settings to database
   const saveBgMusicSettings = useCallback(async () => {
@@ -716,11 +740,10 @@ export default function StoryDetailsPage() {
 
     try {
       const headers = await getAuthHeaders();
-      const res = await fetch("/api/save_background_music_settings", {
-        method: "POST",
+      const res = await fetch(`/api/story/${id}/background_music`, {
+        method: "PUT",
         headers,
         body: JSON.stringify({
-          story_id: id,
           music_id: bgMusicId,
           volume: bgMusicVolume,
           enabled: bgMusicEnabled,
@@ -739,11 +762,11 @@ export default function StoryDetailsPage() {
 
   // Load music library when background music panel opens
   useEffect(() => {
-    if (leftPanelView === "background_music" && musicLibrary.length === 0) {
+    if (leftPanelView === "background_music") {
       fetchMusicLibrary();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [leftPanelView, musicLibrary.length]);
+  }, [leftPanelView]);
 
   // Auto-save background music settings when they change
   useEffect(() => {
@@ -760,12 +783,198 @@ export default function StoryDetailsPage() {
 
   // Handle selecting music from library
   const handleSelectMusicFromLibrary = useCallback((music: any) => {
+    // Check if preview is currently playing and get current timestamp
+    const isPreviewPlaying = isPlayingPreview;
+    const currentMusicTime = bgMusicAudioRef.current?.currentTime || 0;
+
+    console.log(`🎵 Selecting new music: ${music.name}, preview playing: ${isPreviewPlaying}, current time: ${currentMusicTime}s`);
+
+    // Stop current music if playing
+    if (bgMusicAudioRef.current) {
+      bgMusicAudioRef.current.pause();
+      bgMusicAudioRef.current = null;
+      setBgMusicPlaying(false);
+    }
+
+    // Stop preview audio if playing
+    if (musicPreviewAudioRef.current) {
+      musicPreviewAudioRef.current.pause();
+      musicPreviewAudioRef.current = null;
+      setMusicPreviewPlaying(null);
+    }
+
     setBgMusicId(music.id);
     setBgMusicUrl(music.file_url);
     setBgMusicName(music.name);
     setBgMusicEnabled(true);
     console.log("🎵 Selected music from library:", music.name);
-  }, []);
+
+    // If preview was playing, restart with new music from same timestamp
+    if (isPreviewPlaying && music.file_url) {
+      setTimeout(() => {
+        // Create new audio element with the new music
+        const newAudio = new Audio(music.file_url);
+        // Apply background music volume proportionally with video preview volume
+        newAudio.volume = (bgMusicVolume / 100) * volume;
+        newAudio.loop = false;
+        bgMusicAudioRef.current = newAudio;
+
+        // Set to saved timestamp and play
+        newAudio.addEventListener('loadedmetadata', () => {
+          newAudio.currentTime = currentMusicTime;
+          newAudio.play().catch(err => {
+            console.error("Failed to play new background music:", err);
+          });
+          console.log(`🎵 Switched to new music and resumed from ${currentMusicTime.toFixed(1)}s`);
+        });
+      }, 50);
+    }
+  }, [isPlayingPreview, bgMusicVolume, volume]);
+
+  // Handle delete music
+  const handleDeleteMusic = (music: any) => {
+    setDeleteMusicDialog({ open: true, music });
+  };
+
+  const confirmDeleteMusic = async () => {
+    const music = deleteMusicDialog.music;
+    if (!music || !user?.id) return;
+
+    setDeletingMusic(true);
+
+    try {
+      const headers = await getAuthHeaders();
+      const res = await fetch(`/api/music/library/${music.id}?user_id=${user.id}`, {
+        method: "DELETE",
+        headers,
+      });
+
+      if (res.ok) {
+        // Remove from library state
+        setMusicLibrary(prev => prev.filter(m => m.id !== music.id));
+
+        // If this was the selected music, clear selection
+        if (bgMusicId === music.id) {
+          setBgMusicId(null);
+          setBgMusicUrl(null);
+          setBgMusicName(null);
+          setBgMusicEnabled(false);
+          if (bgMusicAudioRef.current) {
+            bgMusicAudioRef.current.pause();
+            bgMusicAudioRef.current = null;
+            setBgMusicPlaying(false);
+          }
+        }
+
+        showToast("Music deleted successfully", "success");
+      } else {
+        const error = await res.json();
+        showToast(error.error || "Failed to delete music", "error");
+      }
+    } catch (err) {
+      console.error("Error deleting music:", err);
+      showToast("Failed to delete music", "error");
+    } finally {
+      setDeletingMusic(false);
+      setDeleteMusicDialog({ open: false, music: null });
+    }
+  };
+
+  // Handle import from URL
+  const handleImportFromUrl = async () => {
+    if (!importUrl || !importName || !user) return;
+
+    setImporting(true);
+
+    try {
+      const headers = await getAuthHeaders();
+      const res = await fetch("/api/music/import-url", {
+        method: "POST",
+        headers: {
+          ...headers,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          url: importUrl,
+          name: importName,
+          description: `Imported from URL on ${new Date().toLocaleDateString()}`,
+          category: "other",
+          uploaded_by: user.id,
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+
+        // Add to library and select
+        if (data.music) {
+          setMusicLibrary(prev => [data.music, ...prev]);
+          handleSelectMusicFromLibrary(data.music);
+        }
+
+        showToast("Music imported successfully", "success");
+        setImportUrlDialog(false);
+        setImportUrl("");
+        setImportName("");
+      } else {
+        const error = await res.json();
+        showToast(error.error || "Failed to import music", "error");
+      }
+    } catch (err) {
+      console.error("Import error:", err);
+      showToast("Failed to import music from URL", "error");
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  // Handle import from YouTube
+  const handleImportFromYoutube = async () => {
+    if (!importUrl || !importName || !user) return;
+
+    setImporting(true);
+
+    try {
+      const headers = await getAuthHeaders();
+      const res = await fetch("/api/music/import-youtube", {
+        method: "POST",
+        headers: {
+          ...headers,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          url: importUrl,
+          name: importName,
+          description: `Imported from YouTube on ${new Date().toLocaleDateString()}`,
+          category: "other",
+          uploaded_by: user.id,
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+
+        // Add to library and select
+        if (data.music) {
+          setMusicLibrary(prev => [data.music, ...prev]);
+          handleSelectMusicFromLibrary(data.music);
+        }
+
+        showToast("Music imported from YouTube successfully", "success");
+        setImportYoutubeDialog(false);
+        setImportUrl("");
+        setImportName("");
+      } else {
+        const error = await res.json();
+        showToast(error.error || "Failed to import music from YouTube", "error");
+      }
+    } catch (err) {
+      console.error("YouTube import error:", err);
+      showToast("Failed to import music from YouTube", "error");
+    } finally {
+      setImporting(false);
+    }
+  };
 
   // Handle background music file upload to library
   const handleBgMusicUpload = async (file: File) => {
@@ -788,7 +997,7 @@ export default function StoryDetailsPage() {
         throw new Error("Please log in to upload music");
       }
 
-      const res = await fetch("/api/upload_music_to_library", {
+      const res = await fetch("/api/music/library", {
         method: "POST",
         headers: {
           "Authorization": `Bearer ${session.access_token}`
@@ -820,9 +1029,13 @@ export default function StoryDetailsPage() {
   const toggleBgMusicPlayback = () => {
     if (!bgMusicUrl) return;
 
-    if (!bgMusicAudioRef.current) {
+    if (!bgMusicAudioRef.current || bgMusicAudioRef.current.src !== bgMusicUrl) {
+      // Create new audio element if it doesn't exist or URL changed
+      if (bgMusicAudioRef.current) {
+        bgMusicAudioRef.current.pause();
+      }
       bgMusicAudioRef.current = new Audio(bgMusicUrl);
-      bgMusicAudioRef.current.loop = true;
+      bgMusicAudioRef.current.loop = true; // Loop only for standalone playback
       bgMusicAudioRef.current.volume = bgMusicVolume / 100;
     }
 
@@ -830,17 +1043,58 @@ export default function StoryDetailsPage() {
       bgMusicAudioRef.current.pause();
       setBgMusicPlaying(false);
     } else {
-      bgMusicAudioRef.current.play();
+      bgMusicAudioRef.current.play().catch(err => {
+        console.error("Failed to play background music:", err);
+        setBgMusicPlaying(false);
+      });
       setBgMusicPlaying(true);
     }
   };
 
-  // Update bg music volume
+  // Handle music library preview (at fixed volume 20%)
+  const toggleMusicPreview = (music: any) => {
+    if (!music.file_url) return;
+
+    // If already playing this preview, stop it
+    if (musicPreviewPlaying === music.id && musicPreviewAudioRef.current) {
+      musicPreviewAudioRef.current.pause();
+      musicPreviewAudioRef.current = null;
+      setMusicPreviewPlaying(null);
+      return;
+    }
+
+    // Stop any currently playing preview
+    if (musicPreviewAudioRef.current) {
+      musicPreviewAudioRef.current.pause();
+      musicPreviewAudioRef.current = null;
+    }
+
+    // Play new preview at volume 20%
+    const audio = new Audio(music.file_url);
+    audio.volume = 0.20; // Fixed volume 20% for preview
+    audio.loop = true;
+    musicPreviewAudioRef.current = audio;
+    setMusicPreviewPlaying(music.id);
+
+    audio.play().catch(err => {
+      console.error("Failed to play music preview:", err);
+      setMusicPreviewPlaying(null);
+      musicPreviewAudioRef.current = null;
+    });
+
+    audio.onended = () => {
+      setMusicPreviewPlaying(null);
+      musicPreviewAudioRef.current = null;
+    };
+  };
+
+  // Update bg music volume (duplicate check - applies proportionally)
   useEffect(() => {
     if (bgMusicAudioRef.current) {
-      bgMusicAudioRef.current.volume = bgMusicVolume / 100;
+      // Apply background music volume proportionally with video preview volume
+      bgMusicAudioRef.current.volume = (bgMusicVolume / 100) * volume;
     }
-  }, [bgMusicVolume]);
+  }, [bgMusicVolume, volume]);
 
   // Debug state changes
   useEffect(() => {
@@ -1488,6 +1742,11 @@ export default function StoryDetailsPage() {
     setIsPlayingPreview(false);
     setIsSeeking(false);
 
+    // Stop background music
+    if (bgMusicAudioRef.current) {
+      bgMusicAudioRef.current.pause();
+    }
+
     // Stop preloaded audio elements
     Object.values(preloadedAudio).forEach(audio => {
       audio.pause();
@@ -1522,49 +1781,57 @@ export default function StoryDetailsPage() {
 
     console.log(`📍 Time ${targetTotalTime.toFixed(1)}s is in scene ${sceneIndex + 1} at ${sceneTime.toFixed(1)}s`);
 
+    // UPDATE UI IMMEDIATELY for smooth slider movement (before any async operations)
+    setSelectedScene(sceneIndex);
+    setSceneProgress(sceneTime);
+    setTotalProgress(targetTotalTime);
+    if (preloadedAudio[sceneIndex]) {
+      setSceneDuration(preloadedAudio[sceneIndex].duration);
+    }
+
+    // Sync background music immediately as well
+    if (bgMusicAudioRef.current && bgMusicEnabled) {
+      try {
+        bgMusicAudioRef.current.currentTime = targetTotalTime;
+        console.log(`🎵 Background music seeked to ${targetTotalTime.toFixed(1)}s`);
+      } catch (err) {
+        console.error("Failed to seek background music:", err);
+      }
+    }
+
     // If we're in a different scene, stop current and switch
     if (sceneIndex !== selectedScene) {
       const wasPlaying = isPlayingPreview;
 
-      // Stop current playback
-      if (currentAudioRef.current) {
-        currentAudioRef.current.pause();
-        currentAudioRef.current.currentTime = 0;
+      // IMPORTANT: Cancel the original preview loop completely
+      if (wasPlaying) {
+        previewCancelledRef.current = true;
+
+        // Stop current playback
+        if (currentAudioRef.current) {
+          currentAudioRef.current.pause();
+          currentAudioRef.current.currentTime = 0;
+          currentAudioRef.current = null;
+        }
+        if (progressIntervalRef.current) {
+          clearInterval(progressIntervalRef.current);
+          progressIntervalRef.current = null;
+        }
+
+        // Wait for the old loop to fully stop
+        await new Promise(resolve => setTimeout(resolve, 100));
       }
-      if (progressIntervalRef.current) {
-        clearInterval(progressIntervalRef.current);
-      }
 
-      // Switch to target scene
-      setSelectedScene(sceneIndex);
+      // Set up audio for the new scene
+      if (preloadedAudio[sceneIndex]) {
+        // If was playing, start new preview loop from this position
+        if (wasPlaying) {
+          // Reset cancellation flag for the new loop
+          previewCancelledRef.current = false;
 
-      // Wait a moment for state to update
-      await new Promise(resolve => setTimeout(resolve, 100));
-
-      // If was playing, resume from new position
-      if (wasPlaying && preloadedAudio[sceneIndex]) {
-        const audio = preloadedAudio[sceneIndex];
-        audio.currentTime = sceneTime;
-        audio.volume = volume;
-        currentAudioRef.current = audio;
-
-        const sceneStartTimes = getSceneStartTimes();
-        const cumulativeStart = sceneStartTimes[sceneIndex];
-
-        setSceneDuration(audio.duration);
-        setSceneProgress(sceneTime);
-        setTotalProgress(cumulativeStart + sceneTime);
-
-        // Start progress tracking
-        progressIntervalRef.current = setInterval(() => {
-          if (audio && !audio.paused) {
-            const currentSceneTime = audio.currentTime;
-            setSceneProgress(currentSceneTime);
-            setTotalProgress(cumulativeStart + currentSceneTime);
-          }
-        }, 100);
-
-        await audio.play();
+          // Continue the preview loop from this scene and time
+          continuePreviewFromPosition(sceneIndex, sceneTime);
+        }
       }
     } else {
       // Same scene, just seek within it
@@ -1572,12 +1839,32 @@ export default function StoryDetailsPage() {
         const audio = currentAudioRef.current;
         const wasPlaying = !audio.paused;
 
+        // Clear interval temporarily to prevent overwriting
+        if (progressIntervalRef.current) {
+          clearInterval(progressIntervalRef.current);
+          progressIntervalRef.current = null;
+        }
+
         audio.pause();
         audio.currentTime = sceneTime;
+
+        // Update progress states immediately
         setSceneProgress(sceneTime);
         setTotalProgress(targetTotalTime);
 
         if (wasPlaying) {
+          // Restart progress tracking
+          const sceneStartTimes = getSceneStartTimes();
+          const cumulativeStart = sceneStartTimes[selectedScene];
+
+          progressIntervalRef.current = setInterval(() => {
+            if (audio && !audio.paused) {
+              const currentSceneTime = audio.currentTime;
+              setSceneProgress(currentSceneTime);
+              setTotalProgress(cumulativeStart + currentSceneTime);
+            }
+          }, 100);
+
           try {
             await audio.play();
           } catch (err) {
@@ -1620,6 +1907,104 @@ export default function StoryDetailsPage() {
     setIsSeeking(false);
   };
 
+  // Continue preview from a specific scene and time (used when seeking during playback)
+  const continuePreviewFromPosition = async (startSceneIndex: number, startSceneTime: number) => {
+    console.log(`🎬 Continuing preview from scene ${startSceneIndex + 1} at ${startSceneTime.toFixed(1)}s`);
+
+    // Don't stop - we're already playing, just continuing from new position
+    previewCancelledRef.current = false;
+
+    const playSceneFromTime = async (sceneIndex: number, startTime: number = 0) => {
+      if (previewCancelledRef.current) return false;
+
+      console.log(`🎬 Playing scene ${sceneIndex + 1} from ${startTime.toFixed(1)}s`);
+
+      // Update selected scene
+      setSelectedScene(sceneIndex);
+
+      const scene = scenes[sceneIndex];
+      if (scene?.audio_url && preloadedAudio[sceneIndex]) {
+        const currentVol = volumeRef.current;
+        const audio = preloadedAudio[sceneIndex];
+        audio.volume = currentVol;
+        audio.currentTime = startTime;
+        currentAudioRef.current = audio;
+
+        const sceneStartTimes = getSceneStartTimes();
+        const cumulativeStart = sceneStartTimes[sceneIndex];
+
+        setSceneDuration(audio.duration);
+        setSceneProgress(startTime);
+        setTotalProgress(cumulativeStart + startTime);
+
+        try {
+          // Start progress tracking
+          progressIntervalRef.current = setInterval(() => {
+            if (audio && !audio.paused) {
+              const currentSceneTime = audio.currentTime;
+              setSceneProgress(currentSceneTime);
+              setTotalProgress(cumulativeStart + currentSceneTime);
+              setCurrentTime(currentSceneTime);
+            }
+          }, 100);
+
+          await audio.play();
+          await new Promise<void>((resolve) => {
+            audio.onended = () => {
+              if (progressIntervalRef.current) {
+                clearInterval(progressIntervalRef.current);
+              }
+              setSceneProgress(0);
+              setCurrentTime(0);
+              resolve();
+            };
+            audio.onerror = () => {
+              if (progressIntervalRef.current) {
+                clearInterval(progressIntervalRef.current);
+              }
+              resolve();
+            };
+          });
+        } catch (err) {
+          console.error("Audio play error:", err);
+          if (progressIntervalRef.current) {
+            clearInterval(progressIntervalRef.current);
+          }
+        }
+      }
+
+      return !previewCancelledRef.current;
+    };
+
+    try {
+      // Play first scene from the specified time
+      const shouldContinue = await playSceneFromTime(startSceneIndex, startSceneTime);
+      if (!shouldContinue) return;
+
+      // Continue with remaining scenes from the beginning
+      for (let i = startSceneIndex + 1; i < scenes.length; i++) {
+        const shouldContinue = await playSceneFromTime(i, 0);
+        if (!shouldContinue) {
+          console.log("🛑 Preview cancelled");
+          return;
+        }
+      }
+
+      console.log("🎬 Preview completed!");
+      if (bgMusicAudioRef.current && !bgMusicAudioRef.current.paused) {
+        bgMusicAudioRef.current.pause();
+        console.log("🎵 Stopped background music at preview completion");
+      }
+    } catch (err) {
+      console.error("❌ Preview error:", err);
+    } finally {
+      if (!previewCancelledRef.current) {
+        setIsPlayingPreview(false);
+        console.log("🛑 Preview stopped naturally");
+      }
+    }
+  };
+
   const startVideoPreview = async () => {
     console.log("🎬 Starting video preview from scene:", selectedScene);
 
@@ -1635,6 +2020,20 @@ export default function StoryDetailsPage() {
     // Reset cancellation flag and start new preview
     previewCancelledRef.current = false;
     setIsPlayingPreview(true);
+
+    // Start background music if enabled
+    if (bgMusicEnabled && bgMusicUrl) {
+      if (!bgMusicAudioRef.current || bgMusicAudioRef.current.src !== bgMusicUrl) {
+        bgMusicAudioRef.current = new Audio(bgMusicUrl);
+        bgMusicAudioRef.current.loop = false; // Don't loop - stop when video ends
+      }
+      // Apply background music volume proportionally with video preview volume
+      bgMusicAudioRef.current.volume = (bgMusicVolume / 100) * volume;
+      bgMusicAudioRef.current.currentTime = 0;
+      bgMusicAudioRef.current.play().catch(err => {
+        console.error("Failed to play background music in preview:", err);
+      });
+    }
     
     const playScene = async (sceneIndex: number) => {
       if (previewCancelledRef.current) return false;
@@ -1737,6 +2136,12 @@ export default function StoryDetailsPage() {
       }
       
       console.log("🎬 Preview completed!");
+
+      // Stop background music when preview completes
+      if (bgMusicAudioRef.current && !bgMusicAudioRef.current.paused) {
+        bgMusicAudioRef.current.pause();
+        console.log("🎵 Stopped background music at preview completion");
+      }
     } catch (err) {
       console.error("❌ Preview error:", err);
     } finally {
@@ -3005,181 +3410,207 @@ export default function StoryDetailsPage() {
               </div>
             ) : (
               /* Background Music Settings View */
-              <div className="p-3 md:p-6 space-y-4 md:space-y-6">
-                <h2 className="text-xl font-semibold text-white mb-4">Background Music</h2>
+              <div className="p-3 md:p-6 space-y-4">
+                <h2 className="text-xl font-semibold text-white">Background music</h2>
 
-                {/* Enable/Disable Background Music */}
-                <div className="p-4 bg-gray-800 rounded-lg">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h3 className="text-sm font-medium text-white">Enable Background Music</h3>
-                      <p className="text-xs text-gray-400 mt-1">Add background music to your video</p>
-                    </div>
-                    <button
-                      onClick={() => setBgMusicEnabled(!bgMusicEnabled)}
-                      disabled={!bgMusicUrl}
-                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                        bgMusicEnabled ? "bg-orange-600" : "bg-gray-700"
-                      } ${!bgMusicUrl ? "opacity-50 cursor-not-allowed" : ""}`}
-                    >
-                      <span
-                        className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                          bgMusicEnabled ? "translate-x-6" : "translate-x-1"
-                        }`}
+                {/* Volume Control */}
+                <div className="space-y-3">
+                  <h3 className="text-sm font-medium text-gray-300">Volume</h3>
+                  <div className="flex items-center gap-3">
+                    <Volume2 className="w-5 h-5 text-gray-400" />
+                    <Slider
+                      value={[bgMusicVolume]}
+                      onValueChange={(value) => {
+                        setBgMusicVolume(value[0]);
+                        if (bgMusicAudioRef.current) {
+                          // Apply background music volume proportionally with video preview volume
+                          bgMusicAudioRef.current.volume = (value[0] / 100) * volume;
+                        }
+                      }}
+                      min={0}
+                      max={100}
+                      step={1}
+                      className="flex-1"
+                    />
+                    <span className="text-sm font-semibold text-white w-12 text-right">{bgMusicVolume}%</span>
+                  </div>
+                </div>
+
+                {/* Import/Upload Music Section */}
+                <div className="space-y-3">
+                  <h3 className="text-sm font-medium text-gray-300">Add Music</h3>
+
+                  <div className="grid grid-cols-3 gap-2">
+                    {/* Upload Button */}
+                    <div className="border-2 border-dashed border-gray-700 rounded-lg p-4 text-center transition-colors hover:border-gray-600">
+                      <input
+                        type="file"
+                        accept="audio/*"
+                        onChange={async (e) => {
+                          const file = e.target.files?.[0];
+                          if (!file) return;
+
+                          setBgMusicUploading(true);
+                          const formData = new FormData();
+                          formData.append("file", file);
+                          formData.append("name", file.name.replace(/\.[^/.]+$/, "")); // Remove extension
+                          formData.append("description", `Uploaded by user on ${new Date().toLocaleDateString()}`);
+                          formData.append("category", "other");
+                          formData.append("uploaded_by", user?.id || "unknown");
+
+                          try {
+                            const { data: { session } } = await supabase.auth.getSession();
+                            const headers: HeadersInit = {
+                              "Authorization": session?.access_token ? `Bearer ${session.access_token}` : "",
+                            };
+
+                            const res = await fetch("/api/music/library", {
+                              method: "POST",
+                              headers,
+                              body: formData,
+                            });
+
+                            if (!res.ok) throw new Error("Upload failed");
+
+                            const data = await res.json();
+
+                            // Add the new music to the library immediately
+                            if (data.music) {
+                              setMusicLibrary(prev => [data.music, ...prev]);
+
+                              // Auto-select the newly uploaded music
+                              handleSelectMusicFromLibrary(data.music);
+                            }
+
+                            showToast("Music uploaded to your library successfully", "success");
+                          } catch (err) {
+                            console.error("Upload error:", err);
+                            showToast("Failed to upload music", "error");
+                          } finally {
+                            setBgMusicUploading(false);
+                          }
+                        }}
+                        disabled={bgMusicUploading}
+                        className="hidden"
+                        id="music-upload"
                       />
+                      <label
+                        htmlFor="music-upload"
+                        className="cursor-pointer block"
+                      >
+                        {bgMusicUploading ? (
+                          <Loader2 className="w-8 h-8 mx-auto mb-2 text-gray-400 animate-spin" />
+                        ) : (
+                          <Upload className="w-8 h-8 mx-auto mb-2 text-gray-400" />
+                        )}
+                        <p className="text-xs font-medium text-white leading-tight">Upload from Device</p>
+                      </label>
+                    </div>
+
+                    {/* Import from URL Button */}
+                    <button
+                      onClick={() => setImportUrlDialog(true)}
+                      disabled={importing}
+                      className="border-2 border-dashed border-gray-700 rounded-lg p-4 text-center transition-colors hover:border-gray-600 disabled:opacity-50"
+                    >
+                      <ExternalLink className="w-8 h-8 mx-auto mb-2 text-gray-400" />
+                      <p className="text-xs font-medium text-white leading-tight">Import from URL</p>
+                    </button>
+
+                    {/* Import from YouTube Button */}
+                    <button
+                      onClick={() => setImportYoutubeDialog(true)}
+                      disabled={importing}
+                      className="border-2 border-dashed border-gray-700 rounded-lg p-4 text-center transition-colors hover:border-gray-600 disabled:opacity-50"
+                    >
+                      <svg className="w-8 h-8 mx-auto mb-2 text-gray-400" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
+                      </svg>
+                      <p className="text-xs font-medium text-white leading-tight">Import from YouTube</p>
                     </button>
                   </div>
                 </div>
 
-                {/* Selected Music */}
-                {bgMusicUrl && (
-                  <div className="p-4 bg-gray-800 rounded-lg">
-                    <h3 className="text-sm font-medium text-white mb-3">Selected Music</h3>
-                    <div className="flex items-center gap-3 p-3 bg-gray-900 rounded-lg">
-                      <Music className="w-5 h-5 text-orange-400" />
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm text-white truncate">{bgMusicName || "Background music"}</p>
-                        <p className="text-xs text-gray-400">Click play to preview</p>
-                      </div>
-                      <Button
-                        size="sm"
-                        onClick={toggleBgMusicPlayback}
-                        className="bg-orange-600 hover:bg-orange-700"
-                      >
-                        {bgMusicPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
-                      </Button>
+                {/* Music Library */}
+                <div className="space-y-1 max-h-[400px] overflow-y-auto">
+                  {musicLibraryLoading ? (
+                    <div className="flex items-center justify-center py-12">
+                      <Loader2 className="w-6 h-6 animate-spin text-gray-400" />
                     </div>
-                  </div>
-                )}
-
-                {/* Music Library Browser */}
-                <div className="p-4 bg-gray-800 rounded-lg">
-                  <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-sm font-medium text-white">Music Library</h3>
-                    <label className="block">
-                      <input
-                        type="file"
-                        accept="audio/*"
-                        onChange={(e) => {
-                          const file = e.target.files?.[0];
-                          if (file) handleBgMusicUpload(file);
-                        }}
-                        className="hidden"
-                        disabled={bgMusicUploading}
-                      />
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="bg-orange-600 hover:bg-orange-700 text-white border-none"
-                        disabled={bgMusicUploading}
-                      >
-                        {bgMusicUploading ? (
-                          <>
-                            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                            Uploading...
-                          </>
-                        ) : (
-                          <>
-                            <Upload className="w-4 h-4 mr-2" />
-                            Upload New
-                          </>
-                        )}
-                      </Button>
-                    </label>
-                  </div>
-
-                  {/* Category Filter */}
-                  <div className="flex flex-wrap gap-2 mb-4">
-                    {["upbeat", "calm", "cinematic", "dramatic", "ambient", "other"].map((category) => (
-                      <button
-                        key={category}
-                        onClick={() => {
-                          const newCategory = selectedCategory === category ? null : category;
-                          setSelectedCategory(newCategory);
-                          fetchMusicLibrary(newCategory || undefined);
-                        }}
-                        className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
-                          selectedCategory === category
-                            ? "bg-orange-600 text-white"
-                            : "bg-gray-700 text-gray-300 hover:bg-gray-600"
+                  ) : musicLibrary.length === 0 ? (
+                    <div className="text-center py-12">
+                      <Music className="w-12 h-12 mx-auto mb-3 text-gray-600" />
+                      <p className="text-sm text-gray-400">No music tracks available</p>
+                      <p className="text-xs text-gray-500 mt-1">Upload your first track to get started</p>
+                    </div>
+                  ) : (
+                    musicLibrary.map((music) => (
+                      <div
+                        key={music.id}
+                        onClick={() => music.file_url && handleSelectMusicFromLibrary(music)}
+                        className={`group relative flex items-center gap-3 p-3 rounded-lg cursor-pointer transition-all ${
+                          bgMusicId === music.id
+                            ? "bg-orange-900/30 border border-orange-600/50"
+                            : music.file_url
+                            ? "hover:bg-gray-800/50"
+                            : "opacity-50 cursor-not-allowed"
                         }`}
                       >
-                        {category.charAt(0).toUpperCase() + category.slice(1)}
-                      </button>
-                    ))}
-                  </div>
-
-                  {/* Music List */}
-                  <div className="space-y-2 max-h-96 overflow-y-auto">
-                    {musicLibraryLoading ? (
-                      <div className="flex items-center justify-center py-8">
-                        <Loader2 className="w-6 h-6 animate-spin text-orange-400" />
-                      </div>
-                    ) : musicLibrary.length === 0 ? (
-                      <p className="text-sm text-gray-400 text-center py-8">
-                        No music tracks available. Upload your first track!
-                      </p>
-                    ) : (
-                      musicLibrary.map((music) => (
-                        <div
-                          key={music.id}
-                          onClick={() => music.file_url && handleSelectMusicFromLibrary(music)}
-                          className={`p-3 rounded-lg cursor-pointer transition-colors ${
-                            bgMusicId === music.id
-                              ? "bg-orange-900/40 border border-orange-500"
-                              : music.file_url
-                              ? "bg-gray-900 hover:bg-gray-800"
-                              : "bg-gray-900/50 opacity-50 cursor-not-allowed"
-                          }`}
-                        >
-                          <div className="flex items-center gap-3">
-                            <Music className={`w-4 h-4 ${bgMusicId === music.id ? "text-orange-400" : "text-gray-500"}`} />
-                            <div className="flex-1 min-w-0">
-                              <p className="text-sm text-white truncate font-medium">{music.name}</p>
-                              {music.description && (
-                                <p className="text-xs text-gray-400 truncate">{music.description}</p>
-                              )}
-                              <div className="flex items-center gap-2 mt-1">
-                                {music.is_preset && (
-                                  <span className="px-2 py-0.5 bg-gray-700 text-gray-300 text-xs rounded">Preset</span>
-                                )}
-                                {music.category && (
-                                  <span className="px-2 py-0.5 bg-gray-700 text-gray-300 text-xs rounded">{music.category}</span>
-                                )}
-                                {!music.file_url && (
-                                  <span className="px-2 py-0.5 bg-red-900/50 text-red-300 text-xs rounded">No file</span>
-                                )}
-                              </div>
-                            </div>
-                            {bgMusicId === music.id && (
-                              <div className="w-2 h-2 bg-orange-500 rounded-full"></div>
+                        <div className="flex-1 min-w-0">
+                          <p className={`text-sm font-medium truncate ${
+                            bgMusicId === music.id ? "text-orange-400" : "text-white"
+                          }`}>
+                            {music.name}
+                          </p>
+                          <div className="flex items-center gap-2 mt-0.5">
+                            <span className="text-xs text-gray-400">
+                              {music.category && music.category.charAt(0).toUpperCase() + music.category.slice(1)}
+                            </span>
+                            {music.uploaded_by === user?.id && (
+                              <span className="text-xs text-gray-400">• My Music</span>
                             )}
                           </div>
                         </div>
-                      ))
-                    )}
-                  </div>
-                </div>
 
-                {/* Volume Control */}
-                {bgMusicUrl && (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-300 mb-3">
-                      Volume: <span className="text-orange-400 font-bold">{bgMusicVolume}%</span>
-                    </label>
-                    <p className="text-xs text-gray-400 mb-3">
-                      Adjust background music volume relative to narration
-                    </p>
-                    <Slider
-                      value={[bgMusicVolume]}
-                      onValueChange={(value) => setBgMusicVolume(value[0])}
-                      min={0}
-                      max={100}
-                      step={1}
-                      className="w-full"
-                    />
-                  </div>
-                )}
+                        <div className="flex items-center gap-2">
+                          {/* Play/Pause Button - Preview at volume 20% */}
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleMusicPreview(music);
+                            }}
+                            disabled={!music.file_url}
+                            className={`w-8 h-8 flex items-center justify-center rounded transition-all ${
+                              musicPreviewPlaying === music.id
+                                ? "bg-orange-600 hover:bg-orange-700 text-white"
+                                : "bg-gray-700 hover:bg-gray-600 text-gray-300 opacity-0 group-hover:opacity-100"
+                            } disabled:opacity-30 disabled:cursor-not-allowed`}
+                          >
+                            {musicPreviewPlaying === music.id ? (
+                              <Pause className="w-4 h-4" />
+                            ) : (
+                              <Play className="w-4 h-4" />
+                            )}
+                          </button>
+
+                          {/* Delete Button - Only for user's uploads */}
+                          {music.uploaded_by === user?.id && !music.is_preset && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDeleteMusic(music);
+                              }}
+                              className="w-8 h-8 flex items-center justify-center rounded bg-red-600/10 hover:bg-red-600/20 text-red-500 opacity-0 group-hover:opacity-100 transition-all"
+                              title="Delete music"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
               </div>
             )}
           </div>
@@ -3284,8 +3715,10 @@ export default function StoryDetailsPage() {
                               <button
                                 onClick={() => {
                                   if (volume === 0) {
+                                    // Unmute - restores both narration and background music proportionally
                                     setVolume(lastVolume);
                                   } else {
+                                    // Mute - sets both narration and background music to 0
                                     setLastVolume(volume);
                                     setVolume(0);
                                   }
@@ -3305,8 +3738,10 @@ export default function StoryDetailsPage() {
                                   max={1}
                                   step={0.01}
                                   onValueChange={(value) => {
-                                    setVolume(value[0]);
-                                    if (value[0] > 0) setLastVolume(value[0]);
+                                    const newVolume = value[0];
+                                    setVolume(newVolume);
+                                    if (newVolume > 0) setLastVolume(newVolume);
+                                    // Background music volume will be updated automatically via useEffect
                                   }}
                                 />
                               </div>
@@ -4578,7 +5013,7 @@ export default function StoryDetailsPage() {
       )}
 
       {/* Toast Notifications - Bottom Left */}
-      <div className="fixed bottom-4 left-4 z-50 space-y-2">
+      <div className="fixed bottom-4 left-4 z-[100] space-y-2">
         {toasts.map((toast) => (
           <div
             key={toast.id}
@@ -4603,6 +5038,286 @@ export default function StoryDetailsPage() {
           </div>
         ))}
       </div>
+
+      {/* Delete Music Confirmation Dialog */}
+      {deleteMusicDialog.open && deleteMusicDialog.music && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          {/* Background Overlay */}
+          <div
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            onClick={() => setDeleteMusicDialog({open: false, music: null})}
+          />
+
+          {/* Dialog Content */}
+          <div className="relative bg-gray-900 border border-gray-700 rounded-lg shadow-2xl max-w-lg w-full mx-4 max-h-[90vh] overflow-y-auto">
+            <div className="p-6">
+              {/* Header */}
+              <div className="flex items-center gap-4 mb-4">
+                <div className="w-12 h-12 bg-red-900/30 rounded-full flex items-center justify-center">
+                  <Trash2 className="w-6 h-6 text-red-400" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-white">Delete Music Track?</h3>
+                  <p className="text-sm text-gray-400">{deleteMusicDialog.music.name}</p>
+                </div>
+              </div>
+
+              {/* Warning Message */}
+              <p className="text-gray-300 mb-4">
+                Are you sure you want to delete this music track? <span className="font-semibold text-red-400">This action cannot be undone.</span>
+              </p>
+
+              {/* Music Preview */}
+              <div className="mb-4 p-4 bg-gray-800 rounded-lg border border-gray-700">
+                <div className="flex items-center gap-3">
+                  <Music className="w-10 h-10 text-gray-400" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-white truncate">{deleteMusicDialog.music.name}</p>
+                    <p className="text-xs text-gray-400">
+                      {deleteMusicDialog.music.category && deleteMusicDialog.music.category.charAt(0).toUpperCase() + deleteMusicDialog.music.category.slice(1)}
+                      {deleteMusicDialog.music.duration && ` • ${Math.floor(deleteMusicDialog.music.duration / 60)}:${String(Math.round(deleteMusicDialog.music.duration % 60)).padStart(2, '0')}`}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Impact Warning */}
+              <div className="mb-6 p-3 bg-orange-900/20 border border-orange-900/50 rounded">
+                <p className="text-sm text-orange-400">
+                  <strong>Warning:</strong> Any stories currently using this music will no longer be able to play it after deletion.
+                </p>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex gap-3">
+                <Button
+                  variant="outline"
+                  onClick={() => setDeleteMusicDialog({open: false, music: null})}
+                  disabled={deletingMusic}
+                  className="flex-1 border-gray-700 text-gray-300 hover:bg-gray-800"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={confirmDeleteMusic}
+                  disabled={deletingMusic}
+                  className="flex-1 bg-red-600 hover:bg-red-700 text-white"
+                >
+                  {deletingMusic ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Deleting...
+                    </>
+                  ) : (
+                    <>
+                      <Trash2 className="w-4 h-4 mr-2" />
+                      Delete Music
+                    </>
+                  )}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Import from URL Dialog */}
+      {importUrlDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          {/* Background Overlay */}
+          <div
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            onClick={() => {
+              setImportUrlDialog(false);
+              setImportUrl("");
+              setImportName("");
+            }}
+          />
+
+          {/* Dialog Content */}
+          <div className="relative bg-gray-900 border border-gray-700 rounded-lg shadow-2xl max-w-lg w-full mx-4 max-h-[90vh] overflow-y-auto">
+            <div className="p-6">
+              {/* Header */}
+              <div className="flex items-center gap-4 mb-4">
+                <div className="w-12 h-12 bg-orange-900/30 rounded-full flex items-center justify-center">
+                  <ExternalLink className="w-6 h-6 text-orange-400" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-white">Import from URL</h3>
+                  <p className="text-sm text-gray-400">Download music from a direct URL</p>
+                </div>
+              </div>
+
+              {/* Form */}
+              <div className="space-y-4 mb-6">
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">
+                    Music URL
+                  </label>
+                  <Input
+                    type="url"
+                    value={importUrl}
+                    onChange={(e) => setImportUrl(e.target.value)}
+                    placeholder="https://example.com/music.mp3"
+                    className="bg-gray-800 border-gray-600 text-white placeholder:text-gray-500"
+                  />
+                  <p className="text-xs text-gray-400 mt-1">Direct link to audio file (MP3, WAV, etc.)</p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">
+                    Track Name
+                  </label>
+                  <Input
+                    type="text"
+                    value={importName}
+                    onChange={(e) => setImportName(e.target.value)}
+                    placeholder="My Background Music"
+                    className="bg-gray-800 border-gray-600 text-white placeholder:text-gray-500"
+                  />
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex gap-3">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setImportUrlDialog(false);
+                    setImportUrl("");
+                    setImportName("");
+                  }}
+                  disabled={importing}
+                  className="flex-1 border-gray-700 text-gray-300 hover:bg-gray-800"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={handleImportFromUrl}
+                  disabled={importing || !importUrl || !importName}
+                  className="flex-1 bg-orange-600 hover:bg-orange-700 text-white disabled:opacity-50"
+                >
+                  {importing ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Importing...
+                    </>
+                  ) : (
+                    <>
+                      <ExternalLink className="w-4 h-4 mr-2" />
+                      Import
+                    </>
+                  )}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Import from YouTube Dialog */}
+      {importYoutubeDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          {/* Background Overlay */}
+          <div
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            onClick={() => {
+              setImportYoutubeDialog(false);
+              setImportUrl("");
+              setImportName("");
+            }}
+          />
+
+          {/* Dialog Content */}
+          <div className="relative bg-gray-900 border border-gray-700 rounded-lg shadow-2xl max-w-lg w-full mx-4 max-h-[90vh] overflow-y-auto">
+            <div className="p-6">
+              {/* Header */}
+              <div className="flex items-center gap-4 mb-4">
+                <div className="w-12 h-12 bg-orange-900/30 rounded-full flex items-center justify-center">
+                  <svg className="w-6 h-6 text-orange-400" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
+                  </svg>
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-white">Import from YouTube</h3>
+                  <p className="text-sm text-gray-400">Download audio from a YouTube video</p>
+                </div>
+              </div>
+
+              {/* Form */}
+              <div className="space-y-4 mb-6">
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">
+                    YouTube URL
+                  </label>
+                  <Input
+                    type="url"
+                    value={importUrl}
+                    onChange={(e) => setImportUrl(e.target.value)}
+                    placeholder="https://www.youtube.com/watch?v=..."
+                    className="bg-gray-800 border-gray-600 text-white placeholder:text-gray-500"
+                  />
+                  <p className="text-xs text-gray-400 mt-1">YouTube video or shorts URL</p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">
+                    Track Name
+                  </label>
+                  <Input
+                    type="text"
+                    value={importName}
+                    onChange={(e) => setImportName(e.target.value)}
+                    placeholder="My Background Music"
+                    className="bg-gray-800 border-gray-600 text-white placeholder:text-gray-500"
+                  />
+                </div>
+
+                <div className="p-3 bg-yellow-900/20 border border-yellow-900/50 rounded">
+                  <p className="text-xs text-yellow-400">
+                    <strong>Note:</strong> Requires yt-dlp or youtube-dl to be installed on the server. Only use copyright-free or properly licensed music.
+                  </p>
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex gap-3">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setImportYoutubeDialog(false);
+                    setImportUrl("");
+                    setImportName("");
+                  }}
+                  disabled={importing}
+                  className="flex-1 border-gray-700 text-gray-300 hover:bg-gray-800"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={handleImportFromYoutube}
+                  disabled={importing || !importUrl || !importName}
+                  className="flex-1 bg-orange-600 hover:bg-orange-700 text-white disabled:opacity-50"
+                >
+                  {importing ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Importing...
+                    </>
+                  ) : (
+                    <>
+                      <svg className="w-4 h-4 mr-2" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
+                      </svg>
+                      Import
+                    </>
+                  )}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
