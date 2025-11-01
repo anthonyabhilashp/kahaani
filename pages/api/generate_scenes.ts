@@ -3,6 +3,7 @@ import { supabaseAdmin } from "../../lib/supabaseAdmin";
 import fetch from "node-fetch";
 import { JobLogger } from "../../lib/logger";
 import { v4 as uuidv4 } from "uuid";
+import { calculateSceneDuration } from "../../lib/utils";
 
 // --- Utility ---
 function isLongText(text: string): boolean {
@@ -20,6 +21,19 @@ function splitIntoScenes(text: string): { text: string }[] {
 
 function cleanJSON(raw: string): string {
   return raw.replace(/```(?:json)?/g, "").trim();
+}
+
+// Generate synthetic word timestamps for text-based scenes (no audio)
+function generateWordTimestamps(text: string): Array<{ word: string; start: number; end: number }> {
+  const words = text.trim().split(/\s+/).filter(w => w.length > 0);
+  const wordsPerSecond = 2; // Reading speed (same as duration calculation)
+  const wordDuration = 1 / wordsPerSecond;
+
+  return words.map((word, i) => ({
+    word: word,
+    start: i * wordDuration,
+    end: (i + 1) * wordDuration
+  }));
 }
 
 // --- Constants ---
@@ -178,7 +192,11 @@ User request: ${prompt}
       story_id: storyId,
       order: i,  // Use 0-based ordering (consistent with rest of app)
       text: s.text,
+      duration: calculateSceneDuration(s.text),  // Auto-calculate based on text length
+      word_timestamps: s.text.trim().length > 0 ? generateWordTimestamps(s.text) : [],  // Generate synthetic timestamps immediately
     }));
+
+    logger.log(`📝 Generated word timestamps for ${scenes.length} scene(s)`);
 
     const { error: insertErr } = await supabaseAdmin.from("scenes").insert(sceneRecords);
     if (insertErr) throw insertErr;

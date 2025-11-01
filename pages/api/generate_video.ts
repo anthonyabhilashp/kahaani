@@ -257,7 +257,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // 1️⃣ Fetch scenes with images, audio, word timestamps, and effects
     const { data: scenes, error: sceneErr } = await supabaseAdmin
       .from("scenes")
-      .select("id, order, text, image_url, audio_url, word_timestamps, effects")
+      .select("id, order, text, image_url, audio_url, word_timestamps, effects, duration")
       .eq("story_id", story_id)
       .order("order", { ascending: true });
 
@@ -304,6 +304,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const audioDuration = await getAudioDuration(audioPath);
         sceneFiles.duration = audioDuration;
         logger.log(`🎵 Scene ${index + 1} audio duration: ${audioDuration.toFixed(2)}s`);
+      } else {
+        // No audio - use calculated duration from database
+        sceneFiles.duration = (scene as any).duration || 5; // Default to 5s if not set
+        logger.log(`📝 Scene ${index + 1} text-based duration: ${sceneFiles.duration.toFixed(2)}s (no audio)`);
       }
 
       // Download overlay if exists
@@ -661,12 +665,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       for (const scene of mediaPaths) {
         const sceneData = scenes[scene.sceneIndex];
         if (sceneData.word_timestamps && Array.isArray(sceneData.word_timestamps)) {
-          // Add timestamps with offset for this scene's position in video
+          // Use existing timestamps from database
+          // These are either:
+          // 1. Audio-aligned timestamps (if audio was generated via Echogarden)
+          // 2. Synthetic timestamps (generated at scene creation time)
           sceneData.word_timestamps.forEach((wt: any) => {
             allWordTimestamps.push({
               word: wt.word,
               start: wt.start + timeOffset,
               end: wt.end + timeOffset
+            });
+          });
+        } else {
+          // Fallback: Generate synthetic word timestamps (for backwards compatibility with old scenes)
+          const words = sceneData.text.split(/\s+/);
+          const wordsPerSecond = 2; // Reading speed (same as duration calculation)
+          const wordDuration = 1 / wordsPerSecond;
+
+          words.forEach((word, i) => {
+            const start = timeOffset + (i * wordDuration);
+            const end = start + wordDuration;
+            allWordTimestamps.push({
+              word: word,
+              start: start,
+              end: end
             });
           });
         }

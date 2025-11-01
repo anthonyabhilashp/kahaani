@@ -280,7 +280,7 @@ export default function StoryDetailsPage() {
   const [bgMusicId, setBgMusicId] = useState<string | null>(null);
   const [bgMusicUrl, setBgMusicUrl] = useState<string | null>(null);
   const [bgMusicName, setBgMusicName] = useState<string | null>(null);
-  const [bgMusicVolume, setBgMusicVolume] = useState(15); // Default 15% volume
+  const [bgMusicVolume, setBgMusicVolume] = useState(8); // Default 8% volume
   const [bgMusicUploading, setBgMusicUploading] = useState(false);
   const [bgMusicPlaying, setBgMusicPlaying] = useState(false);
   const bgMusicAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -1831,8 +1831,13 @@ export default function StoryDetailsPage() {
     setSelectedScene(sceneIndex);
     setSceneProgress(sceneTime);
     setTotalProgress(targetTotalTime);
+    setCurrentTime(sceneTime); // Update current time for captions
     if (preloadedAudio[sceneIndex]) {
       setSceneDuration(preloadedAudio[sceneIndex].duration);
+    } else {
+      // No audio - use calculated duration from database
+      const scene = scenes[sceneIndex];
+      setSceneDuration(scene?.duration || 5);
     }
 
     // Sync background music immediately as well
@@ -2017,6 +2022,53 @@ export default function StoryDetailsPage() {
             clearInterval(progressIntervalRef.current);
           }
         }
+      } else {
+        // No audio - use calculated duration from database
+        const duration = scene.duration || 5; // Default to 5s if not set
+        console.log(`⏱️ No audio for scene ${sceneIndex + 1}, using calculated duration: ${duration}s, starting at ${startTime.toFixed(1)}s`);
+
+        const sceneStartTimes = getSceneStartTimes();
+        const cumulativeStart = sceneStartTimes[sceneIndex];
+
+        setSceneDuration(duration);
+        setSceneProgress(startTime);
+        setTotalProgress(cumulativeStart + startTime);
+        setCurrentTime(startTime);
+
+        // Track progress for captions and timeline
+        const playStartTime = Date.now();
+        const remainingDuration = duration - startTime;
+
+        progressIntervalRef.current = setInterval(() => {
+          if (previewCancelledRef.current) {
+            if (progressIntervalRef.current) {
+              clearInterval(progressIntervalRef.current);
+            }
+            return;
+          }
+
+          const elapsed = (Date.now() - playStartTime) / 1000;
+          const currentSceneTime = Math.min(startTime + elapsed, duration);
+          setSceneProgress(currentSceneTime);
+          setTotalProgress(cumulativeStart + currentSceneTime);
+          setCurrentTime(currentSceneTime);
+
+          if (currentSceneTime >= duration) {
+            if (progressIntervalRef.current) {
+              clearInterval(progressIntervalRef.current);
+            }
+          }
+        }, 100);
+
+        // Wait for remaining duration to complete
+        await new Promise<void>(resolve => {
+          setTimeout(() => {
+            if (progressIntervalRef.current) {
+              clearInterval(progressIntervalRef.current);
+            }
+            resolve();
+          }, remainingDuration * 1000);
+        });
       }
 
       return !previewCancelledRef.current;
@@ -2167,11 +2219,51 @@ export default function StoryDetailsPage() {
           }
         }
       } else {
-        console.log(`⏱️ No audio for scene ${sceneIndex + 1}, using 3s default`);
-        // Default 3 seconds with cancellation check
-        for (let i = 0; i < 30 && !previewCancelledRef.current; i++) {
-          await new Promise(resolve => setTimeout(resolve, 100));
-        }
+        // No audio - use calculated duration from database
+        const duration = scene.duration || 5; // Default to 5s if not set
+        console.log(`⏱️ No audio for scene ${sceneIndex + 1}, using calculated duration: ${duration}s`);
+
+        // Set scene duration for UI
+        setSceneDuration(duration);
+        setSceneProgress(0);
+
+        // Calculate cumulative start time for this scene
+        const sceneStartTimes = getSceneStartTimes();
+        const cumulativeStart = sceneStartTimes[sceneIndex];
+        setTotalProgress(cumulativeStart);
+
+        // Track progress for captions and timeline
+        const startTime = Date.now();
+        progressIntervalRef.current = setInterval(() => {
+          if (previewCancelledRef.current) {
+            if (progressIntervalRef.current) {
+              clearInterval(progressIntervalRef.current);
+            }
+            return;
+          }
+
+          const elapsed = (Date.now() - startTime) / 1000; // Convert to seconds
+          const currentSceneTime = Math.min(elapsed, duration);
+          setSceneProgress(currentSceneTime);
+          setTotalProgress(cumulativeStart + currentSceneTime);
+          setCurrentTime(currentSceneTime); // For word-by-word captions
+
+          if (currentSceneTime >= duration) {
+            if (progressIntervalRef.current) {
+              clearInterval(progressIntervalRef.current);
+            }
+          }
+        }, 100);
+
+        // Wait for duration to complete
+        await new Promise<void>(resolve => {
+          setTimeout(() => {
+            if (progressIntervalRef.current) {
+              clearInterval(progressIntervalRef.current);
+            }
+            resolve();
+          }, duration * 1000);
+        });
       }
       
       return !previewCancelledRef.current;

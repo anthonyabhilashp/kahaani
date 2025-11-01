@@ -1,6 +1,20 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { supabaseAdmin } from "../../lib/supabaseAdmin";
 import { JobLogger } from "../../lib/logger";
+import { calculateSceneDuration } from "../../lib/utils";
+
+// Generate synthetic word timestamps for text-based scenes (no audio)
+function generateWordTimestamps(text: string): Array<{ word: string; start: number; end: number }> {
+  const words = text.trim().split(/\s+/).filter(w => w.length > 0);
+  const wordsPerSecond = 2; // Reading speed (same as duration calculation)
+  const wordDuration = 1 / wordsPerSecond;
+
+  return words.map((word, i) => ({
+    word: word,
+    start: i * wordDuration,
+    end: (i + 1) * wordDuration
+  }));
+}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") {
@@ -29,6 +43,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (text !== undefined) {
       updateData.text = text;
       updateData.scene_text_modified_at = new Date().toISOString();
+      // Recalculate duration based on new text
+      updateData.duration = calculateSceneDuration(text);
+      // Regenerate word timestamps based on new text
+      updateData.word_timestamps = text.trim().length > 0 ? generateWordTimestamps(text) : [];
+      logger.log(`📝 Regenerated word timestamps for updated text`);
     }
 
     let updateResult;
