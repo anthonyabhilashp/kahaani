@@ -57,7 +57,8 @@ export async function generateEffectFrames(
   // This is the expensive operation, so we only do it once
   const resizedBuffer = await sharp(imageBuffer)
     .resize(workingWidth, workingHeight, {
-      fit: "fill", // Force exact dimensions
+      fit: "cover", // Maintain aspect ratio, crop if needed
+      position: "center", // Center the crop
       kernel: "cubic", // Fast and good quality
     })
     .toBuffer();

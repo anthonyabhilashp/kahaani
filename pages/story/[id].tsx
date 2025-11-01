@@ -7,9 +7,10 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Slider } from "../../components/ui/slider";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../components/ui/tooltip";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../../components/ui/dropdown-menu";
-import { ArrowLeft, Play, Pause, Download, Volume2, VolumeX, Maximize, Loader2, ImageIcon, Image, Pencil, Trash2, Check, X, PlayCircle, ChevronDown, Plus, Type, Music, Upload, Sparkles, ExternalLink, MoreHorizontal, Coins, Info, Copy } from "lucide-react";
+import { ArrowLeft, Play, Pause, Download, Volume2, VolumeX, Maximize, Loader2, ImageIcon, Image, Pencil, Trash2, Check, X, PlayCircle, ChevronDown, Plus, Type, Music, Upload, Sparkles, ExternalLink, MoreHorizontal, Coins, Info, Copy, Layers } from "lucide-react";
 import { WordByWordCaption, SimpleCaption, type WordTimestamp } from "../../components/WordByWordCaption";
 import { EffectSelectionModal } from "../../components/EffectSelectionModal";
+import { OverlaySelectionModal } from "../../components/OverlaySelectionModal";
 import type { EffectType } from "../../lib/videoEffects";
 import { getEffectAnimationClass } from "../../lib/videoEffects";
 import { useCredits } from "../../hooks/useCredits";
@@ -105,6 +106,11 @@ export default function StoryDetailsPage() {
   // Effect selection modal state
   const [effectModalOpen, setEffectModalOpen] = useState(false);
   const [selectedEffectScene, setSelectedEffectScene] = useState<number | null>(null);
+
+  // Overlay selection modal state
+  const [overlayModalOpen, setOverlayModalOpen] = useState(false);
+  const [selectedOverlayScene, setSelectedOverlayScene] = useState<number | null>(null);
+  const [overlays, setOverlays] = useState<Array<{id: string, name: string, category: string, file_url: string, thumbnail_url: string | null}>>([]);
 
   // Video generation success dialog state
   const [videoSuccessDialogOpen, setVideoSuccessDialogOpen] = useState(false);
@@ -289,6 +295,10 @@ export default function StoryDetailsPage() {
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [deleteMusicDialog, setDeleteMusicDialog] = useState<{open: boolean; music: any | null}>({open: false, music: null});
   const [deletingMusic, setDeletingMusic] = useState(false);
+
+  // Stuck job dialog state
+  const [stuckJobDialogOpen, setStuckJobDialogOpen] = useState(false);
+  const [clearingStuckJob, setClearingStuckJob] = useState(false);
 
   // Import dialogs
   const [importUrlDialog, setImportUrlDialog] = useState(false);
@@ -537,6 +547,22 @@ export default function StoryDetailsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]); // Only depend on id to prevent infinite loops
 
+  // Fetch overlay effects from library
+  const fetchOverlays = useCallback(async () => {
+    try {
+      // Include aspect ratio in request to get aspect-ratio-specific overlays
+      const aspectRatioParam = story?.aspect_ratio ? `?aspect_ratio=${encodeURIComponent(story.aspect_ratio)}` : '';
+      const res = await fetch(`/api/overlays/library${aspectRatioParam}`);
+      const data = await res.json();
+
+      if (data.overlays) {
+        setOverlays(data.overlays);
+      }
+    } catch (error) {
+      console.error('Error fetching overlays:', error);
+    }
+  }, [story?.aspect_ratio]);
+
   // Fetch and update a single scene's details
   const fetchAndUpdateScene = useCallback(async (sceneId: string): Promise<{scene: any, index: number} | null> => {
     try {
@@ -601,6 +627,7 @@ export default function StoryDetailsPage() {
     }
 
     fetchStory();
+    fetchOverlays();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [router.isReady, id]); // Only depend on router.isReady and id
 
@@ -1681,26 +1708,10 @@ export default function StoryDetailsPage() {
 
         // Handle stuck job error (409 Conflict)
         if (res.status === 409 && errorData.error?.includes('already in progress')) {
-          const shouldClear = window.confirm(
-            `${errorData.error}\n\nThis might be a stuck job from a previous attempt. Would you like to clear it and try again?`
-          );
-
-          if (shouldClear) {
-            // Clear the stuck job
-            const clearHeaders = await getAuthHeaders();
-            const clearRes = await fetch("/api/clear_video_job", {
-              method: "POST",
-              headers: clearHeaders,
-              body: JSON.stringify({ story_id: id }),
-            });
-
-            if (clearRes.ok) {
-              alert('Stuck job cleared! Please try generating the video again.');
-            } else {
-              alert('Failed to clear stuck job. Please wait 2 minutes and try again.');
-            }
-          }
-          throw new Error('Video generation cancelled - stuck job detected');
+          // Show dialog and return early - don't throw error
+          console.log("ℹ️ Stuck job detected - showing dialog");
+          setStuckJobDialogOpen(true);
+          return; // Exit early without throwing
         }
 
         throw new Error(errorData.error || `Server error: ${res.status}`);
@@ -1741,6 +1752,33 @@ export default function StoryDetailsPage() {
       }
       setGeneratingVideo(false);
       setVideoProgress(0);
+    }
+  };
+
+  const clearStuckJob = async () => {
+    if (!id || typeof id !== 'string') return;
+
+    setClearingStuckJob(true);
+
+    try {
+      const headers = await getAuthHeaders();
+      const clearRes = await fetch("/api/clear_video_job", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ story_id: id }),
+      });
+
+      if (!clearRes.ok) {
+        throw new Error('Failed to clear stuck job');
+      }
+
+      showToast('Stuck job cleared successfully!', 'success');
+      setStuckJobDialogOpen(false);
+    } catch (err) {
+      console.error("❌ Error clearing stuck job:", err);
+      showToast(`Failed to clear stuck job: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error');
+    } finally {
+      setClearingStuckJob(false);
     }
   };
 
@@ -2222,11 +2260,14 @@ export default function StoryDetailsPage() {
 
       if (!res.ok) throw new Error("Failed to update effect");
 
-      // Update local state immediately
+      // Update local state immediately - preserve existing effects like overlay
       const updatedScenes = [...scenes];
       updatedScenes[sceneIndex] = {
         ...updatedScenes[sceneIndex],
-        effects: { motion: effectId }
+        effects: {
+          ...updatedScenes[sceneIndex].effects,
+          motion: effectId
+        }
       };
       setScenes(updatedScenes);
 
@@ -2234,6 +2275,52 @@ export default function StoryDetailsPage() {
     } catch (err) {
       console.error("Effect update error:", err);
       alert(`Failed to update effect: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    }
+  };
+
+  const updateSceneOverlay = async (sceneIndex: number, overlayId: string | null, overlayUrl?: string) => {
+    if (!scenes[sceneIndex]?.id) return;
+
+    try {
+      const headers = await getAuthHeaders();
+      const res = await fetch("/api/update_scene_effect", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          scene_id: scenes[sceneIndex].id,
+          overlay_id: overlayId,
+          overlay_url: overlayUrl || null,
+        }),
+      });
+
+      if (!res.ok) throw new Error("Failed to update overlay");
+
+      // Update local state immediately
+      const updatedScenes = [...scenes];
+      const newEffects: any = {
+        ...updatedScenes[sceneIndex].effects,
+      };
+
+      if (overlayId === null) {
+        delete newEffects.overlay_id;
+        delete newEffects.overlay_url;
+      } else {
+        newEffects.overlay_id = overlayId;
+        if (overlayUrl) {
+          newEffects.overlay_url = overlayUrl;
+        }
+      }
+
+      updatedScenes[sceneIndex] = {
+        ...updatedScenes[sceneIndex],
+        effects: newEffects
+      };
+      setScenes(updatedScenes);
+
+      console.log(`✅ Overlay updated for scene ${sceneIndex + 1}: ${overlayId || 'none'}`);
+    } catch (err) {
+      console.error("Overlay update error:", err);
+      alert(`Failed to update overlay: ${err instanceof Error ? err.message : 'Unknown error'}`);
     }
   };
 
@@ -2692,6 +2779,43 @@ export default function StoryDetailsPage() {
                     className="bg-orange-600 hover:bg-orange-700 text-white"
                   >
                     Confirm
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+
+            {/* Stuck Job Dialog */}
+            <AlertDialog open={stuckJobDialogOpen} onOpenChange={setStuckJobDialogOpen}>
+              <AlertDialogContent className="bg-gray-900 border-gray-700 text-white">
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Video Generation In Progress</AlertDialogTitle>
+                  <AlertDialogDescription className="text-gray-400">
+                    A video generation job is already running for this story. You can wait for it to complete (usually 1-2 minutes) or clear it to start fresh.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel
+                    className="bg-gray-800 border-gray-700 text-white hover:bg-gray-700 hover:text-white"
+                    disabled={clearingStuckJob}
+                  >
+                    Close
+                  </AlertDialogCancel>
+                  <AlertDialogAction
+                    onClick={(e) => {
+                      e.preventDefault();
+                      clearStuckJob();
+                    }}
+                    disabled={clearingStuckJob}
+                    className="bg-orange-600 hover:bg-orange-700 text-white disabled:opacity-50"
+                  >
+                    {clearingStuckJob ? (
+                      <>
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        Clearing...
+                      </>
+                    ) : (
+                      'Clear Job'
+                    )}
                   </AlertDialogAction>
                 </AlertDialogFooter>
               </AlertDialogContent>
@@ -3218,6 +3342,27 @@ export default function StoryDetailsPage() {
                             </TooltipTrigger>
                             <TooltipContent>
                               <p>Add video effect ({scene.effects?.motion || 'none'})</p>
+                            </TooltipContent>
+                          </Tooltip>
+                        )}
+
+                        {/* Overlay Button - Icon Only */}
+                        {scene.image_url && (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSelectedOverlayScene(index);
+                                  setOverlayModalOpen(true);
+                                }}
+                                className="p-1.5 bg-gray-800 hover:bg-gray-700 text-white rounded transition-colors"
+                              >
+                                <Layers className="w-3.5 h-3.5" />
+                              </button>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              <p>Add overlay effect ({(scene.effects as any)?.overlay_id ? 'selected' : 'none'})</p>
                             </TooltipContent>
                           </Tooltip>
                         )}
@@ -3765,6 +3910,41 @@ export default function StoryDetailsPage() {
                         />
                       )
                     ))}
+
+                    {/* Overlay Effects */}
+                    {scenes.map((scene, index) => {
+                      const overlayUrl = (scene?.effects as any)?.overlay_url;
+                      const overlayId = (scene?.effects as any)?.overlay_id;
+                      if (!overlayUrl) return null;
+
+                      // Find overlay to get its category
+                      const overlay = overlays.find(o => o.id === overlayId);
+                      const category = overlay?.category || 'other';
+
+                      // Show raw overlay in preview (no effects applied)
+                      let blendMode: string = 'screen';
+                      let opacity = 1.0;
+
+                      return (
+                        <video
+                          key={`overlay-${index}-${overlayUrl}`}
+                          src={overlayUrl}
+                          className={`absolute inset-0 w-full h-full object-cover pointer-events-none transition-opacity duration-300 ${
+                            index === selectedScene ? 'opacity-100' : 'opacity-0'
+                          } ${index === selectedScene ? getEffectAnimationClass(scene?.effects?.motion || "none") : ''}`}
+                          style={{
+                            mixBlendMode: blendMode as any,
+                            opacity: index === selectedScene ? opacity : 0,
+                            transformOrigin: "center center",
+                            animationDuration: `${scene?.duration || 5}s`,
+                          }}
+                          muted
+                          loop
+                          playsInline
+                          autoPlay
+                        />
+                      );
+                    })}
 
                     {/* Caption Overlay */}
                     {captionsEnabled && scenes[selectedScene]?.text && (() => {
@@ -5041,6 +5221,24 @@ export default function StoryDetailsPage() {
           sceneImageUrl={scenes[selectedEffectScene]?.image_url || ""}
           onSelectEffect={(effectId) => {
             updateSceneEffect(selectedEffectScene, effectId);
+          }}
+        />
+      )}
+
+      {/* Overlay Selection Modal */}
+      {selectedOverlayScene !== null && (
+        <OverlaySelectionModal
+          isOpen={overlayModalOpen}
+          onClose={() => {
+            setOverlayModalOpen(false);
+            setSelectedOverlayScene(null);
+          }}
+          overlays={overlays}
+          currentOverlayId={(scenes[selectedOverlayScene]?.effects as any)?.overlay_id || null}
+          sceneImageUrl={scenes[selectedOverlayScene]?.image_url || ''}
+          aspectRatio={aspectRatio}
+          onSelectOverlay={(overlayId, overlayUrl) => {
+            updateSceneOverlay(selectedOverlayScene, overlayId, overlayUrl);
           }}
         />
       )}

@@ -43,6 +43,12 @@ function convertHexToASSColor(hex: string): string {
   return '&HFFFFFF';
 }
 
+// --- Helper to get blend settings based on overlay category ---
+function getOverlayBlendSettings(category: string): { blendMode: string; opacity: number } {
+  // Raw overlay - no effects applied
+  return { blendMode: 'screen', opacity: 1.0 };
+}
+
 // --- Safe ffprobe helper ---
 async function getAudioDuration(filePath: string): Promise<number> {
   return new Promise((resolve) => {
@@ -300,6 +306,44 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         logger.log(`🎵 Scene ${index + 1} audio duration: ${audioDuration.toFixed(2)}s`);
       }
 
+      // Download overlay if exists
+      const overlayUrl = (scene.effects as any)?.overlay_url;
+      const overlayId = (scene.effects as any)?.overlay_id;
+      if (overlayUrl && overlayId) {
+        try {
+          logger.log(`🎭 Downloading overlay for scene ${index + 1}...`);
+
+          // Fetch overlay metadata to get category
+          const { data: overlayData } = await supabaseAdmin
+            .from('overlay_effects')
+            .select('category')
+            .eq('id', overlayId)
+            .single();
+
+          // Construct aspect-ratio-specific overlay URL
+          // Convert aspect_ratio from "9:16" to "9-16" for folder name
+          const aspectFolder = (aspect_ratio || '9:16').replace(':', '-');
+          const fileName = overlayUrl.split('/').pop();
+          const baseUrl = overlayUrl.substring(0, overlayUrl.lastIndexOf('/'));
+          const aspectSpecificUrl = `${baseUrl}/${aspectFolder}/${fileName}`;
+
+          logger.log(`📐 Using ${aspectFolder} overlay variant`);
+          logger.log(`   Original URL: ${overlayUrl}`);
+          logger.log(`   Fetching from: ${aspectSpecificUrl}`);
+
+          const overlayRes = await fetch(aspectSpecificUrl);
+          logger.log(`   Response status: ${overlayRes.status} ${overlayRes.statusText}`);
+          const overlayBuffer = Buffer.from(await overlayRes.arrayBuffer());
+          const overlayPath = path.join(tmpDir, `scene-${index}-overlay.webm`);
+          fs.writeFileSync(overlayPath, overlayBuffer);
+          sceneFiles.overlayPath = overlayPath;
+          sceneFiles.overlayCategory = overlayData?.category || 'other';
+          logger.log(`✅ Overlay downloaded for scene ${index + 1} (${sceneFiles.overlayCategory})`);
+        } catch (err) {
+          logger.error(`⚠️ Failed to download overlay for scene ${index + 1}:`, err);
+        }
+      }
+
       mediaPaths.push(sceneFiles);
     }
 
@@ -373,7 +417,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const framesDir = path.join(tmpDir, `frames-${scene.sceneIndex}`);
         frameDirsToCleanup.push(framesDir);
 
-        logger.log(`🖼️ Generating smooth frames at 15fps...`);
+        logger.log(`🖼️ Generating smooth frames at 30fps...`);
 
         await generateEffectFrames({
           imagePath: scene.imagePath,
@@ -382,50 +426,193 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           height,
           duration: scene.duration,
           effectType: effectId,
-          fps: 15, // Lower FPS = much faster, still smooth
+          fps: 30, // Smooth playback for particle overlays
         });
 
         logger.log(`✅ Frames generated, encoding video...`);
 
-        // Create video from PNG frames (lossless quality)
-        await new Promise<void>((resolve, reject) => {
-          ffmpeg()
-            .input(path.join(framesDir, "frame_%06d.png"))
-            .inputOptions(["-framerate 15"])
-            .videoCodec("libx264")
-            .noAudio()
-            .outputOptions([
-              "-pix_fmt yuv420p",
-              "-preset medium", // Better quality encoding
-              "-crf 15", // Very high quality (lower = better)
-            ])
-            .save(clipPath)
-            .on("end", () => resolve())
-            .on("error", (err: any) => reject(err));
-        });
+        // If scene has overlay, apply it; otherwise just encode frames
+        if ((scene as any).overlayPath) {
+          // First, encode frames to a temporary video
+          const tempClipPath = path.join(tmpDir, `temp-clip-${scene.sceneIndex}.mp4`);
+
+          await new Promise<void>((resolve, reject) => {
+            ffmpeg()
+              .input(path.join(framesDir, "frame_%06d.png"))
+              .inputOptions(["-framerate 30"])
+              .videoCodec("libx264")
+              .noAudio()
+              .outputOptions([
+                "-pix_fmt yuv420p",
+                "-preset medium",
+                "-crf 15",
+              ])
+              .save(tempClipPath)
+              .on("end", () => resolve())
+              .on("error", (err: any) => reject(err));
+          });
+
+          logger.log(`🎭 Applying overlay to motion effect...`);
+
+          // Get blend settings based on overlay category
+          const overlayCategory = (scene as any).overlayCategory || 'other';
+          const blendSettings = getOverlayBlendSettings(overlayCategory);
+          logger.log(`   Using ${blendSettings.blendMode} mode with ${blendSettings.opacity} opacity`);
+
+          // Then apply overlay on top using proper alpha compositing
+          await new Promise<void>((resolve, reject) => {
+            logger?.log(`🎭 Applying overlay: ${(scene as any).overlayPath}`);
+            logger?.log(`   Category: ${overlayCategory}`);
+
+            // Smart scaling strategy for all aspect ratios:
+            // Scale so smallest dimension fills frame, center the overlay, allow natural overflow
+            // This works for 9:16, 16:9, and 1:1 without extreme zoom or gaps
+            let filterComplex;
+            // Screen blend in RGB using gbrp format (no colorkey)
+            filterComplex = `[0:v]fps=30,scale=${width}:${height}:flags=lanczos,setsar=1,format=gbrp[bg];[1:v]fps=30,scale=${width}:${height}:flags=lanczos,setsar=1,format=gbrp[ov];[bg][ov]blend=all_mode=screen:all_opacity=1.0[comp];[comp]format=yuv420p`;
+
+            logger?.log(`   Filter: ${filterComplex}`);
+
+            const cmd = ffmpeg()
+              .input(tempClipPath) // Input 0: motion effect video
+              .input((scene as any).overlayPath!) // Input 1: overlay
+              .inputOptions(["-stream_loop", "-1"]) // Loop overlay
+              .videoCodec("libx264")
+              .noAudio()
+              .complexFilter(filterComplex)
+              .outputOptions([
+                "-pix_fmt yuv420p",
+                "-color_primaries bt709",
+                "-color_trc bt709",
+                "-colorspace bt709",
+                `-t ${scene.duration}`,
+                "-r 30",
+                "-preset medium",
+                "-crf 15",
+              ])
+              .save(clipPath);
+
+            cmd.on("start", (cmdLine) => {
+              logger?.log(`🚀 FFmpeg command: ${cmdLine}`);
+            });
+
+            cmd.on("end", () => {
+              logger?.log(`✅ Overlay applied successfully`);
+              // Clean up temp file
+              fs.unlinkSync(tempClipPath);
+              resolve();
+            });
+
+            cmd.on("error", (err: any) => {
+              logger?.error(`❌ Overlay failed:`, err);
+              reject(err);
+            });
+          });
+        } else {
+          // No overlay - just encode frames
+          logger.log(`✅ Encoding video without overlay...`);
+          await new Promise<void>((resolve, reject) => {
+            ffmpeg()
+              .input(path.join(framesDir, "frame_%06d.png"))
+              .inputOptions(["-framerate 30"])
+              .videoCodec("libx264")
+              .noAudio()
+              .outputOptions([
+                "-pix_fmt yuv420p",
+                `-t ${scene.duration}`,
+                "-r 30",
+                "-preset medium",
+                "-crf 15",
+              ])
+              .save(clipPath)
+              .on("end", () => {
+                logger?.log(`✅ Video clip saved: ${clipPath}`);
+                resolve();
+              })
+              .on("error", (err: any) => reject(err));
+          });
+        }
 
       } else {
-        // No effect - use static image with simple scaling
+        // No motion effect - use static image with simple scaling
         const videoFilter = `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black`;
 
-        await new Promise<void>((resolve, reject) => {
-          ffmpeg()
-            .input(scene.imagePath!)
-            .inputOptions(["-loop 1", "-framerate 15"]) // Match effect clips framerate
-            .videoCodec("libx264")
-            .noAudio()
-            .outputOptions([
-              "-pix_fmt yuv420p",
-              `-vf ${videoFilter}`,
-              `-t ${scene.duration}`,
-              "-r 15", // Set output framerate to match effect clips
-              "-preset medium", // Match effect clips preset
-              "-crf 15", // Match effect clips quality
-            ])
-            .save(clipPath)
-            .on("end", () => resolve())
-            .on("error", (err: any) => reject(err));
-        });
+        // Check if scene has overlay
+        if ((scene as any).overlayPath) {
+          // Get blend settings based on overlay category
+          const overlayCategory = (scene as any).overlayCategory || 'other';
+          const blendSettings = getOverlayBlendSettings(overlayCategory);
+          logger.log(`🎭 Applying overlay with ${blendSettings.blendMode} mode (${blendSettings.opacity} opacity)`);
+
+          // Apply overlay using proper alpha compositing
+          await new Promise<void>((resolve, reject) => {
+            logger?.log(`🎭 Applying overlay to static image: ${(scene as any).overlayPath}`);
+            logger?.log(`   Category: ${overlayCategory}`);
+
+            // Smart scaling strategy for all aspect ratios:
+            // Scale so smallest dimension fills frame, center the overlay, allow natural overflow
+            // This works for 9:16, 16:9, and 1:1 without extreme zoom or gaps
+            let filterComplex;
+            // Screen blend in RGB using gbrp format (no colorkey)
+            filterComplex = `[0:v]${videoFilter},fps=30,setsar=1,format=gbrp[bg];[1:v]fps=30,scale=${width}:${height}:flags=lanczos,setsar=1,format=gbrp[ov];[bg][ov]blend=all_mode=screen:all_opacity=1.0[comp];[comp]format=yuv420p`;
+
+            logger?.log(`   Filter: ${filterComplex}`);
+
+            const cmd = ffmpeg()
+              .input(scene.imagePath!) // Input 0: image
+              .inputOptions(["-loop", "1", "-framerate", "15"])
+              .input((scene as any).overlayPath!) // Input 1: overlay video
+              .inputOptions(["-stream_loop", "-1"]) // Loop overlay to match duration
+              .videoCodec("libx264")
+              .noAudio()
+              .complexFilter(filterComplex)
+              .outputOptions([
+                "-pix_fmt yuv420p",
+                "-color_primaries bt709",
+                "-color_trc bt709",
+                "-colorspace bt709",
+                `-t ${scene.duration}`,
+                "-r 30",
+                "-preset medium",
+                "-crf 15",
+              ])
+              .save(clipPath);
+
+            cmd.on("start", (cmdLine) => {
+              logger?.log(`🚀 FFmpeg command: ${cmdLine}`);
+            });
+
+            cmd.on("end", () => {
+              logger?.log(`✅ Overlay applied successfully`);
+              resolve();
+            });
+
+            cmd.on("error", (err: any) => {
+              logger?.error(`❌ Overlay failed:`, err);
+              reject(err);
+            });
+          });
+        } else {
+          // No overlay - simple static image
+          await new Promise<void>((resolve, reject) => {
+            ffmpeg()
+              .input(scene.imagePath!)
+              .inputOptions(["-loop 1", "-framerate 15"]) // Match effect clips framerate
+              .videoCodec("libx264")
+              .noAudio()
+              .outputOptions([
+                "-pix_fmt yuv420p",
+                `-vf ${videoFilter}`,
+                `-t ${scene.duration}`,
+                "-r 30", // Smooth playback for overlays
+                "-preset medium", // Match effect clips preset
+                "-crf 15", // Match effect clips quality
+              ])
+              .save(clipPath)
+              .on("end", () => resolve())
+              .on("error", (err: any) => reject(err));
+          });
+        }
       }
 
       videoClips.push(`file '${clipPath}'`);
@@ -459,6 +646,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     fs.writeFileSync(concatTxt, videoClips.join("\n"));
 
     const videoOnlyPath = path.join(tmpDir, `video-only-${story_id}.mp4`);
+
+    await updateJobProgress(jobId, 62);
 
     // If captions are enabled, generate ASS subtitle file with word-by-word animation
     let captionFilter = "";
@@ -552,6 +741,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       logger.log(`📝 Caption file ready: ${assPath}`);
     }
 
+    await updateJobProgress(jobId, 65);
+
     await new Promise<void>((resolve, reject) => {
       const outputOpts = [
         "-c:v libx264",
@@ -573,7 +764,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .on("error", reject);
     });
 
-    await updateJobProgress(jobId, 75);
+    await updateJobProgress(jobId, 72);
 
     // 🔟 Create final video - video already has correct timing, just add audio track
     const finalVideo = path.join(tmpDir, `final-video-${story_id}.mp4`);
@@ -611,11 +802,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       logger.log("🎵 Concatenated all scene audio files with normalization (85% volume + gentle compression for clarity)");
 
+      await updateJobProgress(jobId, 75);
+
       let finalAudioTrack = mergedNarrationAudio;
 
       // Mix background music if enabled and volume > 0
       if (background_music?.enabled && background_music?.music_url && (background_music.volume ?? 30) > 0) {
         logger.log("🎵 Downloading background music...");
+
+        await updateJobProgress(jobId, 77);
 
         const bgMusicPath = path.join(tmpDir, "background-music.mp3");
         const bgRes = await fetch(background_music.music_url);
@@ -666,9 +861,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         });
 
         finalAudioTrack = mixedAudio;
+
+        await updateJobProgress(jobId, 80);
       }
 
       // Combine video with final audio track
+      await updateJobProgress(jobId, 82);
+
       await new Promise<void>((resolve, reject) => {
         ffmpeg()
           .input(videoOnlyPath)
