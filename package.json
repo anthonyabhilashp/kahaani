@@ -16,6 +16,10 @@
   "author": "",
   "license": "ISC",
   "description": "",
+  "engines": {
+    "node": ">=20.0.0",
+    "npm": ">=10.0.0"
+  },
   "dependencies": {
     "@paddle/paddle-node-sdk": "^3.3.0",
     "@radix-ui/react-alert-dialog": "^1.1.15",
