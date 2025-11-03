@@ -1,9 +1,9 @@
 import type { NextApiRequest, NextApiResponse } from "next";
-import { Paddle, EventName } from "@paddle/paddle-node-sdk";
+import { Paddle, EventName, Environment } from "@paddle/paddle-node-sdk";
 import { addCredits } from "../../../lib/credits";
 
 const paddle = new Paddle(process.env.PADDLE_API_KEY!, {
-  environment: (process.env.PADDLE_ENVIRONMENT as "sandbox" | "production") || "sandbox",
+  environment: (process.env.PADDLE_ENVIRONMENT as Environment) || Environment.sandbox,
 });
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {

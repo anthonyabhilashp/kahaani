@@ -1,10 +1,10 @@
 import type { NextApiRequest, NextApiResponse } from "next";
-import { Paddle } from "@paddle/paddle-node-sdk";
+import { Paddle, Environment } from "@paddle/paddle-node-sdk";
 import { supabaseAdmin } from "../../../lib/supabaseAdmin";
 
 // Initialize Paddle
 const paddle = new Paddle(process.env.PADDLE_API_KEY!, {
-  environment: (process.env.PADDLE_ENVIRONMENT as "sandbox" | "production") || "sandbox",
+  environment: (process.env.PADDLE_ENVIRONMENT as Environment) || Environment.sandbox,
 });
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
