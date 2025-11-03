@@ -22,7 +22,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Verify webhook signature
     const secretKey = process.env.PADDLE_WEBHOOK_SECRET!;
-    const eventData = paddle.webhooks.unmarshal(
+    const eventData = await paddle.webhooks.unmarshal(
       JSON.stringify(req.body),
       secretKey,
       signature
@@ -36,7 +36,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       console.log(`💰 Transaction completed: ${transaction.id}`);
       console.log(`   Status: ${transaction.status}`);
-      console.log(`   Customer: ${transaction.customerEmail}`);
+      console.log(`   Customer ID: ${(transaction as any).customerId || 'N/A'}`);
 
       if (transaction.status === 'completed') {
         const customData = transaction.customData as any;

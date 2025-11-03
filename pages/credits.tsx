@@ -76,7 +76,7 @@ const packages: CreditPackage[] = [
 export default function CreditsPage() {
   const router = useRouter();
   const { user, signOut } = useAuth();
-  const { balance: creditBalance, loading: creditsLoading, refreshBalance } = useCredits();
+  const { balance: creditBalance, loading: creditsLoading, refetch: refreshBalance } = useCredits();
   const [loading, setLoading] = useState(true);
   const [purchasing, setPurchasing] = useState<string | null>(null);
   const [showSuccess, setShowSuccess] = useState(false);

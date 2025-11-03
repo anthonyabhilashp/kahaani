@@ -44,7 +44,7 @@ export default function SeriesDetailPage() {
   const router = useRouter();
   const { id } = router.query;
   const { user, signOut } = useAuth();
-  const { creditBalance, loading: creditsLoading } = useCredits();
+  const { balance: creditBalance, loading: creditsLoading } = useCredits();
   const [series, setSeries] = useState<SeriesDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [editDialogOpen, setEditDialogOpen] = useState(false);

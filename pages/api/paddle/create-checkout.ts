@@ -82,8 +82,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
 
     res.status(200).json({
-      checkoutUrl: checkout.data?.checkoutUrl,
-      transactionId: checkout.data?.id
+      checkoutUrl: (checkout as any).checkout?.url || null,
+      transactionId: checkout.id
     });
   } catch (err: any) {
     console.error("Paddle checkout error:", err);
