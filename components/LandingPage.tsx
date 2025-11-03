@@ -12,7 +12,7 @@ export function LandingPage() {
     {
       id: 1,
       title: "The Brave Explorer",
-      thumbnail: "https://via.placeholder.com/1080x1920/1f2937/f97316?text=The+Brave+Explorer",
+      thumbnail: null,
       videoUrl: null, // Will be replaced with real videos
       duration: "1:30",
       category: "Adventure"
@@ -20,7 +20,7 @@ export function LandingPage() {
     {
       id: 2,
       title: "Journey to Discovery",
-      thumbnail: "https://via.placeholder.com/1080x1920/1f2937/f97316?text=Journey+to+Discovery",
+      thumbnail: null,
       videoUrl: null,
       duration: "2:00",
       category: "Educational"
@@ -28,7 +28,7 @@ export function LandingPage() {
     {
       id: 3,
       title: "The Lost Kingdom",
-      thumbnail: "https://via.placeholder.com/1080x1920/1f2937/f97316?text=The+Lost+Kingdom",
+      thumbnail: null,
       videoUrl: null,
       duration: "1:45",
       category: "Fantasy"
@@ -36,7 +36,7 @@ export function LandingPage() {
     {
       id: 4,
       title: "Lessons from History",
-      thumbnail: "https://via.placeholder.com/1080x1920/1f2937/f97316?text=Lessons+from+History",
+      thumbnail: null,
       videoUrl: null,
       duration: "2:15",
       category: "Educational"
@@ -256,11 +256,17 @@ export function LandingPage() {
                 onClick={() => video.videoUrl && setPlayingVideo(video.id.toString())}
               >
                 <div className="relative aspect-[9/16] rounded-lg overflow-hidden bg-gray-900 border border-gray-800 hover:border-orange-600/50 transition-all">
-                  <img
-                    src={video.thumbnail}
-                    alt={video.title}
-                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                  />
+                  {video.thumbnail ? (
+                    <img
+                      src={video.thumbnail}
+                      alt={video.title}
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                    />
+                  ) : (
+                    <div className="w-full h-full bg-gradient-to-br from-gray-800 to-gray-900 flex items-center justify-center">
+                      <Video className="w-16 h-16 text-gray-600" />
+                    </div>
+                  )}
 
                   {/* Overlay */}
                   <div className="absolute inset-0 bg-gradient-to-t from-black via-transparent to-transparent">

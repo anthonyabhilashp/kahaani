@@ -2,6 +2,32 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## ⚠️ CRITICAL RULES - READ FIRST
+
+**BEFORE doing ANYTHING:**
+
+1. **NEVER create new files without checking existing ones first**
+   - Search for similar components/patterns in the codebase
+   - Reuse existing UI components from `components/ui/`
+   - Check if shadcn components are already installed
+
+2. **NEVER install packages without checking package.json first**
+   - Run `grep <package-name> package.json` before `npm install`
+   - Ask user before installing anything new
+
+3. **ALWAYS reuse existing patterns**
+   - Check how dialogs, buttons, toasts are already implemented
+   - Follow the same styling patterns (dark theme, orange accents)
+   - Don't reinvent components that already exist
+
+4. **Components & Styling**
+   - Already using shadcn/ui components
+   - Already have toast system (hooks/use-toast.ts + components/ui/toast.tsx + components/ui/toaster.tsx)
+   - Dark theme with orange accents (orange-600, gray-900, gray-800)
+   - DO NOT create custom toast systems or styling from scratch
+
+5. **When in doubt, ASK before changing things**
+
 ## Project Overview
 
 Kahaani is an AI-powered story generation platform built with Next.js (Pages Router), TypeScript, and Supabase. It transforms user prompts into complete multimedia stories with scenes, images, audio narration, and video output.

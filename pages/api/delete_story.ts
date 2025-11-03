@@ -2,6 +2,39 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { supabaseAdmin } from "../../lib/supabaseAdmin";
 import { JobLogger } from "../../lib/logger";
 
+// Helper function to recalculate and update series story count
+async function updateSeriesStoryCount(seriesId: string, logger?: JobLogger): Promise<void> {
+  // Count actual stories in this series
+  const { count, error: countError } = await supabaseAdmin
+    .from("stories")
+    .select("*", { count: "exact", head: true })
+    .eq("series_id", seriesId);
+
+  if (countError) {
+    const msg = `Failed to count stories for series ${seriesId}: ${countError.message}`;
+    console.error(msg);
+    if (logger) logger.log(`⚠️ ${msg}`);
+    return;
+  }
+
+  // Update the series with the actual count
+  const { error: updateError } = await supabaseAdmin
+    .from("series")
+    .update({
+      story_count: count || 0,
+      updated_at: new Date().toISOString()
+    })
+    .eq("id", seriesId);
+
+  if (updateError) {
+    const msg = `Failed to update series ${seriesId} count: ${updateError.message}`;
+    console.error(msg);
+    if (logger) logger.log(`⚠️ ${msg}`);
+  } else if (logger) {
+    logger.log(`✅ Updated series ${seriesId} story count to ${count || 0}`);
+  }
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
@@ -203,7 +236,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
     logger.log("✅ Scenes deleted from database");
 
-    // 6️⃣ Finally delete the story itself
+    // 6️⃣ Get story's series_id before deletion to update series count
+    const { data: storyData, error: storyFetchError } = await supabaseAdmin
+      .from("stories")
+      .select("series_id")
+      .eq("id", story_id)
+      .single();
+
+    if (storyFetchError) {
+      logger.log(`⚠️ Warning: Could not fetch story series_id: ${storyFetchError.message}`);
+    }
+
+    const seriesId = storyData?.series_id;
+
+    // 7️⃣ Delete the story itself
     const { error: storyError } = await supabaseAdmin
       .from("stories")
       .delete()
@@ -214,6 +260,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     logger.log("✅ Story deleted successfully");
+
+    // 8️⃣ Recalculate series story count if story was in a series (async, non-blocking)
+    if (seriesId) {
+      updateSeriesStoryCount(seriesId, logger).catch(err => {
+        const msg = `Failed to update series ${seriesId} count: ${err.message}`;
+        console.error(msg);
+        if (logger) logger.log(`⚠️ ${msg}`);
+      });
+    }
 
     res.status(200).json({
       success: true,

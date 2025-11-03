@@ -9,6 +9,11 @@
   video {
     @apply rounded-xl shadow-lg;
   }
+
+  /* Shadcn Toast styles for dark theme */
+  [data-radix-toast-viewport] {
+    z-index: 100;
+  }
 }
 
 @layer utilities {

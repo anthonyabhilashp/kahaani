@@ -17,6 +17,7 @@ import { useCredits } from "../../hooks/useCredits";
 import { CREDIT_COSTS } from "../../lib/creditConstants";
 import { useAuth } from "../../contexts/AuthContext";
 import { supabase } from "../../lib/supabaseClient";
+import { toast } from "@/hooks/use-toast";
 
 type Scene = {
   id?: string;
@@ -99,9 +100,6 @@ export default function StoryDetailsPage() {
   const bgMusicSettingsLoadedRef = useRef(false); // Track if background music settings have been loaded from DB
   const hasFetchedRef = useRef(false); // Track if story has been fetched to prevent duplicates
   const currentStoryIdRef = useRef<string | null>(null); // Track current story ID
-
-  // Toast notification state
-  const [toasts, setToasts] = useState<Array<{id: string, message: string, type: 'success' | 'error'}>>([]);
 
   // Effect selection modal state
   const [effectModalOpen, setEffectModalOpen] = useState(false);
@@ -357,11 +355,42 @@ export default function StoryDetailsPage() {
 
   // Stop audio when navigating away or unmounting
   useEffect(() => {
-    return () => {
-      console.log("🧹 Cleaning up: stopping all audio on unmount");
-      stopVideoPreview();
+    const handleRouteChange = () => {
+      console.log("🧹 Route changing: stopping all audio");
+      // Stop all audio immediately before navigation
+      previewCancelledRef.current = true;
+      setIsPlayingPreview(false);
+
+      // Stop background music
+      if (bgMusicAudioRef.current) {
+        bgMusicAudioRef.current.pause();
+        bgMusicAudioRef.current = null;
+      }
+
+      // Stop all audio elements on page
+      const audios = document.querySelectorAll('audio');
+      audios.forEach(audio => {
+        audio.pause();
+        audio.currentTime = 0;
+      });
+
+      // Clear intervals
+      if (progressIntervalRef.current) {
+        clearInterval(progressIntervalRef.current);
+        progressIntervalRef.current = null;
+      }
     };
-  }, []);
+
+    // Listen for route changes
+    router.events.on('routeChangeStart', handleRouteChange);
+
+    // Cleanup on unmount
+    return () => {
+      console.log("🧹 Component unmounting: stopping all audio");
+      router.events.off('routeChangeStart', handleRouteChange);
+      handleRouteChange(); // Also stop on unmount
+    };
+  }, [router]);
 
   // Update volume for all preloaded audio when volume changes
   useEffect(() => {
@@ -446,12 +475,19 @@ export default function StoryDetailsPage() {
     }
   }, []); // Remove mediaPreloaded dependency
 
-  const fetchStory = useCallback(async (showLoading = true) => {
+  const fetchStory = useCallback(async (showLoading = true, forceMediaReload = false) => {
     if (!id) return;
 
     console.log("📡 Fetching story details for ID:", id);
     if (showLoading) {
       setLoading(true);
+    }
+
+    // If forcing media reload, clear cache immediately
+    if (forceMediaReload) {
+      console.log("🔄 Forcing media reload - clearing cache");
+      setMediaPreloaded(false);
+      setPreloadedAudio({});
     }
 
     try {
@@ -534,8 +570,8 @@ export default function StoryDetailsPage() {
         fetchVoices();
       }
 
-      // Preload media assets after setting state - only if not already preloaded
-      if (data.scenes?.length > 0 && !mediaPreloaded) {
+      // Preload media assets after setting state - only if not already preloaded OR forcing reload
+      if (data.scenes?.length > 0 && (forceMediaReload || !mediaPreloaded)) {
         preloadMedia(data.scenes);
       }
 
@@ -898,14 +934,14 @@ export default function StoryDetailsPage() {
           }
         }
 
-        showToast("Music deleted successfully", "success");
+        toast({ description: "Music deleted successfully" });
       } else {
         const error = await res.json();
-        showToast(error.error || "Failed to delete music", "error");
+        toast({ description: error.error || "Failed to delete music", variant: "destructive" });
       }
     } catch (err) {
       console.error("Error deleting music:", err);
-      showToast("Failed to delete music", "error");
+      toast({ description: "Failed to delete music", variant: "destructive" });
     } finally {
       setDeletingMusic(false);
       setDeleteMusicDialog({ open: false, music: null });
@@ -945,18 +981,18 @@ export default function StoryDetailsPage() {
           handleSelectMusicFromLibrary(data.music);
         }
 
-        showToast("Music imported successfully", "success");
+        toast({ description: "Music imported successfully" });
         setImportUrlDialog(false);
         setImportUrl("");
         setImportName("");
         setImportNotes("");
       } else {
         const error = await res.json();
-        showToast(error.error || "Failed to import music", "error");
+        toast({ description: error.error || "Failed to import music", variant: "destructive" });
       }
     } catch (err) {
       console.error("Import error:", err);
-      showToast("Failed to import music from URL", "error");
+      toast({ description: "Failed to import music from URL", variant: "destructive" });
     } finally {
       setImporting(false);
     }
@@ -995,18 +1031,18 @@ export default function StoryDetailsPage() {
           handleSelectMusicFromLibrary(data.music);
         }
 
-        showToast("Music imported from YouTube successfully", "success");
+        toast({ description: "Music imported from YouTube successfully" });
         setImportYoutubeDialog(false);
         setImportUrl("");
         setImportName("");
         setImportNotes("");
       } else {
         const error = await res.json();
-        showToast(error.error || "Failed to import music from YouTube", "error");
+        toast({ description: error.error || "Failed to import music from YouTube", variant: "destructive" });
       }
     } catch (err) {
       console.error("YouTube import error:", err);
-      showToast("Failed to import music from YouTube", "error");
+      toast({ description: "Failed to import music from YouTube", variant: "destructive" });
     } finally {
       setImporting(false);
     }
@@ -1181,23 +1217,24 @@ export default function StoryDetailsPage() {
       setImageProgress({ current: scenes.length, total: scenes.length });
 
       // Refetch entire story details to get fresh data with all fields (without showing loading screen)
-      await fetchStory(false);
+      // Force media reload to load new images
+      await fetchStory(false, true);
 
       // Refetch credit balance
       await refetchCredits();
 
       // Show success or partial success toast
       if (result.partial_failure) {
-        showToast(
-          `⚠️ Generated ${result.success_count}/${result.total_scenes} images. Failed scenes: ${result.failed_scenes.join(', ')}`,
-          'error'
-        );
+        toast({
+          description: `⚠️ Generated ${result.success_count}/${result.total_scenes} images. Failed scenes: ${result.failed_scenes.join(', ')}`,
+          variant: "destructive"
+        });
       } else {
-        showToast(`✨ Images generated for all ${scenes.length} scenes!`, 'success');
+        toast({ description: `✨ Images generated for all ${scenes.length} scenes!` });
       }
     } catch (err) {
       console.error("Image generation error:", err);
-      showToast(`Failed to generate images: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error');
+      toast({ description: `Failed to generate images: ${err instanceof Error ? err.message : 'Unknown error'}`, variant: "destructive" });
     } finally {
       setGeneratingImages(false);
       setImageProgress({ current: 0, total: 0 });
@@ -1302,10 +1339,10 @@ export default function StoryDetailsPage() {
       await refetchCredits();
 
       // Show success toast
-      showToast(`🎙️ Audio generated for all ${scenes.length} scenes!`, 'success');
+      toast({ description: `🎙️ Audio generated for all ${scenes.length} scenes!` });
     } catch (err) {
       console.error("Bulk audio generation error:", err);
-      showToast(`Failed to generate audio: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error');
+      toast({ description: `Failed to generate audio: ${err instanceof Error ? err.message : 'Unknown error'}`, variant: "destructive" });
     } finally {
       setGeneratingAudios(false);
       setAudioProgress({ current: 0, total: 0 });
@@ -1388,11 +1425,11 @@ export default function StoryDetailsPage() {
       await refetchCredits();
 
       // Show success toast
-      showToast(`✨ Image generated for scene ${sceneIndex + 1}`, 'success');
+      toast({ description: `✨ Image generated for scene ${sceneIndex + 1}` });
 
     } catch (err) {
       console.error("Scene image generation error:", err);
-      showToast(`Failed to generate image: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error');
+      toast({ description: `Failed to generate image: ${err instanceof Error ? err.message : 'Unknown error'}`, variant: "destructive" });
     } finally {
       setGeneratingSceneImage(prev => {
         const newSet = new Set(prev);
@@ -1640,11 +1677,11 @@ export default function StoryDetailsPage() {
       await refetchCredits();
 
       // Show success toast
-      showToast(`🎙️ Audio generated for scene ${sceneIndex + 1}`, 'success');
+      toast({ description: `🎙️ Audio generated for scene ${sceneIndex + 1}` });
 
     } catch (err) {
       console.error("Scene audio generation error:", err);
-      showToast(`Failed to generate audio: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error');
+      toast({ description: `Failed to generate audio: ${err instanceof Error ? err.message : 'Unknown error'}`, variant: "destructive" });
     } finally {
       setGeneratingSceneAudio(prev => {
         const newSet = new Set(prev);
@@ -1740,10 +1777,10 @@ export default function StoryDetailsPage() {
       setVideoSuccessDialogOpen(true);
 
       // Show success toast
-      showToast(`🎬 Video generated successfully! Duration: ${Math.floor(data.duration)}s`, 'success');
+      toast({ description: `🎬 Video generated successfully! Duration: ${Math.floor(data.duration)}s` });
     } catch (err) {
       console.error("❌ Video generation error:", err);
-      showToast(`Failed to generate video: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error');
+      toast({ description: `Failed to generate video: ${err instanceof Error ? err.message : 'Unknown error'}`, variant: "destructive" });
     } finally {
       // Clean up progress interval
       if (videoProgressIntervalRef.current) {
@@ -1772,11 +1809,11 @@ export default function StoryDetailsPage() {
         throw new Error('Failed to clear stuck job');
       }
 
-      showToast('Stuck job cleared successfully!', 'success');
+      toast({ description: 'Stuck job cleared successfully!' });
       setStuckJobDialogOpen(false);
     } catch (err) {
       console.error("❌ Error clearing stuck job:", err);
-      showToast(`Failed to clear stuck job: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error');
+      toast({ description: `Failed to clear stuck job: ${err instanceof Error ? err.message : 'Unknown error'}`, variant: "destructive" });
     } finally {
       setClearingStuckJob(false);
     }
@@ -2621,27 +2658,16 @@ export default function StoryDetailsPage() {
 
       if (data.description) {
         setEditSceneDescription(data.description);
-        showToast("Scene description generated successfully", "success");
+        toast({ description: "Scene description generated successfully" });
       } else {
         throw new Error("No description returned");
       }
     } catch (err) {
       console.error("Error generating description:", err);
-      showToast("Failed to generate description with AI", "error");
+      toast({ description: "Failed to generate description with AI", variant: "destructive" });
     } finally {
       setGeneratingDescription(false);
     }
-  };
-
-  // Show toast notification
-  const showToast = (message: string, type: 'success' | 'error' = 'success') => {
-    const id = Date.now().toString();
-    setToasts(prev => [...prev, { id, message, type }]);
-
-    // Auto dismiss after 5 seconds
-    setTimeout(() => {
-      setToasts(prev => prev.filter(t => t.id !== id));
-    }, 5000);
   };
 
   if (loading) {
@@ -3812,10 +3838,10 @@ export default function StoryDetailsPage() {
                               handleSelectMusicFromLibrary(data.music);
                             }
 
-                            showToast("Music uploaded to your library successfully", "success");
+                            toast({ description: "Music uploaded to your library successfully" });
                           } catch (err) {
                             console.error("Upload error:", err);
-                            showToast("Failed to upload music", "error");
+                            toast({ description: "Failed to upload music", variant: "destructive" });
                           } finally {
                             setBgMusicUploading(false);
                           }
@@ -3912,7 +3938,7 @@ export default function StoryDetailsPage() {
                                     onClick={(e) => {
                                       e.stopPropagation();
                                       navigator.clipboard.writeText(music.notes);
-                                      showToast("Notes copied to clipboard", "success");
+                                      toast({ description: "Notes copied to clipboard" });
                                     }}
                                     className="w-8 h-8 flex items-center justify-center rounded bg-blue-600/10 hover:bg-blue-600/20 text-blue-400 opacity-0 group-hover:opacity-100 transition-all"
                                     title="Copy notes"
@@ -4099,9 +4125,13 @@ export default function StoryDetailsPage() {
                             {/* Play/Pause */}
                             <button
                               onClick={isPlayingPreview ? stopVideoPreview : startVideoPreview}
-                              className="w-8 h-8 flex items-center justify-center hover:bg-white/10 text-white rounded"
+                              disabled={!mediaPreloaded}
+                              className="w-8 h-8 flex items-center justify-center hover:bg-white/10 text-white rounded disabled:opacity-50 disabled:cursor-not-allowed"
+                              title={!mediaPreloaded ? "Loading audio..." : (isPlayingPreview ? "Pause" : "Play")}
                             >
-                              {isPlayingPreview ? (
+                              {!mediaPreloaded ? (
+                                <Loader2 className="w-6 h-6 animate-spin" />
+                              ) : isPlayingPreview ? (
                                 <Pause className="w-6 h-6 fill-current" />
                               ) : (
                                 <Play className="w-6 h-6 fill-current" />
@@ -5427,33 +5457,6 @@ export default function StoryDetailsPage() {
           </div>
         </div>
       )}
-
-      {/* Toast Notifications - Bottom Left */}
-      <div className="fixed bottom-4 left-4 z-[100] space-y-2">
-        {toasts.map((toast) => (
-          <div
-            key={toast.id}
-            className={`flex items-center gap-3 px-4 py-3 rounded-lg shadow-lg backdrop-blur-sm border animate-in slide-in-from-left duration-300 ${
-              toast.type === 'success'
-                ? 'bg-green-900/90 border-green-700 text-green-100'
-                : 'bg-red-900/90 border-red-700 text-red-100'
-            }`}
-          >
-            {toast.type === 'success' ? (
-              <Check className="w-5 h-5 flex-shrink-0" />
-            ) : (
-              <X className="w-5 h-5 flex-shrink-0" />
-            )}
-            <p className="text-sm font-medium">{toast.message}</p>
-            <button
-              onClick={() => setToasts(prev => prev.filter(t => t.id !== toast.id))}
-              className="ml-2 hover:opacity-70 transition-opacity"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-        ))}
-      </div>
 
       {/* Delete Music Confirmation Dialog */}
       {deleteMusicDialog.open && deleteMusicDialog.music && (

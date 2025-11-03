@@ -682,7 +682,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           const wordsPerSecond = 2; // Reading speed (same as duration calculation)
           const wordDuration = 1 / wordsPerSecond;
 
-          words.forEach((word, i) => {
+          words.forEach((word: string, i: number) => {
             const start = timeOffset + (i * wordDuration);
             const end = start + wordDuration;
             allWordTimestamps.push({

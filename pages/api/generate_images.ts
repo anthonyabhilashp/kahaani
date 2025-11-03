@@ -211,13 +211,13 @@ Return exactly ${scenes.length} visual descriptions in the visual_descriptions a
         environments = descParsed.environments || [];
         props = descParsed.props || [];
 
-        logger.log(`✅ Extracted story elements:`);
-        logger.log(`   👥 Characters: ${characters.length}`);
-        characters.forEach((c: any) => logger.log(`      - ${c.name}: ${c.description.substring(0, 100)}...`));
-        logger.log(`   🌍 Environments: ${environments.length}`);
-        environments.forEach((e: any) => logger.log(`      - ${e.name}: ${e.description.substring(0, 100)}...`));
-        logger.log(`   🎯 Props: ${props.length}`);
-        props.forEach((p: any) => logger.log(`      - ${p.name}: ${p.description.substring(0, 100)}...`));
+        logger?.log(`✅ Extracted story elements:`);
+        logger?.log(`   👥 Characters: ${characters.length}`);
+        characters.forEach((c: any) => logger?.log(`      - ${c.name}: ${c.description.substring(0, 100)}...`));
+        logger?.log(`   🌍 Environments: ${environments.length}`);
+        environments.forEach((e: any) => logger?.log(`      - ${e.name}: ${e.description.substring(0, 100)}...`));
+        logger?.log(`   🎯 Props: ${props.length}`);
+        props.forEach((p: any) => logger?.log(`      - ${p.name}: ${p.description.substring(0, 100)}...`));
 
         const rawDescriptions = descParsed.visual_descriptions || [];
         logger?.log(`📝 Raw descriptions type: ${typeof rawDescriptions}, length: ${rawDescriptions.length}`);

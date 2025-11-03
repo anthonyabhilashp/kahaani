@@ -25,63 +25,87 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const isAdmin = userData?.is_admin === true;
 
-    // Fetch stories - admin sees all, regular users see only theirs
-    let query = supabaseAdmin
-      .from("stories")
+    // 🚀 OPTIMIZED: Use VIEW to get all data in ONE query
+    // This replaces 3 queries per story with 1 query total
+    let viewQuery = supabaseAdmin
+      .from("stories_dashboard")
       .select("*")
-      .order("created_at", { ascending: false });
+      .order("created_at", { ascending: false })
+      .limit(50);
 
-    // If not admin, filter by user_id
     if (!isAdmin) {
-      query = query.eq('user_id', user.id);
+      viewQuery = viewQuery.eq('user_id', user.id);
     }
 
-    const { data: stories, error } = await query;
+    const { data: rawData, error: queryError } = await viewQuery;
 
-    if (error) throw error;
+    if (queryError) {
+      // Fallback to old method if view doesn't exist
+      console.warn('Optimized view not available, using fallback:', queryError.message);
 
-    // Enrich each story with first scene image and metadata
-    const enrichedStories = await Promise.all(
-      (stories || []).map(async (story) => {
-        // Get first scene image (ordered by scene order)
-        const { data: firstScene } = await supabaseAdmin
-          .from("scenes")
-          .select("image_url")
-          .eq("story_id", story.id)
-          .order("order", { ascending: true })
-          .limit(1)
-          .single();
+      let query = supabaseAdmin
+        .from("stories")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(50); // Limit to 50 stories for performance
 
-        // Get scene count
-        const { count: sceneCount } = await supabaseAdmin
-          .from("scenes")
-          .select("*", { count: "exact", head: true })
-          .eq("story_id", story.id);
+      if (!isAdmin) {
+        query = query.eq('user_id', user.id);
+      }
 
-        // Get latest video metadata
-        const { data: video } = await supabaseAdmin
-          .from("videos")
-          .select("duration, video_url, created_at")
-          .eq("story_id", story.id)
-          .order("created_at", { ascending: false })
-          .limit(1)
-          .single();
+      const { data: stories, error } = await query;
+      if (error) throw error;
 
-        // Use stored total_duration from story, fallback to video duration or 0
+      // Simplified enrichment - get scene counts and first images in batch
+      const storyIds = (stories || []).map(s => s.id);
+
+      // Get all first scenes in one query
+      const { data: firstScenes } = await supabaseAdmin
+        .from("scenes")
+        .select("story_id, image_url")
+        .in("story_id", storyIds)
+        .order("order", { ascending: true });
+
+      // Get all videos in one query
+      const { data: videos } = await supabaseAdmin
+        .from("videos")
+        .select("story_id, duration, video_url, created_at")
+        .in("story_id", storyIds);
+
+      // Group by story_id
+      const firstSceneMap = new Map();
+      firstScenes?.forEach(scene => {
+        if (!firstSceneMap.has(scene.story_id)) {
+          firstSceneMap.set(scene.story_id, scene.image_url);
+        }
+      });
+
+      const videoMap = new Map();
+      videos?.forEach(video => {
+        if (!videoMap.has(video.story_id)) {
+          videoMap.set(video.story_id, video);
+        }
+      });
+
+      const enrichedStories = (stories || []).map(story => {
+        const video = videoMap.get(story.id);
         const totalDuration = story.total_duration || video?.duration || 0;
 
         return {
           ...story,
-          first_scene_image: firstScene?.image_url || null,
-          scene_count: sceneCount || 0,
+          first_scene_image: firstSceneMap.get(story.id) || null,
+          scene_count: story.scene_count || 0,
           video_duration: totalDuration,
           video_url: video?.video_url || null,
           video_created_at: video?.created_at || null,
         };
-      })
-    );
+      });
 
-    res.status(200).json(enrichedStories);
+      return res.status(200).json(enrichedStories);
+    }
+
+    // Use optimized function result
+    res.status(200).json(rawData || []);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
