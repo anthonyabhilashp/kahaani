@@ -1,6 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { Paddle, Environment } from "@paddle/paddle-node-sdk";
 import { supabaseAdmin } from "../../../lib/supabaseAdmin";
+import { checkRateLimit, RateLimits } from "../../../lib/rateLimit";
 
 // Initialize Paddle
 const paddle = new Paddle(process.env.PADDLE_API_KEY!, {
@@ -24,6 +25,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (authError || !user) {
       return res.status(401).json({ error: "Unauthorized - Invalid session" });
+    }
+
+    // ⏱️ Rate limiting - prevent checkout abuse
+    const rateLimit = checkRateLimit(user.id, RateLimits.PAYMENT);
+    if (!rateLimit.allowed) {
+      const retryAfter = Math.ceil((rateLimit.resetTime - Date.now()) / 1000);
+      return res.status(429).json({
+        error: "Too many checkout requests. Please wait before trying again.",
+        retry_after: retryAfter
+      });
     }
 
     const { credits, price } = req.body;
@@ -65,10 +76,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         credits: credits.toString(),
         price: price.toString(),
       },
-      customerEmail: user.email!,
-      checkoutSettings: {
-        successUrl: `${appUrl}/credits?success=true`,
-        allowLogout: false,
+      checkout: {
+        url: `${appUrl}/credits?success=true`,
       },
     });
 

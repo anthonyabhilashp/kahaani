@@ -4,6 +4,7 @@ import fetch from "node-fetch";
 import { JobLogger } from "../../lib/logger";
 import { v4 as uuidv4 } from "uuid";
 import { calculateSceneDuration } from "../../lib/utils";
+import { checkRateLimit, RateLimits } from "../../lib/rateLimit";
 
 // --- Utility ---
 function isLongText(text: string): boolean {
@@ -60,6 +61,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (authError || !user) {
       return res.status(401).json({ error: "Unauthorized - Invalid session" });
+    }
+
+    // ⏱️ Rate limiting - prevent abuse
+    const rateLimit = checkRateLimit(user.id, RateLimits.STORY_GENERATION);
+    if (!rateLimit.allowed) {
+      const retryAfter = Math.ceil((rateLimit.resetTime - Date.now()) / 1000);
+      return res.status(429).json({
+        error: "Too many requests. Please wait before creating another story.",
+        retry_after: retryAfter
+      });
     }
 
     let storyId = story_id || uuidv4();
