@@ -75,6 +75,7 @@ pids
 
 # Next.js build output
 .next
+tsconfig.tsbuildinfo
 
 # Nuxt.js build / generate output
 .nuxt

@@ -4,6 +4,7 @@ node_modules/
 # Build output (will be generated during build)
 .next/
 out/
+tsconfig.tsbuildinfo
 
 # Logs
 logs/
