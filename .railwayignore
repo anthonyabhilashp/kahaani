@@ -1,0 +1,38 @@
+# Dependencies (will be installed during build)
+node_modules/
+
+# Build output (will be generated during build)
+.next/
+out/
+
+# Logs
+logs/
+*.log
+
+# Temporary folders
+tmp/
+temp/
+
+# Environment files (configure via Railway dashboard)
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test files
+test.mp4
+
+# Git
+.git/
+.gitignore

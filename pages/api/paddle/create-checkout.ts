@@ -1,9 +1,11 @@
 import type { NextApiRequest, NextApiResponse } from "next";
-import Stripe from "stripe";
+import { initializePaddle, Paddle } from "@paddle/paddle-node-sdk";
 import { supabaseAdmin } from "../../../lib/supabaseAdmin";
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: "2025-10-29.clover",
+// Initialize Paddle
+const paddle: Paddle = initializePaddle({
+  environment: process.env.PADDLE_ENVIRONMENT as "sandbox" | "production" || "sandbox",
+  apiKey: process.env.PADDLE_API_KEY!,
 });
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -48,37 +50,35 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: "Invalid package selected" });
     }
 
-    // Create Stripe Checkout Session
-    const session = await stripe.checkout.sessions.create({
-      payment_method_types: ['card'],
-      line_items: [
+    // Create Paddle checkout
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3005';
+
+    const checkout = await paddle.transactions.create({
+      items: [
         {
-          price_data: {
-            currency: 'usd',
-            product_data: {
-              name: `${credits} Kahaani Credits`,
-              description: `${credits} credits for image and audio generation. 1 credit = 1 image or 1 audio narration.`,
-            },
-            unit_amount: price * 100, // Convert to cents
-          },
+          priceId: process.env[`PADDLE_PRICE_ID_${credits}`]!, // We'll set up price IDs in Paddle dashboard
           quantity: 1,
         },
       ],
-      mode: 'payment',
-      success_url: `${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/credits?success=true&session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/credits?canceled=true`,
-      metadata: {
+      customData: {
         user_id: user.id,
         user_email: user.email!,
         credits: credits.toString(),
         price: price.toString(),
       },
-      customer_email: user.email!,
+      customerEmail: user.email!,
+      checkoutSettings: {
+        successUrl: `${appUrl}/credits?success=true`,
+        allowLogout: false,
+      },
     });
 
-    res.status(200).json({ sessionId: session.id, url: session.url });
+    res.status(200).json({
+      checkoutUrl: checkout.data?.checkoutUrl,
+      transactionId: checkout.data?.id
+    });
   } catch (err: any) {
-    console.error("Stripe checkout error:", err);
+    console.error("Paddle checkout error:", err);
     res.status(500).json({ error: err.message });
   }
 }

@@ -96,7 +96,42 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   let jobId: string | null = null;
 
   try {
-    // 🚨 CHECK IF VIDEO GENERATION IS ALREADY IN PROGRESS
+    // 🚨 CHECK GLOBAL CONCURRENT VIDEO GENERATION LIMIT
+    const MAX_CONCURRENT_VIDEOS = parseInt(process.env.MAX_CONCURRENT_VIDEOS || '10');
+    const { data: activeJobs, error: activeJobsError } = await supabaseAdmin
+      .from('video_generation_jobs')
+      .select('id, story_id, started_at')
+      .eq('status', 'processing');
+
+    if (activeJobs && activeJobs.length >= MAX_CONCURRENT_VIDEOS) {
+      // Check if any are stale
+      const now = Date.now();
+      const twoMinutes = 2 * 60 * 1000;
+      const staleJobs = activeJobs.filter(job =>
+        now - new Date(job.started_at).getTime() > twoMinutes
+      );
+
+      if (staleJobs.length > 0) {
+        // Clean up stale jobs
+        console.log(`⚠️ Cleaning up ${staleJobs.length} stale video generation jobs`);
+        await supabaseAdmin
+          .from('video_generation_jobs')
+          .update({
+            status: 'failed',
+            completed_at: new Date().toISOString(),
+            error: 'Job timed out (stale for more than 2 minutes)'
+          })
+          .in('id', staleJobs.map(j => j.id));
+      } else {
+        // All jobs are active - server is busy
+        return res.status(429).json({
+          error: `Server is currently processing ${activeJobs.length} videos. Please try again in a few minutes.`,
+          retry_after: 60 // seconds
+        });
+      }
+    }
+
+    // 🚨 CHECK IF VIDEO GENERATION IS ALREADY IN PROGRESS FOR THIS STORY
     const { data: existingJob } = await supabaseAdmin
       .from('video_generation_jobs')
       .select('id, started_at')

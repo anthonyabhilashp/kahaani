@@ -1,18 +1,88 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
 import { supabase } from "../lib/supabaseClient";
+import { useAuth } from "../contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Loader2, CreditCard, CheckCircle2, XCircle, Sparkles } from "lucide-react";
+import {
+  Loader2,
+  CreditCard,
+  CheckCircle2,
+  XCircle,
+  Sparkles,
+  ArrowLeft,
+  Video,
+  Film,
+  Settings,
+  User,
+  LogOut,
+  Coins,
+  Menu,
+  X,
+  Zap,
+  Info
+} from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { useCredits } from "../hooks/useCredits";
+
+type CreditPackage = {
+  id: string;
+  credits: number;
+  price: number;
+  pricePerCredit: number;
+  popular?: boolean;
+  bestValue?: boolean;
+  savings?: string;
+};
+
+const packages: CreditPackage[] = [
+  {
+    id: "starter",
+    credits: 25,
+    price: 20,
+    pricePerCredit: 0.80,
+    savings: "~2 stories"
+  },
+  {
+    id: "popular",
+    credits: 100,
+    price: 70,
+    pricePerCredit: 0.70,
+    popular: true,
+    savings: "~10 stories"
+  },
+  {
+    id: "pro",
+    credits: 300,
+    price: 180,
+    pricePerCredit: 0.60,
+    bestValue: true,
+    savings: "~30 stories"
+  },
+  {
+    id: "enterprise",
+    credits: 1000,
+    price: 500,
+    pricePerCredit: 0.50,
+    savings: "~100 stories"
+  }
+];
 
 export default function CreditsPage() {
   const router = useRouter();
+  const { user, signOut } = useAuth();
+  const { balance: creditBalance, loading: creditsLoading, refreshBalance } = useCredits();
   const [loading, setLoading] = useState(true);
-  const [purchasing, setPurchasing] = useState(false);
-  const [credits, setCredits] = useState<number | null>(null);
-  const [user, setUser] = useState<any>(null);
+  const [purchasing, setPurchasing] = useState<string | null>(null);
   const [showSuccess, setShowSuccess] = useState(false);
   const [showCanceled, setShowCanceled] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [selectedCategory, setSelectedCategory] = useState("faceless-videos");
 
   useEffect(() => {
     checkUser();
@@ -22,11 +92,12 @@ export default function CreditsPage() {
     // Check for success/canceled params from Stripe redirect
     if (router.query.success === 'true') {
       setShowSuccess(true);
-      fetchCredits(); // Refresh credits after purchase
+      refreshBalance(); // Refresh credits after purchase
       // Clear URL params after showing message
       setTimeout(() => {
+        setShowSuccess(false);
         router.replace('/credits', undefined, { shallow: true });
-      }, 3000);
+      }, 5000);
     } else if (router.query.canceled === 'true') {
       setShowCanceled(true);
       setTimeout(() => {
@@ -44,198 +115,462 @@ export default function CreditsPage() {
       return;
     }
 
-    setUser(session.user);
-    await fetchCredits();
     setLoading(false);
   };
 
-  const fetchCredits = async () => {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session) return;
-
-    const response = await fetch('/api/get_user_credits', {
-      headers: {
-        'Authorization': `Bearer ${session.access_token}`,
-      },
-    });
-
-    if (response.ok) {
-      const data = await response.json();
-      setCredits(data.balance);
-    }
-  };
-
-  const handlePurchase = async () => {
-    setPurchasing(true);
+  const handlePurchase = async (pkg: CreditPackage) => {
+    setPurchasing(pkg.id);
     try {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) {
         alert('Please log in to purchase credits');
+        setPurchasing(null);
         return;
       }
 
-      const response = await fetch('/api/stripe/create-checkout', {
+      const response = await fetch('/api/paddle/create-checkout', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${session.access_token}`,
         },
         body: JSON.stringify({
-          credits: 20,
+          credits: pkg.credits,
+          price: pkg.price,
         }),
       });
 
       const data = await response.json();
 
-      if (data.url) {
-        // Redirect to Stripe Checkout
-        window.location.href = data.url;
+      if (data.checkoutUrl) {
+        // Redirect to Paddle Checkout
+        window.location.href = data.checkoutUrl;
       } else {
         alert('Failed to create checkout session');
-        setPurchasing(false);
+        setPurchasing(null);
       }
     } catch (error) {
       console.error('Purchase error:', error);
       alert('Failed to initiate purchase');
-      setPurchasing(false);
+      setPurchasing(null);
     }
   };
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-900 flex items-center justify-center">
+      <div className="min-h-screen bg-black flex items-center justify-center">
         <Loader2 className="w-8 h-8 animate-spin text-orange-400" />
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-900 text-white">
-      {/* Header */}
-      <header className="border-b border-gray-800 bg-gray-950">
-        <div className="container mx-auto px-4 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <button
-              onClick={() => router.push('/')}
-              className="text-gray-400 hover:text-white transition-colors"
-            >
-              ← Back to Dashboard
-            </button>
-            <h1 className="text-2xl font-bold">Purchase Credits</h1>
-          </div>
-          <div className="flex items-center gap-2">
-            <Sparkles className="w-5 h-5 text-orange-400" />
-            <span className="text-lg font-semibold">{credits ?? 0} Credits</span>
-          </div>
-        </div>
-      </header>
-
-      {/* Success/Canceled Alerts */}
-      {showSuccess && (
-        <div className="container mx-auto px-4 pt-6">
-          <div className="bg-green-900/20 border border-green-500 rounded-lg p-4 flex items-center gap-3">
-            <CheckCircle2 className="w-6 h-6 text-green-400" />
-            <div>
-              <h3 className="font-semibold">Payment Successful!</h3>
-              <p className="text-sm text-gray-300">Your credits have been added to your account.</p>
+    <div className="min-h-screen bg-black text-white flex">
+      {/* Mobile Sidebar Overlay */}
+      {mobileMenuOpen && (
+        <>
+          {/* Backdrop */}
+          <div
+            className="md:hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-40"
+            onClick={() => setMobileMenuOpen(false)}
+          />
+          {/* Sidebar Drawer */}
+          <div className="md:hidden fixed inset-y-0 left-0 w-64 bg-gray-950 border-r border-gray-800 flex flex-col z-50">
+            {/* Close button */}
+            <div className="p-4 flex items-center justify-between border-b border-gray-800">
+              <h2 className="text-xl font-bold text-white">Menu</h2>
+              <button
+                onClick={() => setMobileMenuOpen(false)}
+                className="text-gray-400 hover:text-white transition-colors"
+              >
+                <X className="w-6 h-6" />
+              </button>
             </div>
-          </div>
-        </div>
-      )}
 
-      {showCanceled && (
-        <div className="container mx-auto px-4 pt-6">
-          <div className="bg-yellow-900/20 border border-yellow-500 rounded-lg p-4 flex items-center gap-3">
-            <XCircle className="w-6 h-6 text-yellow-400" />
-            <div>
-              <h3 className="font-semibold">Payment Canceled</h3>
-              <p className="text-sm text-gray-300">Your payment was canceled. No charges were made.</p>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Main Content */}
-      <div className="container mx-auto px-4 py-12 max-w-4xl">
-        {/* Current Balance */}
-        <Card className="bg-gray-800 border-gray-700 p-8 mb-8">
-          <div className="text-center">
-            <p className="text-gray-400 text-sm uppercase tracking-wide mb-2">Current Balance</p>
-            <p className="text-6xl font-bold text-orange-400 mb-2">{credits ?? 0}</p>
-            <p className="text-gray-400">Credits Available</p>
-          </div>
-        </Card>
-
-        {/* Credit Package */}
-        <Card className="bg-gray-800 border-gray-700 p-8">
-          <div className="text-center mb-6">
-            <h2 className="text-3xl font-bold mb-2">Buy More Credits</h2>
-            <p className="text-gray-400">1 credit = 1 image OR 1 audio narration</p>
-          </div>
-
-          <div className="bg-gradient-to-br from-orange-500 to-pink-500 p-1 rounded-lg max-w-md mx-auto">
-            <div className="bg-gray-900 rounded-lg p-8">
-              <div className="text-center">
-                <div className="mb-4">
-                  <CreditCard className="w-16 h-16 mx-auto text-orange-400" />
-                </div>
-                <h3 className="text-4xl font-bold mb-2">20 Credits</h3>
-                <p className="text-3xl font-bold text-orange-400 mb-4">$20</p>
-                <p className="text-gray-400 text-sm mb-6">$1 per credit</p>
-
-                <Button
-                  onClick={handlePurchase}
-                  disabled={purchasing}
-                  className="w-full bg-orange-600 hover:bg-orange-700 text-white font-semibold py-6 text-lg"
+            {/* Navigation */}
+            <nav className="flex-1 p-4 space-y-1">
+              <div className="mb-4">
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider px-3 mb-2">
+                  Categories
+                </p>
+                <button
+                  onClick={() => {
+                    router.push('/');
+                    setMobileMenuOpen(false);
+                  }}
+                  className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors text-gray-400 hover:bg-gray-900 hover:text-white"
                 >
-                  {purchasing ? (
-                    <>
-                      <Loader2 className="w-5 h-5 animate-spin mr-2" />
-                      Redirecting to Stripe...
-                    </>
+                  <Video className="w-5 h-5" />
+                  <span className="font-medium">Stories</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    router.push('/?category=series');
+                    setMobileMenuOpen(false);
+                  }}
+                  className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors mt-1 text-gray-400 hover:bg-gray-900 hover:text-white"
+                >
+                  <Film className="w-5 h-5" />
+                  <span className="font-medium">Series</span>
+                </button>
+              </div>
+            </nav>
+
+            {/* Credit Balance Section */}
+            <div className="border-t border-gray-800 p-4">
+              <div className="bg-gradient-to-br from-orange-600/20 to-pink-600/20 border border-orange-600/30 rounded-lg p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-full bg-orange-600/30 flex items-center justify-center">
+                      <Coins className="w-4 h-4 text-orange-400" />
+                    </div>
+                    <span className="text-xs font-medium text-gray-400 uppercase tracking-wider">Credits</span>
+                  </div>
+                </div>
+                <div className="flex items-baseline gap-1">
+                  {creditsLoading ? (
+                    <Loader2 className="w-5 h-5 animate-spin text-orange-400" />
                   ) : (
                     <>
-                      <CreditCard className="w-5 h-5 mr-2" />
-                      Purchase 20 Credits
+                      <span className="text-3xl font-bold text-white">{creditBalance}</span>
+                      <span className="text-sm text-gray-400">available</span>
                     </>
                   )}
-                </Button>
+                </div>
+                <p className="text-xs text-gray-500 mt-2">
+                  1 image or audio = 1 credit
+                </p>
+              </div>
+            </div>
+
+            {/* User Profile Section */}
+            <div className="border-t border-gray-800 p-4">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <div className="flex items-center gap-3 px-2 py-2 rounded-lg hover:bg-gray-900 cursor-pointer transition-colors">
+                    <div className="w-9 h-9 rounded-full bg-gradient-to-br from-orange-500 to-pink-500 flex items-center justify-center">
+                      <User className="w-5 h-5 text-white" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-white truncate">User Account</p>
+                      <p className="text-xs text-gray-500 truncate">{user?.email || 'user@example.com'}</p>
+                    </div>
+                  </div>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-56 bg-gray-900 border-gray-800">
+                  <DropdownMenuItem
+                    className="flex items-center gap-3 text-gray-400 hover:text-white hover:bg-gray-800 cursor-pointer"
+                    onClick={() => {/* Settings functionality can be added later */}}
+                  >
+                    <Settings className="w-4 h-4" />
+                    <span>Settings</span>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    className="flex items-center gap-3 text-gray-400 hover:text-red-400 hover:bg-gray-800 cursor-pointer"
+                    onClick={signOut}
+                  >
+                    <LogOut className="w-4 h-4" />
+                    <span>Sign Out</span>
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Left Sidebar - Desktop only */}
+      <div className="hidden md:flex w-64 bg-gray-950 border-r border-gray-800 flex-col fixed h-full">
+        {/* Logo/Brand */}
+        <div className="p-6 border-b border-gray-800">
+          <h1 className="text-2xl font-bold text-white">Kahaani</h1>
+          <p className="text-xs text-gray-500 mt-1">AI Story Studio</p>
+        </div>
+
+        {/* Navigation */}
+        <nav className="flex-1 p-4 space-y-1">
+          <div className="mb-4">
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider px-3 mb-2">
+              Categories
+            </p>
+            <button
+              onClick={() => router.push('/')}
+              className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors text-gray-400 hover:bg-gray-900 hover:text-white"
+            >
+              <Video className="w-5 h-5" />
+              <span className="font-medium">Stories</span>
+            </button>
+
+            <button
+              onClick={() => router.push('/?category=series')}
+              className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors mt-1 text-gray-400 hover:bg-gray-900 hover:text-white"
+            >
+              <Film className="w-5 h-5" />
+              <span className="font-medium">Series</span>
+            </button>
+          </div>
+        </nav>
+
+        {/* Credit Balance Section */}
+        <div className="border-t border-gray-800 p-4">
+          <div className="bg-gradient-to-br from-orange-600/20 to-pink-600/20 border border-orange-600/30 rounded-lg p-4">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-full bg-orange-600/30 flex items-center justify-center">
+                  <Coins className="w-4 h-4 text-orange-400" />
+                </div>
+                <span className="text-xs font-medium text-gray-400 uppercase tracking-wider">Credits</span>
+              </div>
+            </div>
+            <div className="flex items-baseline gap-1">
+              {creditsLoading ? (
+                <Loader2 className="w-5 h-5 animate-spin text-orange-400" />
+              ) : (
+                <>
+                  <span className="text-3xl font-bold text-white">{creditBalance}</span>
+                  <span className="text-sm text-gray-400">available</span>
+                </>
+              )}
+            </div>
+            <p className="text-xs text-gray-500 mt-2">
+              1 image or audio = 1 credit
+            </p>
+          </div>
+        </div>
+
+        {/* User Profile Section */}
+        <div className="border-t border-gray-800 p-4">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <div className="flex items-center gap-3 px-2 py-2 rounded-lg hover:bg-gray-900 cursor-pointer transition-colors">
+                <div className="w-9 h-9 rounded-full bg-gradient-to-br from-orange-500 to-pink-500 flex items-center justify-center">
+                  <User className="w-5 h-5 text-white" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-white truncate">User Account</p>
+                  <p className="text-xs text-gray-500 truncate">{user?.email || 'user@example.com'}</p>
+                </div>
+              </div>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56 bg-gray-900 border-gray-800">
+              <DropdownMenuItem
+                className="flex items-center gap-3 text-gray-400 hover:text-white hover:bg-gray-800 cursor-pointer"
+                onClick={() => {/* Settings functionality can be added later */}}
+              >
+                <Settings className="w-4 h-4" />
+                <span>Settings</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                className="flex items-center gap-3 text-gray-400 hover:text-red-400 hover:bg-gray-800 cursor-pointer"
+                onClick={signOut}
+              >
+                <LogOut className="w-4 h-4" />
+                <span>Sign Out</span>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </div>
+
+      {/* Main Content */}
+      <div className="flex-1 md:ml-64 w-full">
+        {/* Mobile Header */}
+        <div className="md:hidden border-b border-gray-800 bg-gray-950 sticky top-0 z-20 px-4 py-3">
+          <div className="flex items-center justify-between">
+            <button
+              onClick={() => setMobileMenuOpen(true)}
+              className="text-gray-400 hover:text-white transition-colors"
+            >
+              <Menu className="w-6 h-6" />
+            </button>
+            <h1 className="text-base font-semibold text-white">Buy Credits</h1>
+            <div className="flex items-center gap-1 bg-gray-800/50 rounded-lg px-2 py-1">
+              <Coins className="w-3.5 h-3.5 text-orange-500" />
+              <span className="text-sm font-semibold text-white">{creditBalance ?? 0}</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Page Content */}
+        <div className="px-4 md:px-8 py-6 md:py-8">
+          {/* Desktop Header with Balance */}
+          <div className="hidden md:flex items-center justify-between mb-10">
+            <div>
+              <h1 className="text-2xl font-semibold text-white">Buy Credits</h1>
+              <p className="text-sm text-gray-400 mt-1">Choose a package that fits your needs</p>
+            </div>
+            <div className="flex items-center gap-2 bg-gray-800/50 rounded-lg px-3 py-2">
+              <Coins className="w-4 h-4 text-orange-500" />
+              <div className="flex items-baseline gap-1">
+                <span className="text-lg font-semibold text-white">{creditBalance ?? 0}</span>
+                <span className="text-xs text-gray-500">credits</span>
               </div>
             </div>
           </div>
 
-          <div className="mt-8 text-center text-sm text-gray-400">
-            <p>Secure payment powered by Stripe</p>
-            <p className="mt-2">Credits never expire</p>
-          </div>
-        </Card>
+          {/* Success/Canceled Alerts */}
+          {showSuccess && (
+            <div className="mb-6">
+              <div className="bg-green-900/20 border border-green-500 rounded-lg p-4 flex items-center gap-3">
+                <CheckCircle2 className="w-6 h-6 text-green-400 flex-shrink-0" />
+                <div>
+                  <h3 className="font-semibold">Payment Successful!</h3>
+                  <p className="text-sm text-gray-300">Your credits have been added to your account.</p>
+                </div>
+              </div>
+            </div>
+          )}
 
-        {/* Usage Info */}
-        <Card className="bg-gray-800 border-gray-700 p-6 mt-8">
-          <h3 className="text-xl font-semibold mb-4">How Credits Work</h3>
-          <ul className="space-y-3 text-gray-300">
-            <li className="flex items-start gap-3">
-              <span className="text-orange-400 font-bold">•</span>
-              <span><strong>Image Generation:</strong> 1 credit per scene image</span>
-            </li>
-            <li className="flex items-start gap-3">
-              <span className="text-orange-400 font-bold">•</span>
-              <span><strong>Audio Narration:</strong> 1 credit per scene audio</span>
-            </li>
-            <li className="flex items-start gap-3">
-              <span className="text-orange-400 font-bold">•</span>
-              <span><strong>Video Generation:</strong> Free! No credits required</span>
-            </li>
-            <li className="flex items-start gap-3">
-              <span className="text-orange-400 font-bold">•</span>
-              <span>New users get 15 free credits to get started</span>
-            </li>
-            <li className="flex items-start gap-3">
-              <span className="text-orange-400 font-bold">•</span>
-              <span>Credits never expire</span>
-            </li>
-          </ul>
-        </Card>
+          {showCanceled && (
+            <div className="mb-6">
+              <div className="bg-yellow-900/20 border border-yellow-500 rounded-lg p-4 flex items-center gap-3">
+                <XCircle className="w-6 h-6 text-yellow-400 flex-shrink-0" />
+                <div>
+                  <h3 className="font-semibold">Payment Canceled</h3>
+                  <p className="text-sm text-gray-300">Your payment was canceled. No charges were made.</p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Credit Packages */}
+          <div className="mb-12">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+              {packages.map((pkg) => (
+                <div
+                  key={pkg.id}
+                  className={`relative rounded-xl border transition-all duration-200 hover:-translate-y-1 ${
+                    pkg.popular
+                      ? "bg-gradient-to-b from-orange-500/5 to-transparent border-orange-500/30 shadow-lg shadow-orange-500/5"
+                      : pkg.bestValue
+                      ? "bg-gradient-to-b from-green-500/5 to-transparent border-green-500/30 shadow-lg shadow-green-500/5"
+                      : "bg-gray-900/40 border-gray-800/60 hover:border-gray-700"
+                  }`}
+                >
+                  {/* Badge */}
+                  {pkg.popular && (
+                    <div className="absolute -top-3 left-1/2 -translate-x-1/2 z-10">
+                      <span className="bg-gradient-to-r from-orange-500 to-orange-600 text-white text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-wider shadow-lg">
+                        Popular
+                      </span>
+                    </div>
+                  )}
+                  {pkg.bestValue && (
+                    <div className="absolute -top-3 left-1/2 -translate-x-1/2 z-10">
+                      <span className="bg-gradient-to-r from-green-500 to-green-600 text-white text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-wider shadow-lg flex items-center gap-1">
+                        <Zap className="w-3 h-3" />
+                        Best Value
+                      </span>
+                    </div>
+                  )}
+
+                  <div className="p-6">
+                    {/* Credits */}
+                    <div className="mb-4">
+                      <div className="flex items-baseline justify-center gap-1.5 mb-1">
+                        <h3 className="text-3xl font-bold text-white">{pkg.credits}</h3>
+                        <span className="text-sm text-gray-500 font-medium">credits</span>
+                        <div className="relative group">
+                          <Info className="w-3.5 h-3.5 text-gray-600 hover:text-orange-500 cursor-help transition-colors ml-0.5" />
+                          <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2.5 hidden group-hover:block z-50 pointer-events-none">
+                            <div className="bg-gray-800 backdrop-blur-sm text-white rounded-lg px-3 py-2 shadow-2xl border border-gray-700 min-w-max">
+                              <div className="space-y-0.5 text-[11px] font-medium">
+                                <div className="flex items-center gap-1.5">
+                                  <span className="text-orange-400">1</span>
+                                  <span className="text-gray-300">credit per image</span>
+                                </div>
+                                <div className="flex items-center gap-1.5">
+                                  <span className="text-orange-400">1</span>
+                                  <span className="text-gray-300">credit per audio</span>
+                                </div>
+                              </div>
+                              <div className="absolute top-full left-1/2 -translate-x-1/2">
+                                <div className="border-[5px] border-transparent border-t-gray-800"></div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      <p className="text-center text-xs text-gray-500">{pkg.savings}</p>
+                    </div>
+
+                    {/* Price */}
+                    <div className="text-center mb-5">
+                      <div className="flex items-baseline justify-center gap-0.5 mb-1">
+                        <span className="text-4xl font-bold text-white">${pkg.price}</span>
+                      </div>
+                      <p className="text-xs text-gray-500">${pkg.pricePerCredit.toFixed(2)} per credit</p>
+                    </div>
+
+                    {/* Buy Button */}
+                    <Button
+                      onClick={() => handlePurchase(pkg)}
+                      disabled={purchasing !== null}
+                      className={`w-full font-semibold text-sm h-10 rounded-lg transition-all ${
+                        pkg.popular
+                          ? "bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 text-white shadow-lg shadow-orange-500/25"
+                          : pkg.bestValue
+                          ? "bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white shadow-lg shadow-green-500/25"
+                          : "bg-gray-800 hover:bg-gray-700 text-white border border-gray-700"
+                      }`}
+                    >
+                      {purchasing === pkg.id ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                          Processing...
+                        </>
+                      ) : (
+                        "Buy Now"
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* How Credits Work */}
+          <Card className="bg-gray-900/30 border-gray-800/50 p-6">
+            <h3 className="text-lg font-semibold mb-5">How Credits Work</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div>
+                <h4 className="text-xs font-semibold mb-3 text-gray-400 uppercase tracking-wider">What Credits Cover</h4>
+                <ul className="space-y-2.5 text-gray-400 text-sm">
+                  <li className="flex items-start gap-2">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-green-500 flex-shrink-0 mt-0.5" />
+                    <span><span className="text-white font-medium">Each Scene:</span> 2 credits (1 image + 1 audio)</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-green-500 flex-shrink-0 mt-0.5" />
+                    <span><span className="text-white font-medium">Typical Story:</span> ~10 credits (5 scenes, ~1 minute)</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-green-500 flex-shrink-0 mt-0.5" />
+                    <span><span className="text-white font-medium">Video Generation:</span> Free</span>
+                  </li>
+                </ul>
+              </div>
+              <div>
+                <h4 className="text-xs font-semibold mb-3 text-gray-400 uppercase tracking-wider">Key Benefits</h4>
+                <ul className="space-y-2.5 text-gray-400 text-sm">
+                  <li className="flex items-start gap-2">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-green-500 flex-shrink-0 mt-0.5" />
+                    <span>Credits never expire</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-green-500 flex-shrink-0 mt-0.5" />
+                    <span>New users get 10 free credits</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-green-500 flex-shrink-0 mt-0.5" />
+                    <span>Secure payments via Stripe</span>
+                  </li>
+                </ul>
+              </div>
+            </div>
+          </Card>
+        </div>
       </div>
     </div>
   );

@@ -1751,6 +1751,17 @@ export default function StoryDetailsPage() {
           return; // Exit early without throwing
         }
 
+        // Handle server busy error (429 Too Many Requests)
+        if (res.status === 429) {
+          console.log("ℹ️ Server busy - too many concurrent video generations");
+          toast({
+            title: "Server Busy",
+            description: errorData.error || "The server is currently processing multiple videos. Please try again in a minute.",
+            variant: "destructive",
+          });
+          return; // Exit early without throwing
+        }
+
         throw new Error(errorData.error || `Server error: ${res.status}`);
       }
 

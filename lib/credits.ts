@@ -63,7 +63,7 @@ export async function initializeUserCredits(userId: string): Promise<void> {
 }
 
 /**
- * Deduct credits from user
+ * Deduct credits from user (ATOMIC - prevents race conditions)
  */
 export async function deductCredits(
   userId: string,
@@ -72,10 +72,26 @@ export async function deductCredits(
   description: string,
   storyId?: string
 ): Promise<{ success: boolean; newBalance: number; error?: string }> {
-  // Get current balance
-  const currentBalance = await getUserCredits(userId);
+  // Use atomic PostgreSQL function to prevent race conditions
+  const { data, error } = await supabaseAdmin
+    .rpc('deduct_credits_atomic', {
+      p_user_id: userId,
+      p_amount: amount
+    });
 
-  if (currentBalance < amount) {
+  if (error) {
+    console.error('Error deducting credits:', error);
+    const currentBalance = await getUserCredits(userId);
+    return {
+      success: false,
+      newBalance: currentBalance,
+      error: 'Failed to deduct credits',
+    };
+  }
+
+  // Check if deduction was successful
+  if (!data || data.length === 0 || !data[0].success) {
+    const currentBalance = data && data[0] ? data[0].new_balance : await getUserCredits(userId);
     return {
       success: false,
       newBalance: currentBalance,
@@ -83,21 +99,7 @@ export async function deductCredits(
     };
   }
 
-  // Deduct credits
-  const newBalance = currentBalance - amount;
-  const { error: updateError } = await supabaseAdmin
-    .from('user_credits')
-    .update({ balance: newBalance, updated_at: new Date().toISOString() })
-    .eq('user_id', userId);
-
-  if (updateError) {
-    console.error('Error deducting credits:', updateError);
-    return {
-      success: false,
-      newBalance: currentBalance,
-      error: 'Failed to deduct credits',
-    };
-  }
+  const newBalance = data[0].new_balance;
 
   // Record the transaction
   await recordTransaction(userId, -amount, type, description, storyId);
@@ -111,7 +113,7 @@ export async function deductCredits(
 }
 
 /**
- * Refund credits to user (e.g., when operation fails)
+ * Refund credits to user (e.g., when operation fails) - ATOMIC
  */
 export async function refundCredits(
   userId: string,
@@ -119,23 +121,23 @@ export async function refundCredits(
   description: string,
   storyId?: string
 ): Promise<{ success: boolean; newBalance: number }> {
-  // Get current balance
-  const currentBalance = await getUserCredits(userId);
+  // Use atomic addition (refund is just adding credits back)
+  const { data, error } = await supabaseAdmin
+    .rpc('add_credits_atomic', {
+      p_user_id: userId,
+      p_amount: amount
+    });
 
-  // Add credits back
-  const newBalance = currentBalance + amount;
-  const { error: updateError } = await supabaseAdmin
-    .from('user_credits')
-    .update({ balance: newBalance, updated_at: new Date().toISOString() })
-    .eq('user_id', userId);
-
-  if (updateError) {
-    console.error('Error refunding credits:', updateError);
+  if (error || !data || data.length === 0 || !data[0].success) {
+    console.error('Error refunding credits:', error);
+    const currentBalance = await getUserCredits(userId);
     return {
       success: false,
       newBalance: currentBalance,
     };
   }
+
+  const newBalance = data[0].new_balance;
 
   // Record the transaction
   await recordTransaction(userId, amount, 'refund', description, storyId);
@@ -149,7 +151,7 @@ export async function refundCredits(
 }
 
 /**
- * Add credits to user (e.g., purchase, admin adjustment)
+ * Add credits to user (e.g., purchase, admin adjustment) - ATOMIC
  */
 export async function addCredits(
   userId: string,
@@ -157,23 +159,23 @@ export async function addCredits(
   type: TransactionType,
   description: string
 ): Promise<{ success: boolean; newBalance: number }> {
-  // Get current balance
-  const currentBalance = await getUserCredits(userId);
+  // Use atomic addition
+  const { data, error } = await supabaseAdmin
+    .rpc('add_credits_atomic', {
+      p_user_id: userId,
+      p_amount: amount
+    });
 
-  // Add credits
-  const newBalance = currentBalance + amount;
-  const { error: updateError } = await supabaseAdmin
-    .from('user_credits')
-    .update({ balance: newBalance, updated_at: new Date().toISOString() })
-    .eq('user_id', userId);
-
-  if (updateError) {
-    console.error('Error adding credits:', updateError);
+  if (error || !data || data.length === 0 || !data[0].success) {
+    console.error('Error adding credits:', error);
+    const currentBalance = await getUserCredits(userId);
     return {
       success: false,
       newBalance: currentBalance,
     };
   }
+
+  const newBalance = data[0].new_balance;
 
   // Record the transaction
   await recordTransaction(userId, amount, type, description);
