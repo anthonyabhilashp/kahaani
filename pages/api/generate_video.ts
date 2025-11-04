@@ -4,7 +4,7 @@ import fetch from "node-fetch";
 import fs from "fs";
 import path from "path";
 import ffmpeg from "fluent-ffmpeg";
-import { JobLogger } from "../../lib/logger";
+import { getUserLogger } from "../../lib/userLogger";
 import { generateWordByWordASS, type WordTimestamp } from "../../lib/assSubtitles";
 import { updateStoryMetadata } from "../../lib/updateStoryMetadata";
 import { getEffect } from "../../lib/videoEffects";
@@ -92,7 +92,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const { story_id, aspect_ratio, captions, background_music } = req.body;
   if (!story_id) return res.status(400).json({ error: "story_id required" });
 
-  let logger: JobLogger | null = null;
   let jobId: string | null = null;
 
   try {
@@ -191,13 +190,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     await updateJobProgress(jobId, 5);
 
-    logger = new JobLogger(story_id, "generate_video");
-    logger.log(`🎬 Starting video generation for story: ${story_id} (Job ID: ${jobId})`);
-    logger.log(`📐 Aspect ratio: ${aspect_ratio || '9:16'}`);
-    if (background_music?.enabled) {
-      logger.log(`🎵 Background music enabled at ${background_music.volume}% volume`);
-    }
-
     // 💳 Credit check: Get user ID from story
     const { data: story, error: storyError } = await supabaseAdmin
       .from("stories")
@@ -209,11 +201,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       throw new Error("Story not found");
     }
 
-    logger.log(`👤 User ID: ${story.user_id}`);
-
     // 🚨 Validate user_id exists
     if (!story.user_id) {
-      logger.log(`❌ Story has no user_id - cannot check credits`);
+      console.error(`❌ Story ${story_id} has no user_id - cannot check credits`);
 
       // Mark job as failed
       await supabaseAdmin
@@ -232,13 +222,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // At this point, we know userId is not null
     const userId: string = story.user_id;
+    const logger = getUserLogger(userId);
+
+    logger.info(`[${story_id}] 🎬 Starting video generation (Job ID: ${jobId})`);
+    logger.info(`[${story_id}] 📐 Aspect ratio: ${aspect_ratio || '9:16'}`);
+    if (background_music?.enabled) {
+      logger.info(`[${story_id}] 🎵 Background music enabled at ${background_music.volume}% volume`);
+    }
+    logger.info(`[${story_id}] 👤 User ID: ${story.user_id}`);
 
     // 💳 Check credit balance
     const currentBalance = await getUserCredits(userId);
-    logger.log(`💰 Current balance: ${currentBalance} credits`);
+    logger.info(`[${story_id}] 💰 Current balance: ${currentBalance} credits`);
 
     if (currentBalance < CREDIT_COSTS.VIDEO_GENERATION) {
-      logger.log(`❌ Insufficient credits: need ${CREDIT_COSTS.VIDEO_GENERATION}, have ${currentBalance}`);
+      logger.warn(`[${story_id}] ❌ Insufficient credits: need ${CREDIT_COSTS.VIDEO_GENERATION}, have ${currentBalance}`);
 
       // Mark job as failed before returning
       await supabaseAdmin
@@ -267,7 +265,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     );
 
     if (!deductResult.success) {
-      logger.log(`❌ Failed to deduct credits: ${deductResult.error}`);
+      logger.error(`[${story_id}] ❌ Failed to deduct credits: ${deductResult.error}`);
 
       // Mark job as failed before returning
       await supabaseAdmin
@@ -282,7 +280,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(500).json({ error: deductResult.error });
     }
 
-    logger.log(`✅ Deducted ${CREDIT_COSTS.VIDEO_GENERATION} credit. New balance: ${deductResult.newBalance}`);
+    logger.info(`[${story_id}] ✅ Deducted ${CREDIT_COSTS.VIDEO_GENERATION} credit. New balance: ${deductResult.newBalance}`);
 
     const tmpDir = path.join(process.cwd(), "tmp", story_id);
     fs.mkdirSync(tmpDir, { recursive: true });
@@ -297,13 +295,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .order("order", { ascending: true });
 
     if (sceneErr || !scenes?.length) throw new Error("No scenes found for this story");
-    logger.log(`📚 Found ${scenes.length} scenes`);
+    logger.info(`[${story_id}] 📚 Found ${scenes.length} scenes`);
 
     await updateJobProgress(jobId, 15);
 
     // 2️⃣ Verify images exist in scenes
     const scenesWithImages = scenes.filter(s => s.image_url);
-    logger.log(`🖼️ Found ${scenesWithImages.length} scenes with images out of ${scenes.length} total`);
+    logger.info(`[${story_id}] 🖼️ Found ${scenesWithImages.length} scenes with images out of ${scenes.length} total`);
     if (!scenesWithImages.length) throw new Error("No images found for this story");
 
     // 3️⃣ Download all media files and get audio durations
@@ -338,11 +336,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // Get actual audio duration using ffprobe
         const audioDuration = await getAudioDuration(audioPath);
         sceneFiles.duration = audioDuration;
-        logger.log(`🎵 Scene ${index + 1} audio duration: ${audioDuration.toFixed(2)}s`);
+        logger.info(`[${story_id}] 🎵 Scene ${index + 1} audio duration: ${audioDuration.toFixed(2)}s`);
       } else {
         // No audio - use calculated duration from database
         sceneFiles.duration = (scene as any).duration || 5; // Default to 5s if not set
-        logger.log(`📝 Scene ${index + 1} text-based duration: ${sceneFiles.duration.toFixed(2)}s (no audio)`);
+        logger.info(`[${story_id}] 📝 Scene ${index + 1} text-based duration: ${sceneFiles.duration.toFixed(2)}s (no audio)`);
       }
 
       // Download overlay if exists
@@ -350,7 +348,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const overlayId = (scene.effects as any)?.overlay_id;
       if (overlayUrl && overlayId) {
         try {
-          logger.log(`🎭 Downloading overlay for scene ${index + 1}...`);
+          logger.info(`[${story_id}] 🎭 Downloading overlay for scene ${index + 1}...`);
 
           // Fetch overlay metadata to get category
           const { data: overlayData } = await supabaseAdmin
@@ -366,28 +364,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           const baseUrl = overlayUrl.substring(0, overlayUrl.lastIndexOf('/'));
           const aspectSpecificUrl = `${baseUrl}/${aspectFolder}/${fileName}`;
 
-          logger.log(`📐 Using ${aspectFolder} overlay variant`);
-          logger.log(`   Original URL: ${overlayUrl}`);
-          logger.log(`   Fetching from: ${aspectSpecificUrl}`);
+          logger.info(`[${story_id}] 📐 Using ${aspectFolder} overlay variant`);
+          logger.info(`[${story_id}]    Original URL: ${overlayUrl}`);
+          logger.info(`[${story_id}]    Fetching from: ${aspectSpecificUrl}`);
 
           const overlayRes = await fetch(aspectSpecificUrl);
-          logger.log(`   Response status: ${overlayRes.status} ${overlayRes.statusText}`);
+          logger.info(`[${story_id}]    Response status: ${overlayRes.status} ${overlayRes.statusText}`);
           const overlayBuffer = Buffer.from(await overlayRes.arrayBuffer());
           const overlayPath = path.join(tmpDir, `scene-${index}-overlay.webm`);
           fs.writeFileSync(overlayPath, overlayBuffer);
           sceneFiles.overlayPath = overlayPath;
           sceneFiles.overlayCategory = overlayData?.category || 'other';
-          logger.log(`✅ Overlay downloaded for scene ${index + 1} (${sceneFiles.overlayCategory})`);
-        } catch (err) {
-          logger.error(`⚠️ Failed to download overlay for scene ${index + 1}:`, err);
+          logger.info(`[${story_id}] ✅ Overlay downloaded for scene ${index + 1} (${sceneFiles.overlayCategory})`);
+        } catch (err: any) {
+          logger.warn(`[${story_id}] ⚠️ Failed to download overlay for scene ${index + 1}: ${err.message}`);
         }
       }
 
       mediaPaths.push(sceneFiles);
     }
 
-    logger.log(`🖼️ Downloaded media for ${mediaPaths.length} scenes`);
-    logger.log(`⏱️ Scene timing: ${mediaPaths.map(s => `Scene ${s.sceneIndex + 1}: ${s.duration.toFixed(2)}s`).join(', ')}`);
+    logger.info(`[${story_id}] 🖼️ Downloaded media for ${mediaPaths.length} scenes`);
+    logger.info(`[${story_id}] ⏱️ Scene timing: ${mediaPaths.map(s => `Scene ${s.sceneIndex + 1}: ${s.duration.toFixed(2)}s`).join(', ')}`);
 
     await updateJobProgress(jobId, 30);
 
@@ -398,11 +396,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .eq("story_id", story_id);
 
     if (oldVideos?.length) {
-      logger.log(`🧹 Cleaning up ${oldVideos.length} old video(s)...`);
+      logger.info(`[${story_id}] 🧹 Cleaning up ${oldVideos.length} old video(s)...`);
       const paths = oldVideos.map((v) => v.video_url.split("/videos/")[1]);
       if (paths.length) {
         const { error: delErr } = await supabaseAdmin.storage.from("videos").remove(paths);
-        if (delErr) logger.error("⚠️ Error deleting old videos", delErr);
+        if (delErr) logger.warn(`[${story_id}] ⚠️ Error deleting old videos: ${delErr.message}`);
       }
       await supabaseAdmin.from("videos").delete().eq("story_id", story_id);
     }
@@ -430,7 +428,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Calculate font size scaling factor based on video width vs preview width
     const fontSizeScalingFactor = width / previewDimensions.width;
 
-    logger.log(`🎞️ Rendering video at ${width}x${height} (${selectedAspect}), font scale: ${fontSizeScalingFactor.toFixed(2)}x`);
+    logger.info(`[${story_id}] 🎞️ Rendering video at ${width}x${height} (${selectedAspect}), font scale: ${fontSizeScalingFactor.toFixed(2)}x`);
 
     // 8️⃣ Generate individual scene clips with precise timing and effects
     const videoClips: string[] = [];
@@ -449,14 +447,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const effectId = sceneData.effects?.motion || "none";
       const effect = getEffect(effectId);
 
-      logger.log(`🎬 Scene ${scene.sceneIndex + 1}: Applying "${effect.name}" effect`);
+      logger.info(`[${story_id}] 🎬 Scene ${scene.sceneIndex + 1}: Applying "${effect.name}" effect`);
 
       // Use frame-by-frame rendering for smooth effects
       if (effectId !== "none") {
         const framesDir = path.join(tmpDir, `frames-${scene.sceneIndex}`);
         frameDirsToCleanup.push(framesDir);
 
-        logger.log(`🖼️ Generating smooth frames at 30fps...`);
+        logger.info(`[${story_id}] 🖼️ Generating smooth frames at 30fps...`);
 
         await generateEffectFrames({
           imagePath: scene.imagePath,
@@ -468,7 +466,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           fps: 30, // Smooth playback for particle overlays
         });
 
-        logger.log(`✅ Frames generated, encoding video...`);
+        logger.info(`[${story_id}] ✅ Frames generated, encoding video...`);
 
         // If scene has overlay, apply it; otherwise just encode frames
         if ((scene as any).overlayPath) {
@@ -491,17 +489,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               .on("error", (err: any) => reject(err));
           });
 
-          logger.log(`🎭 Applying overlay to motion effect...`);
+          logger.info(`[${story_id}] 🎭 Applying overlay to motion effect...`);
 
           // Get blend settings based on overlay category
           const overlayCategory = (scene as any).overlayCategory || 'other';
           const blendSettings = getOverlayBlendSettings(overlayCategory);
-          logger.log(`   Using ${blendSettings.blendMode} mode with ${blendSettings.opacity} opacity`);
+          logger.info(`[${story_id}]    Using ${blendSettings.blendMode} mode with ${blendSettings.opacity} opacity`);
 
           // Then apply overlay on top using proper alpha compositing
           await new Promise<void>((resolve, reject) => {
-            logger?.log(`🎭 Applying overlay: ${(scene as any).overlayPath}`);
-            logger?.log(`   Category: ${overlayCategory}`);
+            logger.info(`[${story_id}] 🎭 Applying overlay: ${(scene as any).overlayPath}`);
+            logger.info(`[${story_id}]    Category: ${overlayCategory}`);
 
             // Smart scaling strategy for all aspect ratios:
             // Scale so smallest dimension fills frame, center the overlay, allow natural overflow
@@ -510,7 +508,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             // Screen blend in RGB using gbrp format (no colorkey)
             filterComplex = `[0:v]fps=30,scale=${width}:${height}:flags=lanczos,setsar=1,format=gbrp[bg];[1:v]fps=30,scale=${width}:${height}:flags=lanczos,setsar=1,format=gbrp[ov];[bg][ov]blend=all_mode=screen:all_opacity=1.0[comp];[comp]format=yuv420p`;
 
-            logger?.log(`   Filter: ${filterComplex}`);
+            logger.info(`[${story_id}]    Filter: ${filterComplex}`);
 
             const cmd = ffmpeg()
               .input(tempClipPath) // Input 0: motion effect video
@@ -532,24 +530,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               .save(clipPath);
 
             cmd.on("start", (cmdLine) => {
-              logger?.log(`🚀 FFmpeg command: ${cmdLine}`);
+              logger.info(`[${story_id}] 🚀 FFmpeg command: ${cmdLine}`);
             });
 
             cmd.on("end", () => {
-              logger?.log(`✅ Overlay applied successfully`);
+              logger.info(`[${story_id}] ✅ Overlay applied successfully`);
               // Clean up temp file
               fs.unlinkSync(tempClipPath);
               resolve();
             });
 
             cmd.on("error", (err: any) => {
-              logger?.error(`❌ Overlay failed:`, err);
+              logger.error(`[${story_id}] ❌ Overlay failed: ${err.message}`);
               reject(err);
             });
           });
         } else {
           // No overlay - just encode frames
-          logger.log(`✅ Encoding video without overlay...`);
+          logger.info(`[${story_id}] ✅ Encoding video without overlay...`);
           await new Promise<void>((resolve, reject) => {
             ffmpeg()
               .input(path.join(framesDir, "frame_%06d.png"))
@@ -565,7 +563,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               ])
               .save(clipPath)
               .on("end", () => {
-                logger?.log(`✅ Video clip saved: ${clipPath}`);
+                logger.info(`[${story_id}] ✅ Video clip saved: ${clipPath}`);
                 resolve();
               })
               .on("error", (err: any) => reject(err));
@@ -581,12 +579,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           // Get blend settings based on overlay category
           const overlayCategory = (scene as any).overlayCategory || 'other';
           const blendSettings = getOverlayBlendSettings(overlayCategory);
-          logger.log(`🎭 Applying overlay with ${blendSettings.blendMode} mode (${blendSettings.opacity} opacity)`);
+          logger.info(`[${story_id}] 🎭 Applying overlay with ${blendSettings.blendMode} mode (${blendSettings.opacity} opacity)`);
 
           // Apply overlay using proper alpha compositing
           await new Promise<void>((resolve, reject) => {
-            logger?.log(`🎭 Applying overlay to static image: ${(scene as any).overlayPath}`);
-            logger?.log(`   Category: ${overlayCategory}`);
+            logger.info(`[${story_id}] 🎭 Applying overlay to static image: ${(scene as any).overlayPath}`);
+            logger.info(`[${story_id}]    Category: ${overlayCategory}`);
 
             // Smart scaling strategy for all aspect ratios:
             // Scale so smallest dimension fills frame, center the overlay, allow natural overflow
@@ -595,7 +593,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             // Screen blend in RGB using gbrp format (no colorkey)
             filterComplex = `[0:v]${videoFilter},fps=30,setsar=1,format=gbrp[bg];[1:v]fps=30,scale=${width}:${height}:flags=lanczos,setsar=1,format=gbrp[ov];[bg][ov]blend=all_mode=screen:all_opacity=1.0[comp];[comp]format=yuv420p`;
 
-            logger?.log(`   Filter: ${filterComplex}`);
+            logger.info(`[${story_id}]    Filter: ${filterComplex}`);
 
             const cmd = ffmpeg()
               .input(scene.imagePath!) // Input 0: image
@@ -618,16 +616,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               .save(clipPath);
 
             cmd.on("start", (cmdLine) => {
-              logger?.log(`🚀 FFmpeg command: ${cmdLine}`);
+              logger.info(`[${story_id}] 🚀 FFmpeg command: ${cmdLine}`);
             });
 
             cmd.on("end", () => {
-              logger?.log(`✅ Overlay applied successfully`);
+              logger.info(`[${story_id}] ✅ Overlay applied successfully`);
               resolve();
             });
 
             cmd.on("error", (err: any) => {
-              logger?.error(`❌ Overlay failed:`, err);
+              logger.error(`[${story_id}] ❌ Overlay failed: ${err.message}`);
               reject(err);
             });
           });
@@ -669,12 +667,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await updateJobProgress(jobId, 55);
 
     // Cleanup frame directories
-    logger.log(`🧹 Cleaning up ${frameDirsToCleanup.length} frame directories...`);
+    logger.info(`[${story_id}] 🧹 Cleaning up ${frameDirsToCleanup.length} frame directories...`);
     for (const framesDir of frameDirsToCleanup) {
       try {
         cleanupFrames(framesDir);
-      } catch (err) {
-        logger.error(`⚠️ Failed to cleanup ${framesDir}`, err);
+      } catch (err: any) {
+        logger.warn(`[${story_id}] ⚠️ Failed to cleanup ${framesDir}: ${err.message}`);
       }
     }
 
@@ -691,7 +689,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // If captions are enabled, generate ASS subtitle file with word-by-word animation
     let captionFilter = "";
     if (captions?.enabled) {
-      logger.log(`🎨 Generating captions with style: ${captions.style}, position: ${captions.position}`);
+      logger.info(`[${story_id}] 🎨 Generating captions with style: ${captions.style}, position: ${captions.position}`);
 
       // Collect all word timestamps from all scenes
       const allWordTimestamps: WordTimestamp[] = [];
@@ -730,7 +728,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         timeOffset += scene.duration;
       }
 
-      logger.log(`📝 Collected ${allWordTimestamps.length} word timestamps from ${mediaPaths.length} scenes`);
+      logger.info(`[${story_id}] 📝 Collected ${allWordTimestamps.length} word timestamps from ${mediaPaths.length} scenes`);
 
       // Use word-by-word ASS if we have timestamps, otherwise fallback to simple SRT
       const assPath = path.join(tmpDir, `subtitles-${story_id}.ass`);
@@ -762,7 +760,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           marginV: marginV,
         };
 
-        logger.log(`📏 Font size: ${previewFontSize}px (preview) → ${scaledFontSize}pt (video) [${fontSizeScalingFactor.toFixed(2)}x scale]`);
+        logger.info(`[${story_id}] 📏 Font size: ${previewFontSize}px (preview) → ${scaledFontSize}pt (video) [${fontSizeScalingFactor.toFixed(2)}x scale]`);
 
         // Generate ASS with word-by-word animation and custom highlight color
         const highlightColor = convertHexToASSColor(captions.activeColor || '#FFEB3B');
@@ -777,10 +775,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           textTransform
         );
         fs.writeFileSync(assPath, assContent);
-        logger.log(`✅ Generated word-by-word ASS subtitles with ${wordsPerBatch > 0 ? wordsPerBatch + ' words per batch' : 'all words'}, transform: ${textTransform}`);
+        logger.info(`[${story_id}] ✅ Generated word-by-word ASS subtitles with ${wordsPerBatch > 0 ? wordsPerBatch + ' words per batch' : 'all words'}, transform: ${textTransform}`);
       } else {
         // Fallback to simple SRT if no word timestamps
-        logger.log(`⚠️ No word timestamps available, using simple scene-level captions`);
+        logger.warn(`[${story_id}] ⚠️ No word timestamps available, using simple scene-level captions`);
         const srtPath = path.join(tmpDir, `subtitles-${story_id}.srt`);
         generateSRTFile(
           mediaPaths.map(scene => ({ text: scenes[scene.sceneIndex].text, duration: scene.duration })),
@@ -788,14 +786,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         );
         // Convert SRT to ASS for consistency (will use simple display)
         // For now, just use SRT path
-        logger.log(`✅ Generated simple SRT subtitles: ${srtPath}`);
+        logger.info(`[${story_id}] ✅ Generated simple SRT subtitles: ${srtPath}`);
       }
 
       // Escape the ASS path for FFmpeg
       const escapedAssPath = assPath.replace(/\\/g, '\\\\').replace(/:/g, '\\\\:');
       captionFilter = escapedAssPath;
 
-      logger.log(`📝 Caption file ready: ${assPath}`);
+      logger.info(`[${story_id}] 📝 Caption file ready: ${assPath}`);
     }
 
     await updateJobProgress(jobId, 65);
@@ -857,7 +855,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           .on("error", reject);
       });
 
-      logger.log("🎵 Concatenated all scene audio files with normalization (85% volume + gentle compression for clarity)");
+      logger.info(`[${story_id}] 🎵 Concatenated all scene audio files with normalization (85% volume + gentle compression for clarity)`);
 
       await updateJobProgress(jobId, 75);
 
@@ -865,7 +863,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       // Mix background music if enabled and volume > 0
       if (background_music?.enabled && background_music?.music_url && (background_music.volume ?? 30) > 0) {
-        logger.log("🎵 Downloading background music...");
+        logger.info(`[${story_id}] 🎵 Downloading background music...`);
 
         await updateJobProgress(jobId, 77);
 
@@ -880,7 +878,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const bgVolume = (background_music.volume ?? 30) / 100; // Convert percentage to 0-1 scale
         const narrationVolume = 1.0; // Narration already normalized in concat step
 
-        logger.log(`🎵 Mixing background music (${background_music.volume ?? 30}% volume) with narration for ${totalDuration.toFixed(2)}s`);
+        logger.info(`[${story_id}] 🎵 Mixing background music (${background_music.volume ?? 30}% volume) with narration for ${totalDuration.toFixed(2)}s`);
 
         // Mix background music with narration
         const mixedAudio = path.join(tmpDir, "mixed-audio.m4a");
@@ -906,13 +904,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             ])
             .save(mixedAudio);
 
-          cmd.on("start", (cmdLine) => logger?.log(`🚀 FFmpeg mixing: ${cmdLine}`));
+          cmd.on("start", (cmdLine) => logger.info(`[${story_id}] 🚀 FFmpeg mixing: ${cmdLine}`));
           cmd.on("end", () => {
-            logger?.log("✅ Background music mixed with narration");
+            logger.info(`[${story_id}] ✅ Background music mixed with narration`);
             resolve();
           });
-          cmd.on("error", (err) => {
-            logger?.error("❌ FFmpeg mixing failed", err);
+          cmd.on("error", (err: any) => {
+            logger.error(`[${story_id}] ❌ FFmpeg mixing failed: ${err.message}`);
             reject(err);
           });
         });
@@ -940,20 +938,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             "-movflags +faststart"
           ])
           .save(finalVideo)
-          .on("start", (cmd: any) => logger?.log(`🚀 FFmpeg final merge: ${cmd}`))
+          .on("start", (cmd: any) => logger.info(`[${story_id}] 🚀 FFmpeg final merge: ${cmd}`))
           .on("end", () => {
-            logger?.log("✅ Final video with audio track created");
+            logger.info(`[${story_id}] ✅ Final video with audio track created`);
             resolve();
           })
           .on("error", (err: any) => {
-            logger?.error("❌ FFmpeg failed", err);
+            logger.error(`[${story_id}] ❌ FFmpeg failed: ${err.message}`);
             reject(err);
           });
       });
     } else {
       // No audio, just use video as is
       fs.copyFileSync(videoOnlyPath, finalVideo);
-      logger.log("✅ Video-only (no audio)");
+      logger.info(`[${story_id}] ✅ Video-only (no audio)`);
     }
 
     await updateJobProgress(jobId, 85);
@@ -991,14 +989,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (upsertErr) throw upsertErr;
 
-    logger.log(`☁️ Uploaded video → ${publicUrl} (${totalDuration.toFixed(1)}s total)`);
+    logger.info(`[${story_id}] ☁️ Uploaded video → ${publicUrl} (${totalDuration.toFixed(1)}s total)`);
 
     await updateJobProgress(jobId, 95);
 
     // Update story metadata (completion status)
-    logger.log(`📊 Updating story metadata...`);
+    logger.info(`[${story_id}] 📊 Updating story metadata...`);
     await updateStoryMetadata(story_id);
-    logger.log(`✅ Story metadata updated`);
+    logger.info(`[${story_id}] ✅ Story metadata updated`);
 
     // ✅ MARK JOB AS COMPLETED
     if (jobId) {
@@ -1010,12 +1008,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           completed_at: new Date().toISOString()
         })
         .eq('id', jobId);
-      logger.log(`✅ Video generation job ${jobId} marked as completed`);
+      logger.info(`[${story_id}] ✅ Video generation job ${jobId} marked as completed`);
     }
 
     res.status(200).json({ story_id, video_url: publicUrl, duration: totalDuration, is_valid: true, job_id: jobId });
   } catch (err: any) {
-    if (logger) logger.error("❌ Error generating video", err);
+    console.error(`[${story_id}] Error generating video:`, err);
 
     // ❌ MARK JOB AS FAILED
     if (jobId) {
@@ -1044,7 +1042,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .single();
 
       if (story && story.user_id) {
-        logger?.log(`💸 Refunding ${CREDIT_COSTS.VIDEO_GENERATION} credit due to generation failure...`);
+        const logger = getUserLogger(story.user_id);
+        logger.info(`[${story_id}] 💸 Refunding ${CREDIT_COSTS.VIDEO_GENERATION} credit due to generation failure...`);
         const refundResult = await refundCredits(
           story.user_id,
           CREDIT_COSTS.VIDEO_GENERATION,
@@ -1053,13 +1052,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         );
 
         if (refundResult.success) {
-          logger?.log(`✅ Refunded ${CREDIT_COSTS.VIDEO_GENERATION} credit. New balance: ${refundResult.newBalance}`);
+          logger.info(`[${story_id}] ✅ Refunded ${CREDIT_COSTS.VIDEO_GENERATION} credit. New balance: ${refundResult.newBalance}`);
         } else {
-          logger?.error(`❌ Failed to refund credits`);
+          logger.error(`[${story_id}] ❌ Failed to refund credits`);
         }
       }
     } catch (refundErr: any) {
-      logger?.error(`❌ Error during refund process: ${refundErr.message}`);
+      console.error(`[${story_id}] Error during refund process:`, refundErr);
     }
 
     res.status(500).json({ error: err.message });

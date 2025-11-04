@@ -26,7 +26,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (sceneErr || !scene) throw new Error("Scene not found");
 
     logger = new JobLogger(scene.story_id, "generate_scene_image");
-    logger.log(`🎨 Generating image for scene ${scene.order + 1}: ${scene_id}`);
+    logger?.log(`🎨 Generating image for scene ${scene.order + 1}: ${scene_id}`);
 
     // 1.5️⃣ Fetch other scenes with images for consistency reference
     const { data: allScenes, error: allScenesErr } = await supabaseAdmin
@@ -38,11 +38,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .order("order", { ascending: true });
 
     const referenceScenes = allScenes || [];
-    logger.log(`📸 Found ${referenceScenes.length} existing images for consistency reference`);
+    logger?.log(`📸 Found ${referenceScenes.length} existing images for consistency reference`);
 
     // 2️⃣ Clean up old image if exists
     if (scene.image_url) {
-      logger.log(`🧹 Removing old image from storage...`);
+      logger?.log(`🧹 Removing old image from storage...`);
       const oldPath = scene.image_url.split("/images/")[1];
       if (oldPath) {
         await supabaseAdmin.storage.from("images").remove([oldPath]);
@@ -58,7 +58,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const videoHeight = parseInt(process.env.VIDEO_HEIGHT || "1920");
     const imageSize = `${videoWidth}x${videoHeight}`;
 
-    logger.log(`🧠 Using ${provider} model: ${model} (${imageSize}, aspect ${aspect})`);
+    logger?.log(`🧠 Using ${provider} model: ${model} (${imageSize}, aspect ${aspect})`);
 
     const finalStyle = style || "cinematic illustration";
 
@@ -108,7 +108,7 @@ Do NOT generate multiple scenes, panels, or images in one. Just one standalone i
     // Add reference images first (if any)
     if (referenceScenes.length > 0) {
       const limitedReferences = referenceScenes.slice(0, 3); // Limit to 3 most recent for API efficiency
-      logger.log(`🖼️ Including ${limitedReferences.length} reference images for consistency`);
+      logger?.log(`🖼️ Including ${limitedReferences.length} reference images for consistency`);
 
       for (const refScene of limitedReferences) {
         messageContent.push({
@@ -129,7 +129,7 @@ Do NOT generate multiple scenes, panels, or images in one. Just one standalone i
     });
 
     // 5️⃣ Generate via model
-    logger.log(`🚀 Requesting ${provider} API for scene ${scene.order + 1}...`);
+    logger?.log(`🚀 Requesting ${provider} API for scene ${scene.order + 1}...`);
     const resp = await fetch(OPENROUTER_URL, {
       method: "POST",
       headers: {
@@ -146,7 +146,7 @@ Do NOT generate multiple scenes, panels, or images in one. Just one standalone i
 
     const data: any = await resp.json();
     if (!resp.ok) {
-      logger.error("❌ API error response", data);
+      logger?.error("❌ API error response", data);
       throw new Error(`Image generation failed: ${JSON.stringify(data)}`);
     }
 
@@ -166,7 +166,7 @@ Do NOT generate multiple scenes, panels, or images in one. Just one standalone i
 
     if (!imageUrl) throw new Error("No image returned by model");
 
-    logger.log(`🖼️ Received image from model`);
+    logger?.log(`🖼️ Received image from model`);
 
     // 7️⃣ Save image
     const tmpDir = path.join(process.cwd(), "tmp", scene.story_id);
@@ -200,11 +200,11 @@ Do NOT generate multiple scenes, panels, or images in one. Just one standalone i
 
     if (updateErr) throw updateErr;
 
-    logger.log(`✅ Updated scene ${scene.order + 1} with image → ${publicUrl}`);
+    logger?.log(`✅ Updated scene ${scene.order + 1} with image → ${publicUrl}`);
     res.status(200).json({ scene_id, image_url: publicUrl, order: scene.order });
 
   } catch (err: any) {
-    if (logger) logger.error("❌ Error generating scene image", err);
+    logger?.error("❌ Error generating scene image", err);
     res.status(500).json({ error: err.message || "Image generation failed" });
   }
 }

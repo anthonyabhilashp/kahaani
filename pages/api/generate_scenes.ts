@@ -1,7 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { supabaseAdmin } from "../../lib/supabaseAdmin";
 import fetch from "node-fetch";
-import { JobLogger } from "../../lib/logger";
+import { getUserLogger } from "../../lib/userLogger";
 import { v4 as uuidv4 } from "uuid";
 import { calculateSceneDuration } from "../../lib/utils";
 import { checkRateLimit, RateLimits } from "../../lib/rateLimit";
@@ -47,7 +47,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const { prompt, title, story_id, sceneCount = 5, manualScenes, isManual = false, voice_id, aspect_ratio, isBlank = false } = req.body;
   if (!prompt) return res.status(400).json({ error: "Prompt required" });
 
-  let logger: JobLogger | null = null;
+  let logger: any = null;
 
   try {
     // 🔐 Get authenticated user from session
@@ -63,10 +63,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(401).json({ error: "Unauthorized - Invalid session" });
     }
 
+    // Initialize user logger
+    logger = getUserLogger(user.id);
+
     // ⏱️ Rate limiting - prevent abuse
     const rateLimit = checkRateLimit(user.id, RateLimits.STORY_GENERATION);
     if (!rateLimit.allowed) {
       const retryAfter = Math.ceil((rateLimit.resetTime - Date.now()) / 1000);
+      logger.warn(`Rate limit exceeded - retry after ${retryAfter}s`);
       return res.status(429).json({
         error: "Too many requests. Please wait before creating another story.",
         retry_after: retryAfter
@@ -74,10 +78,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     let storyId = story_id || uuidv4();
-    logger = new JobLogger(storyId, "generate_scenes");
-    logger.log(`👤 User: ${user.email} (${user.id})`);
-    logger.log(`🎙️ Voice ID: ${voice_id || 'alloy'}`);
-    logger.log(`📐 Aspect Ratio: ${aspect_ratio || '9:16'}`);
+    logger.info(`[${storyId}] Starting scene generation`);
+    logger.info(`[${storyId}] User: ${user.email}`);
+    logger.info(`[${storyId}] Voice: ${voice_id || 'alloy'}, Aspect: ${aspect_ratio || '9:16'}`);
     if (isBlank) {
       logger.log(`📄 Creating blank story`);
     }
@@ -220,7 +223,7 @@ User request: ${prompt}
     logger.log(`📚 Saved ${scenes.length} scenes for story ${storyId}`);
     res.status(200).json({ story_id: storyId, scenes });
   } catch (err: any) {
-    if (logger) logger.error("❌ Error generating scenes", err);
+    logger?.error(`❌ Error generating scenes: ${err instanceof Error ? err.message : String(err)}`);
     res.status(500).json({ error: err.message });
   }
 }

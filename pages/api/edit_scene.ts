@@ -1,6 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { supabaseAdmin } from "../../lib/supabaseAdmin";
-import { JobLogger } from "../../lib/logger";
+import { getUserLogger } from "../../lib/userLogger";
 import { calculateSceneDuration } from "../../lib/utils";
 
 // Generate synthetic word timestamps for text-based scenes (no audio)
@@ -27,11 +27,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ error: "story_id and scene identifier are required" });
   }
 
-  let logger: JobLogger | null = null;
-
   try {
-    logger = new JobLogger(story_id, "edit_scene");
-    logger.log(`📝 Editing scene for story: ${story_id}`);
+    // Get user_id from story for logging
+    const { data: story } = await supabaseAdmin
+      .from("stories")
+      .select("user_id")
+      .eq("id", story_id)
+      .single();
+
+    const logger = story?.user_id ? getUserLogger(story.user_id) : null;
+    logger?.info(`[${story_id}] 📝 Editing scene for story`);
 
     // Update the scene in the database
     // Note: The database trigger will automatically invalidate the video
@@ -47,7 +52,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       updateData.duration = calculateSceneDuration(text);
       // Regenerate word timestamps based on new text
       updateData.word_timestamps = text.trim().length > 0 ? generateWordTimestamps(text) : [];
-      logger.log(`📝 Regenerated word timestamps for updated text`);
+      logger?.info(`[${story_id}] 📝 Regenerated word timestamps for updated text`);
     }
 
     let updateResult;
@@ -71,7 +76,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       throw new Error(`Failed to update scene: ${updateResult.error.message}`);
     }
 
-    logger.log("✅ Scene updated successfully");
+    logger?.info(`[${story_id}] ✅ Scene updated successfully`);
 
     res.status(200).json({ 
       success: true, 
@@ -80,11 +85,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
-    console.error("Edit scene error:", error);
-    
-    if (logger) {
-      logger.log(`❌ Scene edit failed: ${errorMessage}`);
-    }
+    console.error(`[${story_id}] Edit scene error:`, error);
 
     res.status(500).json({ 
       error: errorMessage 

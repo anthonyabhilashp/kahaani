@@ -3,7 +3,7 @@ import { supabaseAdmin } from "../../lib/supabaseAdmin";
 import fetch from "node-fetch";
 import fs from "fs";
 import path from "path";
-import { JobLogger } from "../../lib/logger";
+import { getUserLogger } from "../../lib/userLogger";
 import { updateStoryMetadata } from "../../lib/updateStoryMetadata";
 import { getUserCredits, deductCredits, refundCredits, CREDIT_COSTS } from "../../lib/credits";
 
@@ -15,12 +15,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const { story_id, style, instructions } = req.body;
   if (!story_id) return res.status(400).json({ error: "story_id required" });
 
-  let logger: JobLogger | null = null;
+  let logger: any = null;
 
   try {
-    logger = new JobLogger(story_id, "generate_images");
-    logger.log(`🎨 Starting image generation for story: ${story_id}`);
-
     // 🔐 Get authenticated user from session
     const authHeader = req.headers.authorization;
     if (!authHeader) {
@@ -35,7 +32,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const userId = user.id;
-    logger.log(`👤 User ID: ${userId} (${user.email})`);
+    logger = getUserLogger(userId);
+
+    logger.info(`[${story_id}] 🎨 Starting image generation`);
+    logger.info(`[${story_id}] User: ${user.email}`);
 
     // Get story metadata (title, aspect ratio)
     const { data: story, error: storyErr } = await supabaseAdmin
@@ -49,7 +49,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const storyAspectRatio = story.aspect_ratio || "9:16";
-    logger.log(`📐 Story aspect ratio: ${storyAspectRatio}`);
+    logger.info(`[${story_id}] 📐 Story aspect ratio: ${storyAspectRatio}`);
 
     // 1️⃣ Fetch story scenes first to calculate credit cost
     const { data: scenes, error: sceneErr } = await supabaseAdmin
@@ -59,18 +59,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .order("order", { ascending: true });
 
     if (sceneErr || !scenes?.length) throw new Error("No scenes found");
-    logger.log(`📚 Found ${scenes.length} scenes to generate images for`);
+    logger.info(`[${story_id}] 📚 Found ${scenes.length} scenes to generate images for`);
 
     // 💳 Calculate credits needed: 1 credit per scene
     const creditsNeeded = scenes.length * CREDIT_COSTS.IMAGE_PER_SCENE;
-    logger.log(`💳 Credits needed: ${creditsNeeded} (${scenes.length} scenes × ${CREDIT_COSTS.IMAGE_PER_SCENE} credit per image)`);
+    logger.info(`[${story_id}] 💳 Credits needed: ${creditsNeeded} (${scenes.length} scenes × ${CREDIT_COSTS.IMAGE_PER_SCENE} credit per image)`);
 
     // 💳 Check credit balance
     const currentBalance = await getUserCredits(userId);
-    logger.log(`💰 Current balance: ${currentBalance} credits`);
+    logger.info(`[${story_id}] 💰 Current balance: ${currentBalance} credits`);
 
     if (currentBalance < creditsNeeded) {
-      logger.log(`❌ Insufficient credits: need ${creditsNeeded}, have ${currentBalance}`);
+      logger.warn(`[${story_id}] ❌ Insufficient credits: need ${creditsNeeded}, have ${currentBalance}`);
       return res.status(402).json({
         error: `Insufficient credits. You need ${creditsNeeded} credits for ${scenes.length} images (1 per scene), but you only have ${currentBalance}.`,
         required_credits: creditsNeeded,
@@ -88,11 +88,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     );
 
     if (!deductResult.success) {
-      logger.log(`❌ Failed to deduct credits: ${deductResult.error}`);
+      logger.error(`[${story_id}] ❌ Failed to deduct credits: ${deductResult.error}`);
       return res.status(500).json({ error: deductResult.error });
     }
 
-    logger.log(`✅ Deducted ${creditsNeeded} credits. New balance: ${deductResult.newBalance}`);
+    logger.info(`[${story_id}] ✅ Deducted ${creditsNeeded} credits. New balance: ${deductResult.newBalance}`);
 
     const finalStyle = style || "cinematic illustration";
     const extraNotes = instructions ? `\nAdditional Instructions: ${instructions}` : "";
@@ -103,10 +103,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let props: any[] = [];
 
     // 🧠 Always generate scene descriptions via LLM (with instructions if provided)
-    logger.log(`🧠 Step 1: Extracting all story elements (characters, environments, props)...`);
-    logger.log(`🎨 Target style: ${finalStyle}`);
+    logger.info(`[${story_id}] 🧠 Step 1: Extracting all story elements (characters, environments, props)...`);
+    logger.info(`[${story_id}] 🎨 Target style: ${finalStyle}`);
     if (instructions && instructions.trim()) {
-      logger.log(`📝 Additional Instructions will be incorporated: "${instructions}"`);
+      logger.info(`[${story_id}] 📝 Additional Instructions will be incorporated: "${instructions}"`);
     }
 
     // Build prompt for all scenes
@@ -164,7 +164,7 @@ Return exactly ${scenes.length} visual descriptions in the visual_descriptions a
 
     for (let attempt = 1; attempt <= maxRetries && !descGenerationSuccess; attempt++) {
       try {
-        logger.log(`🔄 Attempt ${attempt}/${maxRetries}: Generating visual descriptions...`);
+        logger.info(`[${story_id}] 🔄 Attempt ${attempt}/${maxRetries}: Generating visual descriptions...`);
 
         const descResp = await fetch(OPENROUTER_URL, {
           method: "POST",
@@ -187,7 +187,7 @@ Return exactly ${scenes.length} visual descriptions in the visual_descriptions a
         const descData = await descResp.json() as any;
         const descRaw = descData?.choices?.[0]?.message?.content || "";
 
-        logger?.log(`📦 Raw elements response (first 500 chars): ${descRaw.substring(0, 500)}`);
+        logger.info(`[${story_id}] 📦 Raw elements response (first 500 chars): ${descRaw.substring(0, 500)}`);
 
         if (!descRaw || descRaw.trim() === "") {
           throw new Error("Empty response from LLM");
@@ -202,7 +202,7 @@ Return exactly ${scenes.length} visual descriptions in the visual_descriptions a
 
         // 🔧 Handle array response (LLM sometimes returns [{...}] instead of {...})
         if (Array.isArray(descParsed) && descParsed.length > 0) {
-          logger.log(`⚠️ LLM returned array format, extracting first element...`);
+          logger.warn(`[${story_id}] ⚠️ LLM returned array format, extracting first element...`);
           descParsed = descParsed[0];
         }
 
@@ -211,16 +211,16 @@ Return exactly ${scenes.length} visual descriptions in the visual_descriptions a
         environments = descParsed.environments || [];
         props = descParsed.props || [];
 
-        logger?.log(`✅ Extracted story elements:`);
-        logger?.log(`   👥 Characters: ${characters.length}`);
-        characters.forEach((c: any) => logger?.log(`      - ${c.name}: ${c.description.substring(0, 100)}...`));
-        logger?.log(`   🌍 Environments: ${environments.length}`);
-        environments.forEach((e: any) => logger?.log(`      - ${e.name}: ${e.description.substring(0, 100)}...`));
-        logger?.log(`   🎯 Props: ${props.length}`);
-        props.forEach((p: any) => logger?.log(`      - ${p.name}: ${p.description.substring(0, 100)}...`));
+        logger.info(`[${story_id}] ✅ Extracted story elements:`);
+        logger.info(`[${story_id}]    👥 Characters: ${characters.length}`);
+        characters.forEach((c: any) => logger.info(`[${story_id}]       - ${c.name}: ${c.description.substring(0, 100)}...`));
+        logger.info(`[${story_id}]    🌍 Environments: ${environments.length}`);
+        environments.forEach((e: any) => logger.info(`[${story_id}]       - ${e.name}: ${e.description.substring(0, 100)}...`));
+        logger.info(`[${story_id}]    🎯 Props: ${props.length}`);
+        props.forEach((p: any) => logger.info(`[${story_id}]       - ${p.name}: ${p.description.substring(0, 100)}...`));
 
         const rawDescriptions = descParsed.visual_descriptions || [];
-        logger?.log(`📝 Raw descriptions type: ${typeof rawDescriptions}, length: ${rawDescriptions.length}`);
+        logger.info(`[${story_id}] 📝 Raw descriptions type: ${typeof rawDescriptions}, length: ${rawDescriptions.length}`);
 
         if (!rawDescriptions || rawDescriptions.length === 0) {
           throw new Error("No visual descriptions returned from LLM");
@@ -240,14 +240,14 @@ Return exactly ${scenes.length} visual descriptions in the visual_descriptions a
           return String(desc);
         });
 
-        logger.log(`✅ Generated ${visualDescriptions.length} visual descriptions from LLM`);
+        logger.info(`[${story_id}] ✅ Generated ${visualDescriptions.length} visual descriptions from LLM`);
         descGenerationSuccess = true;
       } catch (err: any) {
         lastError = err.message || "Unknown error";
         logger.error(`❌ Attempt ${attempt}/${maxRetries} failed: ${lastError}`);
 
         if (attempt < maxRetries) {
-          logger.log(`⏳ Retrying visual descriptions generation...`);
+          logger.warn(`[${story_id}] ⏳ Retrying visual descriptions generation...`);
           await new Promise(resolve => setTimeout(resolve, 1000)); // 1 second delay
         }
       }
@@ -272,27 +272,27 @@ Return exactly ${scenes.length} visual descriptions in the visual_descriptions a
         }
         return `Additional Instructions: ${instructions.trim()}\n\nScene Description: ${desc}`;
       });
-      logger.log(`✅ Prepended additional instructions to scene descriptions`);
+      logger.info(`[${story_id}] ✅ Prepended additional instructions to scene descriptions`);
     }
 
     // Log each scene with its visual description
-    logger?.log(`\n📋 Scene → Visual Description Mapping:`);
+    logger.info(`[${story_id}] \n📋 Scene → Visual Description Mapping:`);
     scenes.forEach((scene, i) => {
-      logger?.log(`\n🎬 Scene ${i + 1}:`);
-      logger?.log(`   Text: "${scene.text}"`);
-      logger?.log(`   Visual Description: "${visualDescriptions[i]}"`);
+      logger.info(`[${story_id}] \n🎬 Scene ${i + 1}:`);
+      logger.info(`[${story_id}]    Text: "${scene.text}"`);
+      logger.info(`[${story_id}]    Visual Description: "${visualDescriptions[i]}"`);
     });
 
     // 2️⃣ Clean up old image files from storage if they exist
     const oldImageUrls = scenes.filter(s => s.image_url).map(s => s.image_url);
     if (oldImageUrls.length) {
-      logger.log(`🧹 Cleaning up ${oldImageUrls.length} old images from storage...`);
+      logger.info(`[${story_id}] 🧹 Cleaning up ${oldImageUrls.length} old images from storage...`);
       const paths = oldImageUrls.map((url) => url.split("/images/")[1]);
       if (paths.length) {
         const { error: delErr } = await supabaseAdmin.storage
           .from("images")
           .remove(paths);
-        if (delErr) logger.error("⚠️ Error deleting old image files", delErr);
+        if (delErr) logger.error(`⚠️ Error deleting old image files: ${delErr instanceof Error ? delErr.message : String(delErr)}`);
       }
     }
 
@@ -315,7 +315,7 @@ Return exactly ${scenes.length} visual descriptions in the visual_descriptions a
     if (aspect === envAspect) {
       videoWidth = envWidth;
       videoHeight = envHeight;
-      logger.log(`📐 Story aspect matches env (${aspect}): using ${videoWidth}x${videoHeight}`);
+      logger.info(`[${story_id}] 📐 Story aspect matches env (${aspect}): using ${videoWidth}x${videoHeight}`);
     } else {
       // Calculate 4K equivalent dimensions for each aspect ratio
       switch (aspect) {
@@ -333,19 +333,19 @@ Return exactly ${scenes.length} visual descriptions in the visual_descriptions a
           videoHeight = 3840;
           break;
       }
-      logger.log(`📐 Story aspect (${aspect}) differs from env (${envAspect}): using 4K equivalent ${videoWidth}x${videoHeight}`);
+      logger.info(`[${story_id}] 📐 Story aspect (${aspect}) differs from env (${envAspect}): using 4K equivalent ${videoWidth}x${videoHeight}`);
     }
 
     // 📱 Generate images with EXACT same dimensions as final video
     const imageSize = `${videoWidth}x${videoHeight}`;
 
-    logger.log(`🧠 Using ${provider} model: ${model} (${imageSize}, aspect ${aspect} - matches video dimensions)`);
+    logger.info(`[${story_id}] 🧠 Using ${provider} model: ${model} (${imageSize}, aspect ${aspect} - matches video dimensions)`);
 
     // 🔄 Generate master reference image (MANDATORY if characters exist - must succeed)
     let referenceImageUrl: string | null = null;
 
     if (characters.length > 0) {
-      logger.log(`\n🎨 Step 2: Generating master reference image with all story elements...`);
+      logger.info(`[${story_id}] \n🎨 Step 2: Generating master reference image with all story elements...`);
 
       const referencePrompt = `Create a CHARACTER REFERENCE SHEET in "${finalStyle}" style.
 
@@ -377,7 +377,7 @@ REQUIREMENTS:
 
       for (let attempt = 1; attempt <= maxRetries && !refImageSuccess; attempt++) {
         try {
-          logger.log(`🔄 Attempt ${attempt}/${maxRetries}: Generating reference image...`);
+          logger.info(`[${story_id}] 🔄 Attempt ${attempt}/${maxRetries}: Generating reference image...`);
 
           const refResp = await fetch(OPENROUTER_URL, {
             method: "POST",
@@ -419,15 +419,15 @@ REQUIREMENTS:
             throw new Error("No reference image returned from API");
           }
 
-          logger.log(`✅ Master reference image generated successfully!`);
-          logger.log(`📸 Reference image URL: ${referenceImageUrl.substring(0, 100)}...`);
+          logger.info(`[${story_id}] ✅ Master reference image generated successfully!`);
+          logger.info(`[${story_id}] 📸 Reference image URL: ${referenceImageUrl.substring(0, 100)}...`);
           refImageSuccess = true;
         } catch (err: any) {
           refLastError = err.message || "Unknown error";
-          logger?.error(`❌ Attempt ${attempt}/${maxRetries} failed: ${refLastError}`);
+          logger.error(`[${story_id}] ❌ Attempt ${attempt}/${maxRetries} failed: ${refLastError}`);
 
           if (attempt < maxRetries) {
-            logger.log(`⏳ Retrying reference image generation...`);
+            logger.warn(`[${story_id}] ⏳ Retrying reference image generation...`);
             await new Promise(resolve => setTimeout(resolve, 1000)); // 1 second delay
           }
         }
@@ -440,13 +440,13 @@ REQUIREMENTS:
         throw new Error(errorMsg);
       }
     } else {
-      logger.log(`⚠️ No characters extracted, skipping reference image generation`);
+      logger.warn(`[${story_id}] ⚠️ No characters extracted, skipping reference image generation`);
     }
 
     // 4️⃣ Generate images individually (one API call per scene)
     // This ensures we know exactly which image belongs to which scene
-    logger.log(`🚀 Generating ${scenes.length} images individually (one per scene)...`);
-    logger.log(`📝 Using model: ${model}`);
+    logger.info(`[${story_id}] 🚀 Generating ${scenes.length} images individually (one per scene)...`);
+    logger.info(`[${story_id}] 📝 Using model: ${model}`);
 
     // Build the complete story context (used for ALL scenes to maintain continuity)
     const fullStoryContext = scenes.map((scene, i) =>
@@ -458,7 +458,7 @@ Visual Description: ${visualDescriptions[i]}`
     const images: string[] = [];
 
     // Generate all scenes in parallel for speed
-    logger.log(`⚡ Generating all ${scenes.length} images in parallel...`);
+    logger.info(`[${story_id}] ⚡ Generating all ${scenes.length} images in parallel...`);
 
     // Helper function to retry API calls with simple retry logic
     const retryWithDelay = async (fn: () => Promise<any>, maxRetries = 3) => {
@@ -476,7 +476,7 @@ Visual Description: ${visualDescriptions[i]}`
             throw error; // Don't retry non-network errors or if max retries reached
           }
 
-          logger?.log(`⚠️ Attempt ${attempt} failed, retrying...`);
+          logger.warn(`[${story_id}] ⚠️ Attempt ${attempt} failed, retrying...`);
           await new Promise(resolve => setTimeout(resolve, 1000)); // 1 second delay
         }
       }
@@ -485,7 +485,7 @@ Visual Description: ${visualDescriptions[i]}`
     const generateImage = async (i: number) => {
       const scene = scenes[i];
       const sceneDescription = visualDescriptions[i];
-      logger?.log(`📸 Starting image ${i + 1}/${scenes.length} for: "${scene.text.substring(0, 50)}..."`);
+      logger.info(`[${story_id}] 📸 Starting image ${i + 1}/${scenes.length} for: "${scene.text.substring(0, 50)}..."`);
 
       // Build character reference context
       const characterContext = characters.length > 0 ? `\n\nCHARACTER REFERENCE (maintain these exact designs):
@@ -568,7 +568,7 @@ Generate one beautiful image for Scene ${i + 1} in "${finalStyle}" style${refere
         const responseText = await resp.text();
 
         if (!resp.ok) {
-          logger?.error(`❌ API error for scene ${i + 1}:`, responseText.substring(0, 300));
+          logger.error(`[${story_id}] ❌ API error for scene ${i + 1}: ${responseText.substring(0, 300)}`);
           throw new Error(`Image generation failed for scene ${i + 1} (${resp.status}): ${responseText.substring(0, 100)}`);
         }
 
@@ -576,7 +576,7 @@ Generate one beautiful image for Scene ${i + 1} in "${finalStyle}" style${refere
         try {
           data = JSON.parse(responseText);
         } catch (parseErr) {
-          logger?.error(`❌ Failed to parse response for scene ${i + 1}`, responseText.substring(0, 300));
+          logger.error(`[${story_id}] ❌ Failed to parse response for scene ${i + 1}: ${responseText.substring(0, 300)}`);
           throw new Error(`Invalid JSON response for scene ${i + 1}`);
         }
 
@@ -598,14 +598,14 @@ Generate one beautiful image for Scene ${i + 1} in "${finalStyle}" style${refere
         }
 
         if (!imageUrl) {
-          logger?.error(`❌ No image returned for scene ${i + 1}`);
+          logger.error(`[${story_id}] ❌ No image returned for scene ${i + 1}`);
           throw new Error(`No image generated for scene ${i + 1}`);
         }
 
         return imageUrl;
       }, 3); // 3 retries with 1 second delay
 
-      logger?.log(`✅ Scene ${i + 1} image generated successfully`);
+      logger.info(`[${story_id}] ✅ Scene ${i + 1} image generated successfully`);
       return { index: i, imageUrl: result };
     };
 
@@ -622,7 +622,7 @@ Generate one beautiful image for Scene ${i + 1} in "${finalStyle}" style${refere
         successfulResults.push(result.value);
       } else {
         failedScenes.push(index);
-        logger?.error(`❌ Scene ${index + 1} failed after retries: ${result.reason?.message || result.reason}`);
+        logger.error(`[${story_id}] ❌ Scene ${index + 1} failed after retries: ${result.reason?.message || result.reason}`);
       }
     });
 
@@ -636,10 +636,10 @@ Generate one beautiful image for Scene ${i + 1} in "${finalStyle}" style${refere
     images.push(...sortedImages);
 
     if (failedScenes.length > 0) {
-      logger.log(`⚠️ ${failedScenes.length} scene(s) failed: ${failedScenes.map(i => i + 1).join(', ')}`);
-      logger.log(`✅ Successfully generated ${images.length} images out of ${scenes.length} scenes`);
+      logger.warn(`[${story_id}] ⚠️ ${failedScenes.length} scene(s) failed: ${failedScenes.map(i => i + 1).join(', ')}`);
+      logger.info(`[${story_id}] ✅ Successfully generated ${images.length} images out of ${scenes.length} scenes`);
     } else {
-      logger.log(`\n🖼️ Successfully generated ${images.length} unique images for ${scenes.length} scenes`);
+      logger.info(`[${story_id}] \n🖼️ Successfully generated ${images.length} unique images for ${scenes.length} scenes`);
     }
 
     // 5️⃣ Save new images (only for successful scenes)
@@ -672,7 +672,7 @@ Generate one beautiful image for Scene ${i + 1} in "${finalStyle}" style${refere
 
         if (filesToDelete.length > 0) {
           await supabaseAdmin.storage.from("images").remove(filesToDelete);
-          logger.log(`🗑️ Deleted ${filesToDelete.length} old image(s) for scene ${i + 1}`);
+          logger.info(`[${story_id}] 🗑️ Deleted ${filesToDelete.length} old image(s) for scene ${i + 1}`);
         }
       }
 
@@ -714,24 +714,24 @@ Generate one beautiful image for Scene ${i + 1} in "${finalStyle}" style${refere
           image_url: publicUrl,
           image_generated_at: imageGeneratedAt
         });
-        logger.log(`✅ Updated scene ${i + 1} with image → ${publicUrl}`);
+        logger.info(`[${story_id}] ✅ Updated scene ${i + 1} with image → ${publicUrl}`);
       } catch (saveErr: any) {
-        logger?.error(`❌ Failed to save image for scene ${i + 1}:`, saveErr.message);
+        logger.error(`[${story_id}] ❌ Failed to save image for scene ${i + 1}: ${saveErr.message}`);
         // Continue with other scenes even if one fails to save
       }
     }
 
-    logger.log(`📸 Updated ${uploads.length} scenes with image URLs`);
+    logger.info(`[${story_id}] 📸 Updated ${uploads.length} scenes with image URLs`);
 
     if (failedScenes.length > 0) {
-      logger.log(`⚠️ Warning: ${failedScenes.length} scene(s) could not generate images: ${failedScenes.map(i => i + 1).join(', ')}`);
+      logger.warn(`[${story_id}] ⚠️ Warning: ${failedScenes.length} scene(s) could not generate images: ${failedScenes.map(i => i + 1).join(', ')}`);
     }
 
     // Save image_instructions and default_image_style to story
     const instructionsToSave = (instructions && instructions.trim()) ? instructions.trim() : null;
     const styleToSave = finalStyle || null;
 
-    logger.log(`💾 Saving to story: image_instructions="${instructionsToSave}", default_image_style="${styleToSave}"`);
+    logger.info(`[${story_id}] 💾 Saving to story: image_instructions="${instructionsToSave}", default_image_style="${styleToSave}"`);
 
     const { error: storyUpdateErr } = await supabaseAdmin
       .from("stories")
@@ -742,23 +742,23 @@ Generate one beautiful image for Scene ${i + 1} in "${finalStyle}" style${refere
       .eq("id", story_id);
 
     if (storyUpdateErr) {
-      logger.error("❌ Failed to save:", storyUpdateErr);
+      logger.error(`[${story_id}] ❌ Failed to save: ${storyUpdateErr.message}`);
     } else {
-      logger.log(`✅ Saved successfully`);
+      logger.info(`[${story_id}] ✅ Saved successfully`);
     }
 
     // Log extracted story elements for reference (not saved to DB)
     if (characters.length > 0 || environments.length > 0 || props.length > 0) {
-      logger.log(`📋 Extracted story elements (for this generation only):`);
-      logger.log(`   👥 ${characters.length} characters`);
-      logger.log(`   🌍 ${environments.length} environments`);
-      logger.log(`   🎯 ${props.length} props`);
+      logger.info(`[${story_id}] 📋 Extracted story elements (for this generation only):`);
+      logger.info(`[${story_id}]    👥 ${characters.length} characters`);
+      logger.info(`[${story_id}]    🌍 ${environments.length} environments`);
+      logger.info(`[${story_id}]    🎯 ${props.length} props`);
     }
 
     // Update story metadata (completion status)
-    logger.log(`📊 Updating story metadata...`);
+    logger.info(`[${story_id}] 📊 Updating story metadata...`);
     await updateStoryMetadata(story_id);
-    logger.log(`✅ Story metadata updated`);
+    logger.info(`[${story_id}] ✅ Story metadata updated`);
 
     res.status(200).json({
       story_id,
@@ -773,7 +773,7 @@ Generate one beautiful image for Scene ${i + 1} in "${finalStyle}" style${refere
     });
 
   } catch (err: any) {
-    if (logger) logger.error("❌ Error generating images", err);
+    logger?.error(`[${story_id}] ❌ Error generating images: ${err.message}`);
 
     // 💳 Auto-refund credits if generation failed
     try {
@@ -793,7 +793,7 @@ Generate one beautiful image for Scene ${i + 1} in "${finalStyle}" style${refere
 
         const refundAmount = (storyScenes?.length || 0) * CREDIT_COSTS.IMAGE_PER_SCENE;
 
-        logger?.log(`💸 Refunding ${refundAmount} credits due to generation failure...`);
+        logger?.info(`[${story_id}] 💸 Refunding ${refundAmount} credits due to generation failure...`);
         const refundResult = await refundCredits(
           story.user_id,
           refundAmount,
@@ -802,13 +802,13 @@ Generate one beautiful image for Scene ${i + 1} in "${finalStyle}" style${refere
         );
 
         if (refundResult.success) {
-          logger?.log(`✅ Refunded ${refundAmount} credits. New balance: ${refundResult.newBalance}`);
+          logger?.info(`[${story_id}] ✅ Refunded ${refundAmount} credits. New balance: ${refundResult.newBalance}`);
         } else {
-          logger?.error(`❌ Failed to refund credits`);
+          logger?.error(`[${story_id}] ❌ Failed to refund credits`);
         }
       }
     } catch (refundErr: any) {
-      logger?.error(`❌ Error during refund process: ${refundErr.message}`);
+      logger?.error(`[${story_id}] ❌ Error during refund process: ${refundErr.message}`);
     }
 
     res.status(500).json({ error: err.message || "Image generation failed" });

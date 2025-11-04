@@ -1,6 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { supabaseAdmin } from "../../lib/supabaseAdmin";
-import { JobLogger } from "../../lib/logger";
+import { getUserLogger } from "../../lib/userLogger";
 import { updateStoryMetadata } from "../../lib/updateStoryMetadata";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -14,11 +14,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ error: "story_id, scene_text, and position are required" });
   }
 
-  let logger: JobLogger | null = null;
-
   try {
-    logger = new JobLogger(story_id, "add_scene");
-    logger.log(`➕ Adding scene at position ${position} for story: ${story_id}`);
+    // Get user_id from story for logging
+    const { data: storyData } = await supabaseAdmin
+      .from("stories")
+      .select("user_id")
+      .eq("id", story_id)
+      .single();
+
+    const logger = storyData?.user_id ? getUserLogger(storyData.user_id) : null;
+    logger?.info(`[${story_id}] ➕ Adding scene at position ${position}`);
 
     // 1️⃣ Get all existing scenes for this story
     const { data: existingScenes, error: fetchError } = await supabaseAdmin
@@ -31,7 +36,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       throw new Error(`Failed to fetch existing scenes: ${fetchError.message}`);
     }
 
-    logger.log(`📚 Found ${existingScenes?.length || 0} existing scenes`);
+    logger?.info(`[${story_id}] 📚 Found ${existingScenes?.length || 0} existing scenes`);
 
     // 2️⃣ Update order of existing scenes that come after the insertion position
     // Strategy: Use negative temporary values to avoid unique constraint violations
@@ -42,7 +47,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const scenesToUpdate = existingScenes.filter(scene => scene.order >= position);
 
       if (scenesToUpdate.length > 0) {
-        logger.log(`🔄 Updating order for ${scenesToUpdate.length} scenes (avoiding constraint violations)...`);
+        logger?.info(`[${story_id}] 🔄 Updating order for ${scenesToUpdate.length} scenes (avoiding constraint violations)...`);
 
         // Step 1: Move scenes to negative temporary positions (to avoid unique constraint violations)
         for (let i = 0; i < scenesToUpdate.length; i++) {
@@ -59,7 +64,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
         }
 
-        logger.log(`📦 Moved ${scenesToUpdate.length} scenes to temporary positions`);
+        logger?.info(`[${story_id}] 📦 Moved ${scenesToUpdate.length} scenes to temporary positions`);
 
         // Step 2: Move scenes to final positions (original order + 1)
         for (const scene of scenesToUpdate) {
@@ -75,7 +80,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
         }
 
-        logger.log(`✅ Updated order for ${scenesToUpdate.length} scenes to final positions`);
+        logger?.info(`[${story_id}] ✅ Updated order for ${scenesToUpdate.length} scenes to final positions`);
       }
     }
 
@@ -94,7 +99,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       throw new Error(`Failed to insert new scene: ${insertError.message}`);
     }
 
-    logger.log(`✅ New scene added at position ${position} with id: ${newScene.id}`);
+    logger?.info(`[${story_id}] ✅ New scene added at position ${position} with id: ${newScene.id}`);
 
     // 4️⃣ Get all scenes after update to return
     const { data: updatedScenes, error: fetchUpdatedError } = await supabaseAdmin
@@ -104,13 +109,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .order("order", { ascending: true });
 
     if (fetchUpdatedError) {
-      logger.log(`⚠️ Warning: Could not fetch updated scenes: ${fetchUpdatedError.message}`);
+      logger?.info(`[${story_id}] ⚠️ Warning: Could not fetch updated scenes: ${fetchUpdatedError.message}`);
     }
 
     // Update story metadata (completion status - new scene won't have audio/images)
-    logger.log(`📊 Updating story metadata...`);
+    logger?.info(`[${story_id}] 📊 Updating story metadata...`);
     await updateStoryMetadata(story_id);
-    logger.log(`✅ Story metadata updated`);
+    logger?.info(`[${story_id}] ✅ Story metadata updated`);
 
     res.status(200).json({
       success: true,
@@ -121,11 +126,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
-    console.error("Add scene error:", error);
-
-    if (logger) {
-      logger.log(`❌ Scene addition failed: ${errorMessage}`);
-    }
+    console.error(`[${story_id}] Add scene error:`, error);
 
     res.status(500).json({
       error: errorMessage

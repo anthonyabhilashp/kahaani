@@ -1,6 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { supabaseAdmin } from "../../lib/supabaseAdmin";
-import { JobLogger } from "../../lib/logger";
+import { getUserLogger } from "../../lib/userLogger";
 import { updateStoryMetadata } from "../../lib/updateStoryMetadata";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -9,16 +9,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const { story_id, scene_id, scene_order } = req.body;
-  
+
   if (!story_id || (!scene_id && scene_order === undefined)) {
     return res.status(400).json({ error: "story_id and scene identifier are required" });
   }
 
-  let logger: JobLogger | null = null;
-
   try {
-    logger = new JobLogger(story_id, "delete_scene");
-    logger.log(`🗑️ Deleting scene for story: ${story_id}`);
+    // Get user_id from story for logging
+    const { data: storyData } = await supabaseAdmin
+      .from("stories")
+      .select("user_id")
+      .eq("id", story_id)
+      .single();
+
+    const logger = storyData?.user_id ? getUserLogger(storyData.user_id) : null;
+    logger?.info(`[${story_id}] 🗑️ Deleting scene for story`);
 
     // 1️⃣ Get scene data before deleting (for storage cleanup)
     const { data: sceneData, error: fetchSceneError } = await supabaseAdmin
@@ -28,9 +33,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .single();
 
     if (fetchSceneError) {
-      logger.log(`⚠️ Warning: Could not fetch scene data: ${fetchSceneError.message}`);
+      logger?.info(`[${story_id}] ⚠️ Warning: Could not fetch scene data: ${fetchSceneError.message}`);
     } else {
-      logger.log(`📦 Scene data: image=${!!sceneData?.image_url}, audio=${!!sceneData?.audio_url}`);
+      logger?.info(`[${story_id}] 📦 Scene data: image=${!!sceneData?.image_url}, audio=${!!sceneData?.audio_url}`);
     }
 
     // Get image URLs before deleting from database (for storage cleanup)
@@ -41,7 +46,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .eq("scene_order", scene_order);
 
     if (fetchImagesError) {
-      logger.log(`⚠️ Warning: Could not fetch images for storage cleanup: ${fetchImagesError.message}`);
+      logger?.info(`[${story_id}] ⚠️ Warning: Could not fetch images for storage cleanup: ${fetchImagesError.message}`);
     }
 
     // Delete the scene from the database
@@ -66,25 +71,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       throw new Error(`Failed to delete scene: ${deleteResult.error.message}`);
     }
 
-    logger.log("✅ Scene deleted from database");
+    logger?.log("✅ Scene deleted from database");
 
     // 2️⃣ Delete audio file from storage
     if (sceneData?.audio_url && scene_id) {
       try {
         const audioFileName = `scene-${scene_id}.mp3`;
-        logger.log(`🎵 Deleting audio file: ${audioFileName}`);
+        logger?.info(`[${story_id}] 🎵 Deleting audio file: ${audioFileName}`);
 
         const { error: audioStorageError } = await supabaseAdmin.storage
           .from("audio")
           .remove([audioFileName]);
 
         if (audioStorageError) {
-          logger.log(`⚠️ Warning: Could not delete audio file: ${audioStorageError.message}`);
+          logger?.info(`[${story_id}] ⚠️ Warning: Could not delete audio file: ${audioStorageError.message}`);
         } else {
-          logger.log(`✅ Audio file deleted: ${audioFileName}`);
+          logger?.info(`[${story_id}] ✅ Audio file deleted: ${audioFileName}`);
         }
       } catch (audioErr) {
-        logger.log(`⚠️ Warning: Error deleting audio: ${audioErr instanceof Error ? audioErr.message : 'Unknown'}`);
+        logger?.info(`[${story_id}] ⚠️ Warning: Error deleting audio: ${audioErr instanceof Error ? audioErr.message : 'Unknown'}`);
       }
     }
 
@@ -93,20 +98,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       try {
         const imagePath = sceneData.image_url.split("/images/")[1];
         if (imagePath) {
-          logger.log(`🖼️ Deleting image file: ${imagePath}`);
+          logger?.info(`[${story_id}] 🖼️ Deleting image file: ${imagePath}`);
 
           const { error: imageStorageError } = await supabaseAdmin.storage
             .from("images")
             .remove([imagePath]);
 
           if (imageStorageError) {
-            logger.log(`⚠️ Warning: Could not delete image file: ${imageStorageError.message}`);
+            logger?.info(`[${story_id}] ⚠️ Warning: Could not delete image file: ${imageStorageError.message}`);
           } else {
-            logger.log(`✅ Image file deleted: ${imagePath}`);
+            logger?.info(`[${story_id}] ✅ Image file deleted: ${imagePath}`);
           }
         }
       } catch (imageErr) {
-        logger.log(`⚠️ Warning: Error deleting image: ${imageErr instanceof Error ? imageErr.message : 'Unknown'}`);
+        logger?.info(`[${story_id}] ⚠️ Warning: Error deleting image: ${imageErr instanceof Error ? imageErr.message : 'Unknown'}`);
       }
     }
 
@@ -118,7 +123,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .eq("scene_order", scene_order);
 
     if (imageDeleteResult.error) {
-      logger.log(`⚠️ Warning: Could not delete associated images: ${imageDeleteResult.error.message}`);
+      logger?.info(`[${story_id}] ⚠️ Warning: Could not delete associated images: ${imageDeleteResult.error.message}`);
     }
 
     // Delete image files from Supabase storage
@@ -139,13 +144,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 .remove([filePath]);
               
               if (storageError) {
-                logger.log(`⚠️ Warning: Could not delete storage file ${filePath}: ${storageError.message}`);
+                logger?.info(`[${story_id}] ⚠️ Warning: Could not delete storage file ${filePath}: ${storageError.message}`);
               } else {
-                logger.log(`🗑️ Deleted storage file: ${filePath}`);
+                logger?.info(`[${story_id}] 🗑️ Deleted storage file: ${filePath}`);
               }
             }
           } catch (storageErr) {
-            logger.log(`⚠️ Warning: Could not parse image URL for storage deletion: ${image.image_url}`);
+            logger?.info(`[${story_id}] ⚠️ Warning: Could not parse image URL for storage deletion: ${image.image_url}`);
           }
         }
       }
@@ -159,9 +164,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .order("order", { ascending: true });
 
     if (fetchError) {
-      logger.log(`⚠️ Warning: Could not fetch remaining scenes for reordering: ${fetchError.message}`);
+      logger?.info(`[${story_id}] ⚠️ Warning: Could not fetch remaining scenes for reordering: ${fetchError.message}`);
     } else if (remainingScenes && remainingScenes.length > 0) {
-      logger.log(`🔄 Reordering ${remainingScenes.length} remaining scenes (avoiding constraint violations)...`);
+      logger?.info(`[${story_id}] 🔄 Reordering ${remainingScenes.length} remaining scenes (avoiding constraint violations)...`);
 
       // Step 1: Move all scenes to negative temporary positions
       for (let i = 0; i < remainingScenes.length; i++) {
@@ -174,7 +179,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           .eq("id", scene.id);
       }
 
-      logger.log(`📦 Moved ${remainingScenes.length} scenes to temporary positions`);
+      logger?.info(`[${story_id}] 📦 Moved ${remainingScenes.length} scenes to temporary positions`);
 
       // Step 2: Update to final sequential order (0, 1, 2, ...)
       for (let i = 0; i < remainingScenes.length; i++) {
@@ -185,7 +190,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           .eq("id", scene.id);
       }
 
-      logger.log(`✅ Reordered ${remainingScenes.length} scenes to sequential order`);
+      logger?.info(`[${story_id}] ✅ Reordered ${remainingScenes.length} scenes to sequential order`);
 
       // Also reorder images
       const { data: remainingImages } = await supabaseAdmin
@@ -195,7 +200,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .order("scene_order", { ascending: true });
 
       if (remainingImages && remainingImages.length > 0) {
-        logger.log(`🔄 Reordering ${remainingImages.length} images...`);
+        logger?.info(`[${story_id}] 🔄 Reordering ${remainingImages.length} images...`);
 
         // Step 1: Move to temporary positions
         for (let i = 0; i < remainingImages.length; i++) {
@@ -215,16 +220,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             .eq("id", image.id);
         }
 
-        logger.log(`✅ Reordered ${remainingImages.length} images`);
+        logger?.info(`[${story_id}] ✅ Reordered ${remainingImages.length} images`);
       }
     }
 
-    logger.log("✅ Scene deleted and remaining scenes reordered successfully");
+    logger?.log("✅ Scene deleted and remaining scenes reordered successfully");
 
     // Update story metadata (duration and completion status)
-    logger.log(`📊 Updating story metadata...`);
+    logger?.log(`📊 Updating story metadata...`);
     await updateStoryMetadata(story_id);
-    logger.log(`✅ Story metadata updated`);
+    logger?.log(`✅ Story metadata updated`);
 
     res.status(200).json({
       success: true,
@@ -233,14 +238,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
-    console.error("Delete scene error:", error);
-    
-    if (logger) {
-      logger.log(`❌ Scene deletion failed: ${errorMessage}`);
-    }
+    console.error(`[${story_id}] Delete scene error:`, error);
 
-    res.status(500).json({ 
-      error: errorMessage 
+    res.status(500).json({
+      error: errorMessage
     });
   }
 }

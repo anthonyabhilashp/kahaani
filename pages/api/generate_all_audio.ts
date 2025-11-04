@@ -187,7 +187,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
           logger.log(`✅ Generated ${wordTimestamps.length} word timestamps`);
         } catch (alignErr: any) {
-          logger.error(`⚠️ Word alignment failed for scene ${scene.id}, continuing without timestamps`, alignErr);
+          logger.error(`⚠️ Word alignment failed for scene ${scene.id}, continuing without timestamps: ${alignErr instanceof Error ? alignErr.message : String(alignErr)}`);
         }
 
         // 8️⃣ Delete old audio files for this scene (all versions)
@@ -251,7 +251,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         });
 
       } catch (sceneErr: any) {
-        logger.error(`❌ Failed to generate audio for scene ${scene.id}:`, sceneErr);
+        logger.error(`❌ Failed to generate audio for scene ${scene.id}: ${sceneErr instanceof Error ? sceneErr.message : String(sceneErr)}`);
         // Continue with next scene instead of failing completely
         updatedScenes.push({
           id: scene.id,
@@ -296,7 +296,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       updated_scenes: updatedScenes
     });
   } catch (err: any) {
-    if (logger) logger.error("❌ Error during bulk audio generation", err);
+    if (logger) logger.error(`❌ Error during bulk audio generation: ${err instanceof Error ? err.message : String(err)}`);
 
     // Refund credits if they were deducted but operation failed
     if (creditsDeducted && userId) {
