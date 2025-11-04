@@ -54,7 +54,7 @@ export default function StoryDetailsPage() {
   const router = useRouter();
   const { id } = router.query;
   const { balance: creditBalance, refetch: refetchCredits } = useCredits();
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
 
   const [story, setStory] = useState<any>(null);
   const [isAdmin, setIsAdmin] = useState(false);
@@ -312,6 +312,13 @@ export default function StoryDetailsPage() {
   const volumeRef = useRef(volume); // Track current volume with ref
 
   // Keep volumeRef in sync with volume state
+  // Redirect to homepage if not authenticated
+  useEffect(() => {
+    if (!authLoading && !user) {
+      router.push('/');
+    }
+  }, [authLoading, user, router]);
+
   useEffect(() => {
     volumeRef.current = volume;
   }, [volume]);

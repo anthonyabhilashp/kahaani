@@ -43,7 +43,7 @@ type SeriesDetail = {
 export default function SeriesDetailPage() {
   const router = useRouter();
   const { id } = router.query;
-  const { user, signOut } = useAuth();
+  const { user, signOut, loading: authLoading } = useAuth();
   const { balance: creditBalance, loading: creditsLoading } = useCredits();
   const [series, setSeries] = useState<SeriesDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -56,6 +56,13 @@ export default function SeriesDetailPage() {
   const [storyToRemove, setStoryToRemove] = useState<string | null>(null);
   const [removing, setRemoving] = useState(false);
 
+  // Redirect to homepage if not authenticated
+  useEffect(() => {
+    if (!authLoading && !user) {
+      router.push('/');
+    }
+  }, [authLoading, user, router]);
+
   useEffect(() => {
     if (id && user) {
       fetchSeriesDetail();
@@ -67,7 +74,7 @@ export default function SeriesDetailPage() {
     try {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) {
-        router.push('/login');
+        router.push('/');
         return;
       }
 
