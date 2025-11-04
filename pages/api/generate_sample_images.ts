@@ -34,11 +34,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     console.log("🎨 Starting sample image generation for all 12 styles...");
 
     const IMAGE_MODEL = process.env.IMAGE_MODEL || "google/gemini-2.0-flash-exp:free";
-    const VIDEO_WIDTH = parseInt(process.env.VIDEO_WIDTH || "1080");
-    const VIDEO_HEIGHT = parseInt(process.env.VIDEO_HEIGHT || "1920");
-    const ASPECT_RATIO = process.env.ASPECT_RATIO || "9:16";
+    // Default to 9:16 (portrait) for sample images
+    const ASPECT_RATIO = "9:16";
+    const VIDEO_WIDTH = 2160;
+    const VIDEO_HEIGHT = 3840;
 
-    console.log(`📐 Generating images at ${VIDEO_WIDTH}x${VIDEO_HEIGHT} (${ASPECT_RATIO})`);
+    console.log(`📐 Generating sample images at ${VIDEO_WIDTH}x${VIDEO_HEIGHT} (${ASPECT_RATIO})`);
 
     const results = [];
 

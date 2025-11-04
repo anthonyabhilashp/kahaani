@@ -7,19 +7,6 @@ import { calculateSceneDuration } from "../../lib/utils";
 import { checkRateLimit, RateLimits } from "../../lib/rateLimit";
 
 // --- Utility ---
-function isLongText(text: string): boolean {
-  const sentences = text.split(/[.!?]/).filter((s) => s.trim().length > 0);
-  return sentences.length > 2 || text.length > 200;
-}
-
-function splitIntoScenes(text: string): { text: string }[] {
-  const sentences = text
-    .split(/[.!?]/)
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
-  return sentences.map((s) => ({ text: s }));
-}
-
 function cleanJSON(raw: string): string {
   return raw.replace(/```(?:json)?/g, "").trim();
 }
@@ -131,16 +118,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .update({ title: generatedTitle })
         .eq("id", storyId);
     } else if (!isBlank) {  // Skip LLM generation for blank stories
+      const SCENE_MODEL = process.env.SCENE_MODEL || "deepseek/deepseek-r1-0528";
+      const PROVIDER = process.env.PROVIDER || "openrouter";
+      logger.log(`🧠 Generating ${sceneCount} scenes with ${SCENE_MODEL} (${PROVIDER})...`);
 
-      if (isLongText(prompt)) {
-        logger.log("📖 Long story detected — splitting into sentences...");
-        scenes = splitIntoScenes(prompt);
-      } else {
-        const SCENE_MODEL = process.env.SCENE_MODEL || "mistralai/mistral-7b-instruct";
-        const PROVIDER = process.env.PROVIDER || "openrouter";
-        logger.log(`🧠 Generating ${sceneCount} scenes with ${SCENE_MODEL} (${PROVIDER})...`);
-
-        const storyPrompt = `
+      const storyPrompt = `
 You are a JSON generator. Break the following content into exactly ${sceneCount} scenes with a title.
 
 RULES:
@@ -150,6 +132,7 @@ RULES:
 - Write complete sentences that work well when read aloud
 - Make each scene clear, engaging, and easy to visualize
 - Focus on creating compelling, high-quality content for each scene
+- If the user provides a long story, intelligently condense or summarize it into exactly ${sceneCount} scenes
 - The LAST scene should provide closure appropriate to the content type
 
 Return ONLY valid JSON in this exact format:
@@ -163,7 +146,7 @@ Return ONLY valid JSON in this exact format:
 }
 
 User request: ${prompt}
-        `;
+      `;
 
       const response = await fetch(OPENROUTER_URL, {
         method: "POST",
@@ -197,7 +180,6 @@ User request: ${prompt}
       } catch {
         logger.error("⚠️ Model returned invalid JSON, fallback to single scene");
         scenes = [{ text: prompt }];
-      }
       }
     }
 

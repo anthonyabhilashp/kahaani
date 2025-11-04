@@ -28,17 +28,52 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     logger = new JobLogger(scene.story_id, "generate_scene_image");
     logger?.log(`🎨 Generating image for scene ${scene.order + 1}: ${scene_id}`);
 
-    // 1.5️⃣ Fetch other scenes with images for consistency reference
-    const { data: allScenes, error: allScenesErr } = await supabaseAdmin
-      .from("scenes")
-      .select("id, text, order, image_url")
-      .eq("story_id", scene.story_id)
-      .not("image_url", "is", null)
-      .neq("id", scene_id)
-      .order("order", { ascending: true });
+    // 1.5️⃣ Check if story belongs to a series and get aspect ratio
+    const { data: story, error: storyErr } = await supabaseAdmin
+      .from("stories")
+      .select("series_id, aspect_ratio")
+      .eq("id", scene.story_id)
+      .single();
 
-    const referenceScenes = allScenes || [];
-    logger?.log(`📸 Found ${referenceScenes.length} existing images for consistency reference`);
+    const storyAspectRatio = story?.aspect_ratio || "9:16";
+    let seriesReference: string | null = null;
+    let characterLibrary: any = null;
+    const isSeriesStory = story && story.series_id;
+
+    if (isSeriesStory) {
+      logger?.log(`📺 Story belongs to series: ${story.series_id}`);
+
+      // Load series reference image and character library
+      const { data: series, error: seriesErr } = await supabaseAdmin
+        .from("series")
+        .select("reference_image_url, character_library")
+        .eq("id", story.series_id)
+        .single();
+
+      if (!seriesErr && series) {
+        seriesReference = series.reference_image_url;
+        characterLibrary = series.character_library;
+
+        logger?.log(`📚 Series reference loaded:`);
+        logger?.log(`   🖼️ Reference image: ${seriesReference ? 'exists' : 'none'}`);
+        logger?.log(`   👥 Character library: ${characterLibrary?.characters?.length || 0} characters`);
+      }
+    }
+
+    // Fallback: If no series reference, use other scene images from current story
+    let referenceScenes: any[] = [];
+    if (!seriesReference) {
+      const { data: allScenes } = await supabaseAdmin
+        .from("scenes")
+        .select("id, text, order, image_url")
+        .eq("story_id", scene.story_id)
+        .not("image_url", "is", null)
+        .neq("id", scene_id)
+        .order("order", { ascending: true });
+
+      referenceScenes = allScenes || [];
+      logger?.log(`📸 No series reference - using ${referenceScenes.length} scene images for consistency`);
+    }
 
     // 2️⃣ Clean up old image if exists
     if (scene.image_url) {
@@ -53,16 +88,34 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const provider = process.env.PROVIDER || "openrouter";
     const model = process.env.IMAGE_MODEL || "google/gemini-2.5-flash-image-preview";
 
-    const aspect = process.env.ASPECT_RATIO || "9:16";
-    const videoWidth = parseInt(process.env.VIDEO_WIDTH || "1080");
-    const videoHeight = parseInt(process.env.VIDEO_HEIGHT || "1920");
-    const imageSize = `${videoWidth}x${videoHeight}`;
+    // 🎯 Use story-specific aspect ratio (NEVER use env ASPECT_RATIO)
+    const aspect = storyAspectRatio;
+    let videoWidth: number, videoHeight: number;
 
-    logger?.log(`🧠 Using ${provider} model: ${model} (${imageSize}, aspect ${aspect})`);
+    // Calculate dimensions based on story's aspect ratio
+    switch (aspect) {
+      case "16:9":
+        videoWidth = 3840;
+        videoHeight = 2160;
+        break;
+      case "1:1":
+        videoWidth = 3840;
+        videoHeight = 3840;
+        break;
+      case "9:16":
+      default:
+        videoWidth = 2160;
+        videoHeight = 3840;
+        break;
+    }
+
+    const imageSize = `${videoWidth}x${videoHeight}`;
+    logger?.log(`📐 Story aspect ratio: ${aspect}, using ${imageSize}`);
+    logger?.log(`🧠 Using ${provider} model: ${model}`);
 
     const finalStyle = style || "cinematic illustration";
 
-    // 4️⃣ Build prompt for single scene with reference images
+    // 4️⃣ Build prompt for single scene with series reference or scene images
     let promptText = `You are a professional cinematic illustrator.
 
 CRITICAL: Generate EXACTLY ONE SINGLE IMAGE. Do NOT create multiple images, panels, or a sequence. Just ONE standalone image.
@@ -73,8 +126,27 @@ Style: ${finalStyle}
 
 `;
 
-    // Add reference context if we have existing images
-    if (referenceScenes.length > 0) {
+    // Add series reference context if available
+    if (seriesReference && characterLibrary) {
+      promptText += `⚠️ SERIES CHARACTER REFERENCE PROVIDED ABOVE:
+A reference sheet image is provided showing all characters from this series.
+
+CHARACTER LIBRARY (all characters from this series):
+${characterLibrary.characters?.map((c: any, i: number) => `${i + 1}. ${c.name}: ${c.description}`).join('\n') || 'No characters'}
+
+${characterLibrary.environments?.length > 0 ? `\nENVIRONMENTS:
+${characterLibrary.environments.map((e: any, i: number) => `${i + 1}. ${e.name}: ${e.description}`).join('\n')}` : ''}
+
+CRITICAL REQUIREMENTS:
+- Use the reference sheet image above to maintain EXACT character designs
+- Characters must look IDENTICAL to how they appear in the reference
+- Match art style, color palette, and visual mood from the reference
+- This is ONE scene from a series - maintain visual consistency
+- DO NOT recreate the reference sheet - use it as a guide for character appearance
+
+`;
+    } else if (referenceScenes.length > 0) {
+      // Fallback to scene images if no series reference
       promptText += `IMPORTANT - Visual Consistency:
 You have ${referenceScenes.length} reference image(s) from previous scenes in this story (shown above for reference only).
 - Maintain EXACT SAME character designs, faces, clothing, and appearance as in the reference images
@@ -88,7 +160,7 @@ You have ${referenceScenes.length} reference image(s) from previous scenes in th
     promptText += `Requirements:
 - Generate ONE SINGLE IMAGE ONLY (not multiple images or panels)
 - Create a visually compelling image that captures the essence of THIS SPECIFIC scene only
-- Use consistent artistic style${referenceScenes.length > 0 ? ' matching the reference images' : ''}
+- Use consistent artistic style${seriesReference || referenceScenes.length > 0 ? ' matching the reference' : ''}
 - Match the emotional tone of the description
 - High detail and professional quality
 - DO NOT create a comic strip, storyboard, or sequence of images
@@ -102,13 +174,25 @@ You have ${referenceScenes.length} reference image(s) from previous scenes in th
     promptText += `\n\nIMPORTANT: Generate ONLY ONE SINGLE IMAGE that represents THIS scene: "${scene.text}"
 Do NOT generate multiple scenes, panels, or images in one. Just one standalone image.`;
 
-    // Build message content with reference images (multimodal)
+    // Build message content with reference (multimodal)
     const messageContent: any[] = [];
 
-    // Add reference images first (if any)
-    if (referenceScenes.length > 0) {
+    // Priority 1: Use series reference if available
+    if (seriesReference) {
+      logger?.log(`🖼️ Including series reference image for character consistency`);
+      messageContent.push({
+        type: "image_url",
+        image_url: { url: seriesReference }
+      });
+      messageContent.push({
+        type: "text",
+        text: "This is the series character reference sheet. Use it to maintain character consistency."
+      });
+    }
+    // Priority 2: Fallback to scene images if no series reference
+    else if (referenceScenes.length > 0) {
       const limitedReferences = referenceScenes.slice(0, 3); // Limit to 3 most recent for API efficiency
-      logger?.log(`🖼️ Including ${limitedReferences.length} reference images for consistency`);
+      logger?.log(`🖼️ Including ${limitedReferences.length} scene reference images for consistency`);
 
       for (const refScene of limitedReferences) {
         messageContent.push({

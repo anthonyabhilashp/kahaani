@@ -1025,7 +1025,7 @@ export default function Dashboard() {
 
       {/* Create Button */}
       <Button
-        disabled={creating || !newPrompt.trim()}
+        disabled={creating || (!isBlankStory && !newPrompt.trim())}
         onClick={createStory}
         className="w-full bg-orange-600 hover:bg-orange-700 text-white font-semibold"
         size="lg"
@@ -1036,7 +1036,7 @@ export default function Dashboard() {
           </>
         ) : (
           <>
-            <Plus className="w-5 h-5 mr-2" /> Create Story
+            <Plus className="w-5 h-5 mr-2" /> {isBlankStory ? 'Create Blank Story' : 'Create Story'}
           </>
         )}
       </Button>
@@ -1301,12 +1301,14 @@ export default function Dashboard() {
               <Menu className="w-6 h-6" />
             </button>
             <h1 className="text-xl font-bold text-white">Kahaani</h1>
+            <Button
+              size="sm"
+              className="bg-orange-600 hover:bg-orange-700 text-white font-semibold"
+              onClick={() => openCreateStoryDialog(selectedCategory === "series" && selectedSeriesView ? selectedSeriesView.id : null)}
+            >
+              <Plus className="w-4 h-4 mr-1" /> New
+            </Button>
             <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-              <DialogTrigger asChild>
-                <Button size="sm" className="bg-orange-600 hover:bg-orange-700 text-white font-semibold">
-                  <Plus className="w-4 h-4 mr-1" /> New
-                </Button>
-              </DialogTrigger>
               <DialogContent className="sm:max-w-2xl bg-gray-900 text-white border-gray-800 max-h-[90vh] overflow-y-auto">
                 <DialogHeader>
                   <DialogTitle className="text-2xl font-bold">Create a New Story</DialogTitle>
@@ -1383,13 +1385,14 @@ export default function Dashboard() {
                   </DialogContent>
                 </Dialog>
 
+              <Button
+                className="bg-orange-600 hover:bg-orange-700"
+                onClick={() => openCreateStoryDialog(selectedCategory === "series" && selectedSeriesView ? selectedSeriesView.id : null)}
+              >
+                <Plus className="w-4 h-4 mr-2" />
+                New Story
+              </Button>
               <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-                <DialogTrigger asChild>
-                  <Button className="bg-orange-600 hover:bg-orange-700">
-                    <Plus className="w-4 h-4 mr-2" />
-                    New Story
-                  </Button>
-                </DialogTrigger>
                 <DialogContent className="sm:max-w-2xl bg-gray-900 text-white border-gray-800 max-h-[90vh] overflow-y-auto">
                   <DialogHeader>
                     <DialogTitle className="text-2xl font-bold">Create a New Story</DialogTitle>
@@ -1432,24 +1435,24 @@ export default function Dashboard() {
               )}
 
               {/* Stories from this series */}
-              {storiesBySeries[selectedSeriesView.id]?.length === 0 ? (
+              {(!storiesBySeries[selectedSeriesView.id] || storiesBySeries[selectedSeriesView.id].length === 0) ? (
                 <div className="text-center py-20">
                   <div className="mb-6 flex justify-center">
                     <div className="w-24 h-24 rounded-full bg-orange-900/20 flex items-center justify-center">
                       <Film className="w-12 h-12 text-orange-400" />
                     </div>
                   </div>
-                  <h3 className="text-2xl font-semibold text-white mb-4">No stories in this series yet</h3>
+                  <h3 className="text-2xl font-semibold text-white mb-4">No Stories in This Series Yet</h3>
                   <p className="text-gray-400 mb-8 max-w-md mx-auto">
-                    Create a story and add it to this series
+                    Start building your series by creating the first story. Add episodes to build a connected narrative with consistent characters.
                   </p>
-                  <Button onClick={() => openCreateStoryDialog()} className="bg-orange-600 hover:bg-orange-700">
-                    <Plus className="w-4 h-4 mr-2" /> Create Story
+                  <Button onClick={() => openCreateStoryDialog(selectedSeriesView.id)} className="bg-orange-600 hover:bg-orange-700">
+                    <Plus className="w-4 h-4 mr-2" /> Create First Episode
                   </Button>
                 </div>
               ) : (
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
-                  {storiesBySeries[selectedSeriesView.id].map((story) => (
+                  {(storiesBySeries[selectedSeriesView.id] || []).map((story) => (
                     <StoryCard key={story.id} story={story} showEpisodeBadge={true} />
                   ))}
                 </div>
