@@ -148,7 +148,8 @@ RULES:
 - Match the tone and style to the user's request (educational, narrative, dramatic, informative, etc.)
 - Use proper punctuation: periods, commas, exclamation marks, question marks
 - Write complete sentences that work well when read aloud
-- Make each scene clear and easy to visualize
+- Make each scene clear, engaging, and easy to visualize
+- Focus on creating compelling, high-quality content for each scene
 - The LAST scene should provide closure appropriate to the content type
 
 Return ONLY valid JSON in this exact format:

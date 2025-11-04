@@ -43,33 +43,26 @@ type CreditPackage = {
 const packages: CreditPackage[] = [
   {
     id: "starter",
-    credits: 25,
+    credits: 250,
     price: 20,
-    pricePerCredit: 0.80,
-    savings: "~2 stories"
+    pricePerCredit: 0.08,
+    savings: "~25 stories"
   },
   {
     id: "popular",
-    credits: 100,
+    credits: 1000,
     price: 70,
-    pricePerCredit: 0.70,
+    pricePerCredit: 0.07,
     popular: true,
-    savings: "~10 stories"
+    savings: "~100 stories"
   },
   {
     id: "pro",
-    credits: 300,
+    credits: 3000,
     price: 180,
-    pricePerCredit: 0.60,
+    pricePerCredit: 0.06,
     bestValue: true,
-    savings: "~30 stories"
-  },
-  {
-    id: "enterprise",
-    credits: 1000,
-    price: 500,
-    pricePerCredit: 0.50,
-    savings: "~100 stories"
+    savings: "~300 stories"
   }
 ];
 
@@ -436,7 +429,7 @@ export default function CreditsPage() {
 
           {/* Credit Packages */}
           <div className="mb-12">
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 max-w-5xl mx-auto">
               {packages.map((pkg) => (
                 <div
                   key={pkg.id}

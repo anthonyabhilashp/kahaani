@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Plus, Loader2, PlayCircle, Clock, Film, Image as ImageIcon, Video, Settings, User, LogOut, Trash2, MoreHorizontal, Smartphone, Square, Monitor, Coins, List, ArrowLeft, Menu, X } from "lucide-react";
+import { Plus, Loader2, PlayCircle, Clock, Film, Image as ImageIcon, Video, Settings, User, LogOut, Trash2, MoreHorizontal, Smartphone, Square, Monitor, Coins, List, ArrowLeft, Menu, X, Sparkles, Volume2 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   DropdownMenu,
@@ -18,7 +18,9 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { LandingPage } from "@/components/LandingPage";
 import { useCredits } from "../hooks/useCredits";
+import { CREDIT_COSTS } from "@/lib/creditConstants";
 import { toast } from "@/hooks/use-toast";
+import { Slider } from "@/components/ui/slider";
 
 type Story = {
   id: string;
@@ -78,11 +80,9 @@ export default function Dashboard() {
   const hasFetchedRef = useRef(false);
 
   // New story creation options
-  const [targetDuration, setTargetDuration] = useState<30 | 60 | 120 | 180>(
-    creditBalance <= 15 ? 30 : 60
-  ); // in seconds - default to 30s if low credits
-  const [selectedVoiceId, setSelectedVoiceId] = useState<string>("alloy"); // OpenAI Alloy - default
+  const [selectedVoiceId, setSelectedVoiceId] = useState<string>("ash"); // ElevenLabs Ash - default
   const [aspectRatio, setAspectRatio] = useState<"9:16" | "1:1" | "16:9">("9:16");
+  const [showCustomScenes, setShowCustomScenes] = useState(false);
   const [voices, setVoices] = useState<any[]>([]);
   const [loadingVoices, setLoadingVoices] = useState(false);
   const [playingPreviewId, setPlayingPreviewId] = useState<string | null>(null);
@@ -207,11 +207,7 @@ export default function Dashboard() {
     }
   }
 
-  // Calculate scene count based on target duration (rough estimate: ~6 seconds per scene)
-  useEffect(() => {
-    const estimatedScenes = Math.max(3, Math.round(targetDuration / 6));
-    setSceneCount(estimatedScenes);
-  }, [targetDuration]);
+  // Scene count is now managed directly by user selection (no need to calculate from duration)
 
   // Load voices when dialog opens
   useEffect(() => {
@@ -297,8 +293,9 @@ export default function Dashboard() {
         // Close dialog and reset form
         setDialogOpen(false);
         setNewPrompt("");
-        setTargetDuration(60);
-        setSelectedVoiceId("alloy");
+        setSceneCount(5);
+        setShowCustomScenes(false);
+        setSelectedVoiceId("ash");
         setAspectRatio("9:16");
         setIsBlankStory(false);
         setSelectedSeriesForCreate(null);
@@ -681,12 +678,6 @@ export default function Dashboard() {
     );
   };
 
-  // Format duration for display (30s, 1m, 2m, 3m)
-  function formatTargetDuration(seconds: number): string {
-    if (seconds < 60) return `${seconds}s`;
-    return `${seconds / 60}m`;
-  }
-
   // Format voice labels for display
   function formatVoiceLabels(labels?: Record<string, any>): string {
     if (!labels) return '';
@@ -718,24 +709,28 @@ export default function Dashboard() {
 
   // Render the create story dialog content
   const renderDialogContent = () => (
-    <div className="space-y-4 mt-4">
-      {/* Story Input with inline Story Type toggle - Only show for AI Generated */}
+    <div className="space-y-6 mt-6">
+      {/* Story Input Section */}
       {!isBlankStory && (
-        <div>
-          <div className="flex items-center justify-between mb-2">
-            <label className="text-sm font-medium text-gray-200">
-              Add your story or an idea
-            </label>
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <label className="text-sm font-semibold text-white flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-orange-400" />
+                Story Idea
+              </label>
+              <p className="text-xs text-gray-500 mt-0.5">Describe your story or provide a prompt</p>
+            </div>
 
             {/* Compact Toggle Buttons */}
-            <div className="inline-flex gap-2">
+            <div className="inline-flex gap-1.5 p-1 bg-gray-800 rounded-lg border border-gray-700">
               <button
                 type="button"
                 onClick={() => setIsBlankStory(false)}
-                className={`px-3 py-1 text-xs font-medium rounded-lg border transition-all ${
+                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
                   !isBlankStory
-                    ? 'border-orange-500 bg-orange-500/20 text-orange-400'
-                    : 'border-gray-700 bg-gray-800 text-gray-400 hover:border-gray-600'
+                    ? 'bg-orange-500 text-white shadow-sm'
+                    : 'text-gray-400 hover:text-gray-300'
                 }`}
               >
                 AI Generated
@@ -743,10 +738,10 @@ export default function Dashboard() {
               <button
                 type="button"
                 onClick={() => setIsBlankStory(true)}
-                className={`px-3 py-1 text-xs font-medium rounded-lg border transition-all ${
+                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
                   isBlankStory
-                    ? 'border-orange-500 bg-orange-500/20 text-orange-400'
-                    : 'border-gray-700 bg-gray-800 text-gray-400 hover:border-gray-600'
+                    ? 'bg-orange-500 text-white shadow-sm'
+                    : 'text-gray-400 hover:text-gray-300'
                 }`}
               >
                 Blank
@@ -759,27 +754,30 @@ export default function Dashboard() {
             value={newPrompt}
             onChange={(e) => setNewPrompt(e.target.value)}
             rows={4}
-            className="w-full p-3 bg-gray-800 border border-gray-700 rounded-lg resize-none focus:ring-2 focus:ring-orange-500 focus:border-transparent text-white placeholder:text-gray-500 text-sm"
+            className="w-full p-3.5 bg-gray-800 border border-gray-700 rounded-lg resize-none focus:ring-2 focus:ring-orange-500 focus:border-transparent text-white placeholder:text-gray-500 text-sm transition-all"
           />
         </div>
       )}
 
       {/* Show toggle for Blank story mode */}
       {isBlankStory && (
-        <div className="flex items-center justify-between">
-          <label className="text-sm font-medium text-gray-200">
-            Story Type
-          </label>
+        <div className="flex items-center justify-between p-4 bg-gray-800/50 rounded-lg border border-gray-700">
+          <div>
+            <label className="text-sm font-semibold text-white">
+              Story Type
+            </label>
+            <p className="text-xs text-gray-500 mt-0.5">Choose how to create your story</p>
+          </div>
 
           {/* Compact Toggle Buttons */}
-          <div className="inline-flex gap-2">
+          <div className="inline-flex gap-1.5 p-1 bg-gray-800 rounded-lg border border-gray-700">
             <button
               type="button"
               onClick={() => setIsBlankStory(false)}
-              className={`px-3 py-1 text-xs font-medium rounded-lg border transition-all ${
+              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
                 !isBlankStory
-                  ? 'border-orange-500 bg-orange-500/20 text-orange-400'
-                  : 'border-gray-700 bg-gray-800 text-gray-400 hover:border-gray-600'
+                  ? 'bg-orange-500 text-white shadow-sm'
+                  : 'text-gray-400 hover:text-gray-300'
               }`}
             >
               AI Generated
@@ -787,10 +785,10 @@ export default function Dashboard() {
             <button
               type="button"
               onClick={() => setIsBlankStory(true)}
-              className={`px-3 py-1 text-xs font-medium rounded-lg border transition-all ${
+              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
                 isBlankStory
-                  ? 'border-orange-500 bg-orange-500/20 text-orange-400'
-                  : 'border-gray-700 bg-gray-800 text-gray-400 hover:border-gray-600'
+                  ? 'bg-orange-500 text-white shadow-sm'
+                  : 'text-gray-400 hover:text-gray-300'
               }`}
             >
               Blank
@@ -799,41 +797,112 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Duration - Only show for AI-generated stories */}
+      {/* Divider */}
+      {!isBlankStory && <div className="border-t border-gray-800"></div>}
+
+      {/* Scenes - Only show for AI-generated stories */}
       {!isBlankStory && (
-        <div>
-          <label className="block text-sm font-medium text-gray-200 mb-2">
-            Duration
-          </label>
+        <div className="space-y-3">
+          <div>
+            <label className="text-sm font-semibold text-white flex items-center gap-2">
+              <Film className="w-4 h-4 text-orange-400" />
+              Scenes
+            </label>
+            <p className="text-xs text-gray-500 mt-0.5">Choose the number of scenes for your story</p>
+          </div>
           <div className="grid grid-cols-4 gap-2">
-            {[30, 60, 120, 180].map((duration) => {
-              const sceneEstimate = Math.max(3, Math.round(duration / 6));
-              const isDisabled = creditBalance <= 15 && duration > 30;
+            {[5, 10, 15].map((scenes) => {
+              const estimatedSeconds = scenes * 8;
+              const estimatedMinutes = Math.floor(estimatedSeconds / 60);
+              const remainingSeconds = estimatedSeconds % 60;
+              const timeDisplay = estimatedMinutes > 0
+                ? `~${estimatedMinutes}m ${remainingSeconds}s`
+                : `~${estimatedSeconds}s`;
+              const estimatedCredits = scenes * (CREDIT_COSTS.IMAGE_PER_SCENE + CREDIT_COSTS.AUDIO_PER_SCENE);
+              const isDisabled = creditBalance <= 15 && scenes > 5;
               return (
                 <button
-                  key={duration}
+                  key={scenes}
                   type="button"
-                  onClick={() => !isDisabled && setTargetDuration(duration as 30 | 60 | 120 | 180)}
+                  onClick={() => {
+                    if (!isDisabled) {
+                      setSceneCount(scenes);
+                      setShowCustomScenes(false);
+                    }
+                  }}
                   disabled={isDisabled}
-                  className={`p-2 pt-5 rounded-lg border transition-all relative ${
-                    targetDuration === duration
-                      ? 'border-orange-500 bg-orange-500/20 text-orange-400'
+                  className={`p-2 pt-4 pb-3 rounded-lg border transition-all relative hover:scale-105 ${
+                    sceneCount === scenes && !showCustomScenes
+                      ? 'border-orange-500 bg-orange-500/20 text-orange-400 shadow-sm shadow-orange-500/20'
                       : isDisabled
                       ? 'border-gray-800 bg-gray-900 text-gray-600 cursor-not-allowed opacity-50'
-                      : 'border-gray-700 bg-gray-800 text-gray-400 hover:border-gray-600'
+                      : 'border-gray-700 bg-gray-800 text-gray-400 hover:border-gray-600 hover:bg-gray-750'
                   }`}
                 >
                   {isDisabled && (
-                    <div className="absolute top-0 left-0 right-0 bg-orange-900/30 text-orange-400 text-[9px] font-medium py-0.5 rounded-t-lg text-center">
+                    <div className="absolute top-0 left-0 right-0 bg-orange-900/30 text-orange-400 text-[8px] font-medium py-0.5 rounded-t-lg text-center">
                       Low credits
                     </div>
                   )}
-                  <div className="text-sm font-medium">{formatTargetDuration(duration)}</div>
-                  <div className="text-xs opacity-75">({sceneEstimate} scenes)</div>
+                  <div className="text-sm font-semibold mb-1">{scenes} scenes</div>
+                  <div className="flex items-center justify-center gap-1.5 text-[9px] text-gray-500">
+                    <span>{timeDisplay}</span>
+                    <span>•</span>
+                    <div className="flex items-center gap-0.5">
+                      <Coins className="w-2.5 h-2.5" />
+                      <span>~{estimatedCredits} credits</span>
+                    </div>
+                  </div>
                 </button>
               );
             })}
+            {/* Custom button */}
+            <button
+              type="button"
+              onClick={() => setShowCustomScenes(true)}
+              className={`p-2 pt-5 rounded-lg border transition-all relative hover:scale-105 ${
+                showCustomScenes
+                  ? 'border-orange-500 bg-orange-500/20 text-orange-400 shadow-sm shadow-orange-500/20'
+                  : 'border-gray-700 bg-gray-800 text-gray-400 hover:border-gray-600 hover:bg-gray-750'
+              }`}
+            >
+              <div className="text-sm font-semibold">Custom</div>
+              <div className="text-xs opacity-75">&nbsp;</div>
+            </button>
           </div>
+
+          {/* Custom scene slider */}
+          {showCustomScenes && (
+            <div className="mt-3 p-3 bg-gray-800 rounded-lg border border-gray-700">
+              <div className="flex justify-between items-start mb-3">
+                <label className="text-sm font-medium text-gray-300">
+                  Number of Scenes: <span className="text-orange-400 font-bold">{sceneCount}</span>
+                </label>
+                <div className="flex items-center gap-1.5 text-[10px] text-gray-400">
+                  <span>~{(() => {
+                    const estimatedSeconds = sceneCount * 8;
+                    const mins = Math.floor(estimatedSeconds / 60);
+                    const secs = estimatedSeconds % 60;
+                    return mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+                  })()}</span>
+                  <span className="text-gray-600">•</span>
+                  <span className="flex items-center gap-0.5">
+                    <Coins className="w-3 h-3" />
+                    ~{sceneCount * (CREDIT_COSTS.IMAGE_PER_SCENE + CREDIT_COSTS.AUDIO_PER_SCENE)}
+                  </span>
+                </div>
+              </div>
+              <Slider
+                value={[sceneCount]}
+                onValueChange={(value) => setSceneCount(value[0])}
+                min={3}
+                max={50}
+                step={1}
+                className="w-full"
+              />
+            </div>
+          )}
+
           {creditBalance <= 15 && (
             <p className="text-xs text-orange-400 mt-2">
               You have {creditBalance} credits. Get more credits to create longer stories.
@@ -842,11 +911,18 @@ export default function Dashboard() {
         </div>
       )}
 
+      {/* Divider */}
+      <div className="border-t border-gray-800"></div>
+
       {/* Format */}
-      <div>
-        <label className="block text-sm font-medium text-gray-200 mb-2">
-          Format
-        </label>
+      <div className="space-y-3">
+        <div>
+          <label className="text-sm font-semibold text-white flex items-center gap-2">
+            <Monitor className="w-4 h-4 text-orange-400" />
+            Format
+          </label>
+          <p className="text-xs text-gray-500 mt-0.5">Select aspect ratio for your video</p>
+        </div>
         <div className="grid grid-cols-3 gap-2">
           {[
             { value: "9:16", icon: Smartphone, label: "9:16" },
@@ -857,14 +933,14 @@ export default function Dashboard() {
               key={value}
               type="button"
               onClick={() => setAspectRatio(value as any)}
-              className={`p-2 rounded-lg border transition-all ${
+              className={`p-3 rounded-lg border transition-all hover:scale-105 ${
                 aspectRatio === value
-                  ? 'border-orange-500 bg-orange-500/20'
-                  : 'border-gray-700 bg-gray-800 hover:border-gray-600'
+                  ? 'border-orange-500 bg-orange-500/20 shadow-sm shadow-orange-500/20'
+                  : 'border-gray-700 bg-gray-800 hover:border-gray-600 hover:bg-gray-750'
               }`}
             >
-              <Icon className={`w-4 h-4 mx-auto mb-1 ${aspectRatio === value ? 'text-orange-400' : 'text-gray-400'}`} />
-              <div className={`text-xs font-medium ${aspectRatio === value ? 'text-orange-400' : 'text-gray-300'}`}>
+              <Icon className={`w-5 h-5 mx-auto mb-1.5 ${aspectRatio === value ? 'text-orange-400' : 'text-gray-400'}`} />
+              <div className={`text-xs font-semibold ${aspectRatio === value ? 'text-orange-400' : 'text-gray-300'}`}>
                 {label}
               </div>
             </button>
@@ -872,11 +948,18 @@ export default function Dashboard() {
         </div>
       </div>
 
+      {/* Divider */}
+      <div className="border-t border-gray-800"></div>
+
       {/* Voice Selection */}
-      <div>
-        <label className="block text-sm font-medium text-gray-200 mb-2">
-          Narrator Voice
-        </label>
+      <div className="space-y-3">
+        <div>
+          <label className="text-sm font-semibold text-white flex items-center gap-2">
+            <Volume2 className="w-4 h-4 text-orange-400" />
+            Narrator Voice
+          </label>
+          <p className="text-xs text-gray-500 mt-0.5">Choose a voice for narration</p>
+        </div>
         {loadingVoices ? (
           <div className="flex items-center justify-center py-8 bg-gray-800 border border-gray-700 rounded-lg">
             <Loader2 className="w-5 h-5 animate-spin text-orange-500" />
@@ -889,10 +972,10 @@ export default function Dashboard() {
                 key={voice.id}
                 type="button"
                 onClick={() => setSelectedVoiceId(voice.id)}
-                className={`p-2.5 rounded-lg border transition-all text-left ${
+                className={`p-3 rounded-lg border transition-all text-left hover:scale-105 ${
                   selectedVoiceId === voice.id
-                    ? 'border-orange-500 bg-orange-500/20'
-                    : 'border-gray-700 bg-gray-800 hover:border-gray-600'
+                    ? 'border-orange-500 bg-orange-500/20 shadow-sm shadow-orange-500/20'
+                    : 'border-gray-700 bg-gray-800 hover:border-gray-600 hover:bg-gray-750'
                 }`}
               >
                 {/* Voice Name */}
