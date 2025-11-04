@@ -231,8 +231,8 @@ export function LandingPage() {
               {/* Quick Stats */}
               <div className="grid grid-cols-3 gap-6 mt-12 pt-8 border-t border-gray-800">
                 <div>
-                  <div className="text-3xl font-bold text-orange-400 mb-1">3 min</div>
-                  <div className="text-sm text-gray-500">Avg. Creation Time</div>
+                  <div className="text-3xl font-bold text-orange-400 mb-1">5 minutes</div>
+                  <div className="text-sm text-gray-500">Average Creation Time</div>
                 </div>
                 <div>
                   <div className="text-3xl font-bold text-orange-400 mb-1">3</div>
@@ -264,7 +264,6 @@ export function LandingPage() {
                         src={video.videoUrl}
                         preload="metadata"
                         loop
-                        volume={volume}
                         className="w-full h-full object-cover cursor-pointer"
                         onClick={(e) => {
                           const videoEl = e.currentTarget as HTMLVideoElement;
@@ -324,12 +323,12 @@ export function LandingPage() {
             </div>
 
             {/* Mobile: Simple row */}
-            <div className="flex lg:hidden gap-3 justify-center">
+            <div className="flex lg:hidden gap-2 justify-center px-4">
               {showcaseVideos.slice(0, 3).map((video) => {
                 const isPlaying = playingVideoId === video.id;
                 const volume = getVolume(video.id);
                 return (
-                  <div key={video.id} className="group relative w-[140px]">
+                  <div key={video.id} className="group relative flex-1 max-w-[120px]">
                     <div className="relative aspect-[9/16] rounded-lg overflow-hidden bg-gray-900 border border-gray-800 shadow-lg">
                       <video
                         src={video.videoUrl}
