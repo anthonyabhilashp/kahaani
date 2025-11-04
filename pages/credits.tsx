@@ -470,7 +470,7 @@ export default function CreditsPage() {
                     <div className="mb-4">
                       <div className="flex items-baseline justify-center gap-1.5 mb-1">
                         <h3 className="text-3xl font-bold text-white">{pkg.credits}</h3>
-                        <span className="text-sm text-gray-500 font-medium">credits</span>
+                        <span className="text-sm text-gray-500 font-medium">credits/Lifetime</span>
                         <div className="relative group">
                           <Info className="w-3.5 h-3.5 text-gray-600 hover:text-orange-500 cursor-help transition-colors ml-0.5" />
                           <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2.5 hidden group-hover:block z-50 pointer-events-none">
@@ -556,7 +556,7 @@ export default function CreditsPage() {
                 <ul className="space-y-2.5 text-gray-400 text-sm">
                   <li className="flex items-start gap-2">
                     <CheckCircle2 className="w-3.5 h-3.5 text-green-500 flex-shrink-0 mt-0.5" />
-                    <span>Credits never expire</span>
+                    <span><span className="text-white font-medium">One-time purchase</span> - credits never expire</span>
                   </li>
                   <li className="flex items-start gap-2">
                     <CheckCircle2 className="w-3.5 h-3.5 text-green-500 flex-shrink-0 mt-0.5" />
@@ -564,7 +564,7 @@ export default function CreditsPage() {
                   </li>
                   <li className="flex items-start gap-2">
                     <CheckCircle2 className="w-3.5 h-3.5 text-green-500 flex-shrink-0 mt-0.5" />
-                    <span>Secure payments via Stripe</span>
+                    <span>Secure payments</span>
                   </li>
                 </ul>
               </div>

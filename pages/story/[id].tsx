@@ -4862,14 +4862,15 @@ export default function StoryDetailsPage() {
                   {[
                     { id: "hyper-realistic", value: "hyper realistic photo, 4k, ultra detailed", label: "Hyper Realistic", visual: "📸" },
                     { id: "cinematic", value: "cinematic movie still, dramatic lighting, film grain", label: "Cinematic", visual: "🎬" },
-                    { id: "black-and-white", value: "black and white photography, film noir, high contrast", label: "Black & White", visual: "🎞️" },
-                    { id: "anime", value: "anime illustration, high quality", label: "Anime", visual: "🎌" },
                     { id: "3d-animation", value: "3d pixar style animation, rendered", label: "3D Animation", visual: "🎭" },
                     { id: "cartoon", value: "cartoon illustration, bold outlines", label: "Cartoon", visual: "🎪" },
+                    { id: "anime", value: "anime illustration, high quality", label: "Anime", visual: "🎌" },
+                    { id: "comic-book", value: "comic book art style, bold lines, vibrant colors", label: "Comic Book", visual: "💥" },
+                    { id: "pencil-sketch", value: "pencil sketch drawing, detailed shading", label: "Pencil Sketch", visual: "✏️" },
+                    { id: "black-and-white", value: "black and white photography, film noir, high contrast", label: "Black & White", visual: "🎞️" },
                     { id: "oil-painting", value: "oil painting, brushstrokes, classical art", label: "Oil Painting", visual: "🖼️" },
                     { id: "watercolor", value: "watercolor painting, soft, artistic", label: "Watercolor", visual: "🎨" },
-                    { id: "pencil-sketch", value: "pencil sketch drawing, detailed shading", label: "Pencil Sketch", visual: "✏️" },
-                    { id: "comic-book", value: "comic book art style, bold lines, vibrant colors", label: "Comic Book", visual: "💥" },
+                    { id: "lego-brick", value: "lego brick style, colorful plastic blocks, toy building", label: "LEGO Brick", visual: "🧱" },
                     { id: "pixel-art", value: "pixel art, retro 16-bit game style", label: "Pixel Art", visual: "🎮" },
                     { id: "vaporwave", value: "vaporwave aesthetic, neon colors, retrowave, cyberpunk", label: "Vaporwave", visual: "🌃" }
                   ].map((style) => {
