@@ -12,8 +12,8 @@ import path from 'path';
  */
 
 const LOGS_DIR = path.join(process.cwd(), 'logs');
-const MAX_LOG_SIZE = 5 * 1024 * 1024; // 5MB in bytes
-const MAX_ROTATED_FILES = 5; // Keep last 5 rotated logs
+const MAX_LOG_SIZE = 3 * 1024 * 1024; // 3MB in bytes
+const MAX_ROTATED_FILES = 2; // Keep last 2 rotated logs (3 files total including current)
 
 // Ensure logs directory exists
 if (!fs.existsSync(LOGS_DIR)) {
@@ -42,6 +42,16 @@ export class UserLogger {
 
       // Append to log file
       fs.appendFileSync(this.logFilePath, logEntry, 'utf8');
+
+      // ALSO log to console (so it appears in Railway dashboard)
+      const consoleMessage = `[${level}] ${message}`;
+      if (level === 'ERROR') {
+        console.error(consoleMessage);
+      } else if (level === 'WARN') {
+        console.warn(consoleMessage);
+      } else {
+        console.log(consoleMessage);
+      }
     } catch (error) {
       // Fallback to console if file write fails
       console.error(`Failed to write to log file for user ${this.userId}:`, error);

@@ -132,10 +132,10 @@ logs/
 **After** (one file per user):
 ```
 logs/
-├── 82bffe3e-9df5-4d4a-998c-6da5ac58c47b.log  <-- All activity for this user
-├── 82bffe3e-9df5-4d4a-998c-6da5ac58c47b_1.log
-├── 82bffe3e-9df5-4d4a-998c-6da5ac58c47b_2.log
-└── a1b2c3d4-...uuid....log                    <-- Another user
+├── 82bffe3e-9df5-4d4a-998c-6da5ac58c47b.log     <-- Current log (all activity for this user)
+├── 82bffe3e-9df5-4d4a-998c-6da5ac58c47b_1.log   <-- 1st rotation
+├── 82bffe3e-9df5-4d4a-998c-6da5ac58c47b_2.log   <-- 2nd rotation (oldest)
+└── a1b2c3d4-...uuid....log                      <-- Another user
 ```
 
 **Sample log content:**
@@ -163,7 +163,7 @@ ls logs/
 # View logs
 cat logs/82bffe3e-9df5-4d4a-998c-6da5ac58c47b.log
 
-# Generate more content to exceed 5MB and test rotation
+# Generate more content to exceed 3MB and test rotation
 # Should see: userid_1.log appear
 ```
 

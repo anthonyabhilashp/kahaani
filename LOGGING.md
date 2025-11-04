@@ -10,17 +10,14 @@ The app uses a per-user logging system with automatic log rotation to track user
 logs/
 ├── 82bffe3e-9df5-4d4a-998c-6da5ac58c47b.log          # Current log
 ├── 82bffe3e-9df5-4d4a-998c-6da5ac58c47b_1.log        # 1st rotation (most recent)
-├── 82bffe3e-9df5-4d4a-998c-6da5ac58c47b_2.log        # 2nd rotation
-├── 82bffe3e-9df5-4d4a-998c-6da5ac58c47b_3.log        # 3rd rotation
-├── 82bffe3e-9df5-4d4a-998c-6da5ac58c47b_4.log        # 4th rotation
-└── 82bffe3e-9df5-4d4a-998c-6da5ac58c47b_5.log        # 5th rotation (oldest)
+└── 82bffe3e-9df5-4d4a-998c-6da5ac58c47b_2.log        # 2nd rotation (oldest)
 ```
 
 ## Configuration
 
-- **Max log file size**: 5MB
-- **Max rotated files**: 5
-- **Total storage per user**: ~30MB (6 files × 5MB)
+- **Max log file size**: 3MB
+- **Max rotated files**: 2
+- **Total storage per user**: ~9MB (3 files × 3MB)
 
 ## Usage in API Endpoints
 
@@ -54,13 +51,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
 ## Automatic Rotation
 
-When a log file reaches 5MB:
+When a log file reaches 3MB:
 1. `userid.log` → `userid_1.log`
 2. `userid_1.log` → `userid_2.log`
-3. `userid_2.log` → `userid_3.log`
-4. `userid_3.log` → `userid_4.log`
-5. `userid_4.log` → `userid_5.log`
-6. `userid_5.log` → **deleted** (oldest log removed)
+3. `userid_2.log` → **deleted** (oldest log removed)
 
 ## Advanced Features
 
@@ -155,7 +149,7 @@ tail -f logs/82bffe3e-9df5-4d4a-998c-6da5ac58c47b.log
 ## Log Retention
 
 - Logs are automatically rotated and old files deleted
-- Maximum 6 files per user (~30MB)
+- Maximum 3 files per user (~9MB)
 - No manual cleanup needed
 
 ## Future Enhancements
