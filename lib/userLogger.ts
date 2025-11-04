@@ -40,18 +40,8 @@ export class UserLogger {
       const timestamp = new Date().toISOString();
       const logEntry = `[${timestamp}] [${level}] ${message}\n`;
 
-      // Append to log file
+      // Append to log file (file-only, not console)
       fs.appendFileSync(this.logFilePath, logEntry, 'utf8');
-
-      // ALSO log to console (so it appears in Railway dashboard)
-      const consoleMessage = `[${level}] ${message}`;
-      if (level === 'ERROR') {
-        console.error(consoleMessage);
-      } else if (level === 'WARN') {
-        console.warn(consoleMessage);
-      } else {
-        console.log(consoleMessage);
-      }
     } catch (error) {
       // Fallback to console if file write fails
       console.error(`Failed to write to log file for user ${this.userId}:`, error);
