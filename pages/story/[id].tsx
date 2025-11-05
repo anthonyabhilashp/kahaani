@@ -4,6 +4,7 @@ import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "../../components/ui/popover";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../components/ui/alert-dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../components/ui/dialog";
 import { Slider } from "../../components/ui/slider";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../components/ui/tooltip";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../../components/ui/dropdown-menu";
@@ -79,6 +80,8 @@ export default function StoryDetailsPage() {
   const [editingTitle, setEditingTitle] = useState(false);
   const [editTitleText, setEditTitleText] = useState("");
   const [savingTitle, setSavingTitle] = useState(false);
+  const [mobileSettingsDialogOpen, setMobileSettingsDialogOpen] = useState(false);
+  const [mobileEditDialogOpen, setMobileEditDialogOpen] = useState(false);
   const [modifiedScenes, setModifiedScenes] = useState<Set<number>>(new Set());
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [sceneToDelete, setSceneToDelete] = useState<number | null>(null);
@@ -2757,18 +2760,35 @@ export default function StoryDetailsPage() {
                       {story?.title || "Video Editor"}
                     </h1>
                     <button
-                      onClick={startEditingTitle}
+                      onClick={() => {
+                        // On mobile: open settings dialog
+                        // On desktop: inline edit
+                        if (window.innerWidth < 768) {
+                          setMobileSettingsDialogOpen(true);
+                        } else {
+                          startEditingTitle();
+                        }
+                      }}
                       className="p-1.5 md:p-2 bg-gray-800 hover:bg-orange-600 text-gray-400 hover:text-white rounded transition-colors flex-shrink-0"
                     >
                       <Pencil className="w-3 h-3 md:w-4 md:h-4" />
                     </button>
                   </div>
                   <button
-                    onClick={() => router.push("/")}
+                    onClick={() => {
+                      // If story belongs to a series, go back to series page
+                      if (story?.series_id) {
+                        router.push(`/series/${story.series_id}`);
+                      } else {
+                        router.push("/");
+                      }
+                    }}
                     className="text-xs text-gray-400 hover:text-orange-400 transition-colors flex items-center gap-1 w-fit"
                   >
                     <ArrowLeft className="w-3 h-3" />
-                    <span className="hidden sm:inline">Back to stories</span>
+                    <span className="hidden sm:inline">
+                      {story?.series_id ? "Back to series" : "Back to stories"}
+                    </span>
                     <span className="sm:hidden">Back</span>
                   </button>
                 </>
@@ -2789,7 +2809,8 @@ export default function StoryDetailsPage() {
               </span>
             </div>
 
-            {/* Story Default Voice Selector - Compact on mobile */}
+            {/* Desktop: Story Default Voice Selector */}
+            <div className="hidden md:block">
             <Popover open={storyVoicePopoverOpen} onOpenChange={setStoryVoicePopoverOpen}>
               <PopoverTrigger asChild>
                 <Button
@@ -2862,6 +2883,7 @@ export default function StoryDetailsPage() {
                 </div>
               </PopoverContent>
             </Popover>
+            </div>
 
             {/* Voice Update Confirmation Dialog */}
             <AlertDialog open={voiceUpdateConfirmOpen} onOpenChange={setVoiceUpdateConfirmOpen}>
@@ -2957,7 +2979,8 @@ export default function StoryDetailsPage() {
               </AlertDialogContent>
             </AlertDialog>
 
-            {/* Aspect Ratio Selector - Compact on mobile */}
+            {/* Desktop: Aspect Ratio Selector */}
+            <div className="hidden md:block">
             <Popover open={aspectRatioPopoverOpen} onOpenChange={setAspectRatioPopoverOpen}>
               <PopoverTrigger asChild>
                 <Button
@@ -3032,6 +3055,7 @@ export default function StoryDetailsPage() {
                 </div>
               </PopoverContent>
             </Popover>
+            </div>
 
             {/* Export Button with Video Link - Compact on mobile */}
             <div className="flex items-center gap-1 md:gap-2">
@@ -3132,7 +3156,7 @@ export default function StoryDetailsPage() {
                 <div className="relative">
                   {/* Sticky Header with Bulk Actions */}
                   <div className="sticky top-0 z-10 bg-black border-b border-gray-800 px-3 md:px-10 py-3">
-                    <div className="flex gap-3">
+                    <div className="flex gap-2 md:gap-3">
                       {/* Generate All Images Button */}
                       <Tooltip>
                         <TooltipTrigger asChild>
@@ -3144,13 +3168,13 @@ export default function StoryDetailsPage() {
                           >
                             {generatingImages ? (
                               <>
-                                <Loader2 className="w-3 h-3 mr-1.5 animate-spin" />
-                                Generating...
+                                <Loader2 className="w-3 h-3 animate-spin" />
+                                <span className="ml-1.5">Generating...</span>
                               </>
                             ) : (
                               <>
                                 <Image className="w-3 h-3 mr-1.5" />
-                                <span>Images for All Scenes</span>
+                                <span>Images</span>
                                 <span className="ml-1.5 px-1.5 py-0.5 bg-orange-800/50 rounded text-[10px] font-semibold flex items-center gap-0.5">
                                   <Coins className="w-2.5 h-2.5" />
                                   {scenes.length * CREDIT_COSTS.IMAGE_PER_SCENE}
@@ -3175,13 +3199,13 @@ export default function StoryDetailsPage() {
                           >
                             {generatingAudios ? (
                               <>
-                                <Loader2 className="w-3 h-3 mr-1.5 animate-spin" />
-                                Generating...
+                                <Loader2 className="w-3 h-3 animate-spin" />
+                                <span className="ml-1.5">Generating...</span>
                               </>
                             ) : (
                               <>
                                 <Volume2 className="w-3 h-3 mr-1.5" />
-                                <span>Audio for All Scenes</span>
+                                <span>Audio</span>
                                 <span className="ml-1.5 px-1.5 py-0.5 bg-orange-800/50 rounded text-[10px] font-semibold flex items-center gap-0.5">
                                   <Coins className="w-2.5 h-2.5" />
                                   {scenes.length * CREDIT_COSTS.AUDIO_PER_SCENE}
@@ -3520,6 +3544,10 @@ export default function StoryDetailsPage() {
                               setEditingScene(index);
                               setEditText(scene.text);
                               setEditSceneDescription(""); // Scene descriptions no longer stored in DB
+                              // On mobile, open dialog instead of inline editing
+                              if (window.innerWidth < 768) {
+                                setMobileEditDialogOpen(true);
+                              }
                             }}
                             className="flex items-center gap-2 text-gray-300 hover:text-white hover:bg-gray-800 cursor-pointer"
                           >
@@ -3926,10 +3954,11 @@ export default function StoryDetailsPage() {
                           bgMusicId === music.id
                             ? "bg-orange-900/30 border border-orange-600/50"
                             : music.file_url
-                            ? "hover:bg-gray-800/50"
+                            ? "hover:bg-gray-800/50 border border-transparent"
                             : "opacity-50 cursor-not-allowed"
                         }`}
                       >
+
                         <div className="flex-1 min-w-0">
                           <p className={`text-sm font-medium truncate ${
                             bgMusicId === music.id ? "text-orange-400" : "text-white"
@@ -3940,38 +3969,14 @@ export default function StoryDetailsPage() {
                             <span className="text-xs text-gray-400">
                               {music.category && music.category.charAt(0).toUpperCase() + music.category.slice(1)}
                             </span>
-                            {music.uploaded_by === user?.id && (
+                            {!music.is_preset && (
                               <span className="text-xs text-gray-400">• My Music</span>
                             )}
                           </div>
                         </div>
 
-                        <div className="flex items-center gap-2">
-                          {/* Info Button - Show notes tooltip and copy on click */}
-                          {music.notes && music.notes.trim() && (
-                            <TooltipProvider>
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <button
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      navigator.clipboard.writeText(music.notes);
-                                      toast({ description: "Notes copied to clipboard" });
-                                    }}
-                                    className="w-8 h-8 flex items-center justify-center rounded bg-blue-600/10 hover:bg-blue-600/20 text-blue-400 opacity-0 group-hover:opacity-100 transition-all"
-                                    title="Copy notes"
-                                  >
-                                    <Info className="w-4 h-4" />
-                                  </button>
-                                </TooltipTrigger>
-                                <TooltipContent side="left" className="max-w-xs bg-gray-800 border-gray-700 text-white">
-                                  <p className="text-sm">{music.notes}</p>
-                                </TooltipContent>
-                              </Tooltip>
-                            </TooltipProvider>
-                          )}
-
-                          {/* Play/Pause Button - Preview at volume 20% */}
+                        <div className="flex items-center gap-1.5">
+                          {/* Play/Pause Button */}
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
@@ -3981,7 +3986,7 @@ export default function StoryDetailsPage() {
                             className={`w-8 h-8 flex items-center justify-center rounded transition-all ${
                               musicPreviewPlaying === music.id
                                 ? "bg-orange-600 hover:bg-orange-700 text-white"
-                                : "bg-gray-700 hover:bg-gray-600 text-gray-300 opacity-0 group-hover:opacity-100"
+                                : "bg-gray-700/50 hover:bg-gray-700 text-gray-300 opacity-0 group-hover:opacity-100"
                             } disabled:opacity-30 disabled:cursor-not-allowed`}
                           >
                             {musicPreviewPlaying === music.id ? (
@@ -3991,14 +3996,14 @@ export default function StoryDetailsPage() {
                             )}
                           </button>
 
-                          {/* Delete Button - Only for user's uploads */}
+                          {/* Delete Button - Only for user's uploads (not presets) - Show on hover */}
                           {music.uploaded_by === user?.id && !music.is_preset && (
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
                                 handleDeleteMusic(music);
                               }}
-                              className="w-8 h-8 flex items-center justify-center rounded bg-red-600/10 hover:bg-red-600/20 text-red-500 opacity-0 group-hover:opacity-100 transition-all"
+                              className="w-8 h-8 flex items-center justify-center rounded hover:bg-red-900/20 text-gray-500 hover:text-red-400 transition-all opacity-0 group-hover:opacity-100"
                               title="Delete music"
                             >
                               <Trash2 className="w-4 h-4" />
@@ -4050,12 +4055,7 @@ export default function StoryDetailsPage() {
                     {/* Overlay Effects */}
                     {scenes.map((scene, index) => {
                       const overlayUrl = (scene?.effects as any)?.overlay_url;
-                      const overlayId = (scene?.effects as any)?.overlay_id;
                       if (!overlayUrl) return null;
-
-                      // Find overlay to get its category
-                      const overlay = overlays.find(o => o.id === overlayId);
-                      const category = overlay?.category || 'other';
 
                       // Show raw overlay in preview (no effects applied)
                       let blendMode: string = 'screen';
@@ -5668,6 +5668,169 @@ export default function StoryDetailsPage() {
           </div>
         </div>
       )}
+
+      {/* Mobile Settings Dialog */}
+      <Dialog open={mobileSettingsDialogOpen} onOpenChange={setMobileSettingsDialogOpen}>
+        <DialogContent className="sm:max-w-md bg-gray-900 text-white border-gray-800">
+          <DialogHeader>
+            <DialogTitle>Story Settings</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-6 py-4">
+            {/* Title */}
+            <div>
+              <label className="block text-sm font-medium mb-2 text-gray-300">Title</label>
+              <Input
+                value={editTitleText || story?.title || ""}
+                onChange={(e) => setEditTitleText(e.target.value)}
+                onBlur={async () => {
+                  if (editTitleText && editTitleText !== story?.title) {
+                    setSavingTitle(true);
+                    try {
+                      const { data: { session } } = await supabase.auth.getSession();
+                      const headers: HeadersInit = session
+                        ? { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` }
+                        : { "Content-Type": "application/json" };
+
+                      const res = await fetch(`/api/update_story_title`, {
+                        method: "POST",
+                        headers,
+                        body: JSON.stringify({ id, title: editTitleText }),
+                      });
+
+                      if (res.ok) {
+                        setStory((prev: any) => ({ ...prev, title: editTitleText }));
+                        toast({ description: "Title updated successfully" });
+                      }
+                    } catch (error) {
+                      console.error("Error updating title:", error);
+                    } finally {
+                      setSavingTitle(false);
+                    }
+                  }
+                }}
+                className="bg-gray-800 border-gray-700 text-white"
+                placeholder="Enter story title"
+              />
+            </div>
+
+            {/* Voice Selector */}
+            <div>
+              <label className="block text-sm font-medium mb-2 text-gray-300">Default Voice</label>
+              <select
+                value={story?.voice_id || "alloy"}
+                onChange={(e) => openVoiceUpdateConfirm(e.target.value)}
+                className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded text-white focus:outline-none focus:border-orange-500"
+              >
+                {voices.map((voice) => (
+                  <option key={voice.id} value={voice.id}>
+                    {voice.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Aspect Ratio */}
+            <div>
+              <label className="block text-sm font-medium mb-2 text-gray-300">Aspect Ratio</label>
+              <div className="grid grid-cols-3 gap-2">
+                <button
+                  onClick={() => updateAspectRatio("9:16")}
+                  className={`px-4 py-3 rounded border-2 transition-all ${
+                    aspectRatio === "9:16"
+                      ? "border-orange-600 bg-orange-900/30 text-orange-400"
+                      : "border-gray-700 hover:border-gray-600 text-gray-400"
+                  }`}
+                >
+                  9:16<br/><span className="text-xs">Portrait</span>
+                </button>
+                <button
+                  onClick={() => updateAspectRatio("1:1")}
+                  className={`px-4 py-3 rounded border-2 transition-all ${
+                    aspectRatio === "1:1"
+                      ? "border-orange-600 bg-orange-900/30 text-orange-400"
+                      : "border-gray-700 hover:border-gray-600 text-gray-400"
+                  }`}
+                >
+                  1:1<br/><span className="text-xs">Square</span>
+                </button>
+                <button
+                  onClick={() => updateAspectRatio("16:9")}
+                  className={`px-4 py-3 rounded border-2 transition-all ${
+                    aspectRatio === "16:9"
+                      ? "border-orange-600 bg-orange-900/30 text-orange-400"
+                      : "border-gray-700 hover:border-gray-600 text-gray-400"
+                  }`}
+                >
+                  16:9<br/><span className="text-xs">Landscape</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Save Button - Mobile Only */}
+            <div className="flex justify-end pt-4 border-t border-gray-800 md:hidden">
+              <Button
+                onClick={() => setMobileSettingsDialogOpen(false)}
+                className="w-full bg-orange-600 hover:bg-orange-700 text-white font-semibold"
+              >
+                Save
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Mobile Edit Scene Dialog */}
+      <Dialog open={mobileEditDialogOpen} onOpenChange={(open) => {
+        setMobileEditDialogOpen(open);
+        if (!open) {
+          setEditingScene(null);
+          setEditText("");
+        }
+      }}>
+        <DialogContent className="sm:max-w-md bg-gray-900 text-white border-gray-800">
+          <DialogHeader>
+            <DialogTitle>Edit Scene {editingScene !== null ? editingScene + 1 : ''}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div>
+              <label className="block text-sm font-medium mb-2 text-gray-300">Scene Text</label>
+              <textarea
+                value={editText}
+                onChange={(e) => setEditText(e.target.value)}
+                className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-md text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-orange-500 resize-none"
+                rows={6}
+                placeholder="Enter scene narration..."
+              />
+            </div>
+            <div className="flex gap-3 justify-end pt-2">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setMobileEditDialogOpen(false);
+                  setEditingScene(null);
+                  setEditText("");
+                }}
+                className="bg-gray-800 hover:bg-gray-700 text-white border-gray-700"
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={() => {
+                  if (editingScene !== null) {
+                    editScene(editingScene, editText);
+                    setMobileEditDialogOpen(false);
+                  }
+                }}
+                disabled={!editText.trim()}
+                className="bg-orange-600 hover:bg-orange-700 text-white"
+              >
+                <Check className="w-4 h-4 mr-2" />
+                Save Changes
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Import from YouTube Dialog */}
       {importYoutubeDialog && (

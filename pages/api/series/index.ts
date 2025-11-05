@@ -42,7 +42,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           title,
           description,
           thumbnail_url,
-          has_character_consistency: has_character_consistency !== undefined ? has_character_consistency : true,
+          has_character_consistency: has_character_consistency !== undefined ? has_character_consistency : false,
         })
         .select()
         .single();

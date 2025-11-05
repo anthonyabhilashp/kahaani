@@ -11,7 +11,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { ArrowLeft, Plus, Loader2, Film, Clock, Edit, Image as ImageIcon, MoreHorizontal, Trash2, Video, Settings, User, LogOut, Coins } from "lucide-react";
+import { ArrowLeft, Plus, Loader2, Film, Clock, Image as ImageIcon, MoreHorizontal, Trash2, Video, Settings, User, LogOut, Coins } from "lucide-react";
 import { useCredits } from "../../hooks/useCredits";
 import Image from "next/image";
 import { CreateStoryDialog } from "@/components/CreateStoryDialog";
@@ -47,10 +47,6 @@ export default function SeriesDetailPage() {
   const { balance: creditBalance, loading: creditsLoading } = useCredits();
   const [series, setSeries] = useState<SeriesDetail | null>(null);
   const [loading, setLoading] = useState(true);
-  const [editDialogOpen, setEditDialogOpen] = useState(false);
-  const [editTitle, setEditTitle] = useState("");
-  const [editDescription, setEditDescription] = useState("");
-  const [updating, setUpdating] = useState(false);
   const [createStoryDialogOpen, setCreateStoryDialogOpen] = useState(false);
   const [removeDialogOpen, setRemoveDialogOpen] = useState(false);
   const [storyToRemove, setStoryToRemove] = useState<string | null>(null);
@@ -64,10 +60,11 @@ export default function SeriesDetailPage() {
   }, [authLoading, user, router]);
 
   useEffect(() => {
+    // Redirect to homepage series view instead of using this page
     if (id && user) {
-      fetchSeriesDetail();
+      router.push(`/?category=series&seriesId=${id}`);
     }
-  }, [id, user]);
+  }, [id, user, router]);
 
   async function fetchSeriesDetail() {
     setLoading(true);
@@ -99,46 +96,10 @@ export default function SeriesDetailPage() {
 
       const data = await res.json();
       setSeries(data);
-      setEditTitle(data.title);
-      setEditDescription(data.description || "");
     } catch (err) {
       console.error("Error fetching series:", err);
     } finally {
       setLoading(false);
-    }
-  }
-
-  async function updateSeries() {
-    setUpdating(true);
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) return;
-
-      const res = await fetch(`/api/series/${id}`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${session.access_token}`
-        },
-        body: JSON.stringify({
-          title: editTitle,
-          description: editDescription,
-        }),
-      });
-
-      if (res.ok) {
-        await fetchSeriesDetail();
-        setEditDialogOpen(false);
-        toast({ description: "Series updated successfully" });
-      } else {
-        const error = await res.json();
-        toast({ description: `Failed to update series: ${error.error}`, variant: "destructive" });
-      }
-    } catch (error) {
-      console.error("Error updating series:", error);
-      toast({ description: "Failed to update series", variant: "destructive" });
-    } finally {
-      setUpdating(false);
     }
   }
 
@@ -311,11 +272,11 @@ export default function SeriesDetailPage() {
         <div className="md:hidden border-b border-gray-800 bg-gray-950 sticky top-0 z-20 px-4 py-4">
           <div className="flex items-center justify-between">
             <button
-              onClick={() => router.push("/")}
+              onClick={() => router.push("/?category=series")}
               className="text-sm text-gray-400 hover:text-orange-400 transition-colors flex items-center gap-1"
             >
               <ArrowLeft className="w-4 h-4" />
-              <span>Back</span>
+              <span>Back to Series</span>
             </button>
             <Button
               onClick={() => setCreateStoryDialogOpen(true)}
@@ -335,49 +296,9 @@ export default function SeriesDetailPage() {
             <div className="flex items-center gap-2 md:gap-3 flex-1 min-w-0">
               {/* Title + Back Link (vertical stack) */}
               <div className="flex flex-col gap-0.5 flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <h1 className="text-sm md:text-lg font-semibold text-white truncate">
-                    {series.title}
-                  </h1>
-                  <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
-                    <DialogTrigger asChild>
-                      <button className="p-1.5 md:p-2 bg-gray-800 hover:bg-orange-600 text-gray-400 hover:text-white rounded transition-colors flex-shrink-0">
-                        <Edit className="w-3 h-3 md:w-4 md:h-4" />
-                      </button>
-                    </DialogTrigger>
-                    <DialogContent className="sm:max-w-md bg-gray-900 text-white border-gray-800">
-                      <DialogHeader>
-                        <DialogTitle>Edit Series</DialogTitle>
-                      </DialogHeader>
-                      <div className="space-y-4 pt-4">
-                        <div>
-                          <label className="block text-sm font-medium mb-2">Title</label>
-                          <Input
-                            value={editTitle}
-                            onChange={(e) => setEditTitle(e.target.value)}
-                            className="bg-gray-800 border-gray-700"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-sm font-medium mb-2">Description</label>
-                          <textarea
-                            value={editDescription}
-                            onChange={(e) => setEditDescription(e.target.value)}
-                            className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-md"
-                            rows={3}
-                          />
-                        </div>
-                        <Button
-                          onClick={updateSeries}
-                          disabled={updating}
-                          className="w-full bg-orange-600 hover:bg-orange-700"
-                        >
-                          {updating ? "Updating..." : "Update Series"}
-                        </Button>
-                      </div>
-                    </DialogContent>
-                  </Dialog>
-                </div>
+                <h1 className="text-sm md:text-lg font-semibold text-white truncate">
+                  {series.title}
+                </h1>
                 <button
                   onClick={() => router.push("/?category=series")}
                   className="text-xs text-gray-400 hover:text-orange-400 transition-colors flex items-center gap-1 w-fit"

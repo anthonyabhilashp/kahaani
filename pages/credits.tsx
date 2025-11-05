@@ -77,6 +77,9 @@ export default function CreditsPage() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState("faceless-videos");
 
+  // Check if page is embedded (loaded in iframe)
+  const isEmbedded = router.query.embedded === 'true';
+
   useEffect(() => {
     checkUser();
   }, []);
@@ -159,8 +162,8 @@ export default function CreditsPage() {
 
   return (
     <div className="min-h-screen bg-black text-white flex">
-      {/* Mobile Sidebar Overlay */}
-      {mobileMenuOpen && (
+      {/* Mobile Sidebar Overlay - Hide when embedded */}
+      {!isEmbedded && mobileMenuOpen && (
         <>
           {/* Backdrop */}
           <div
@@ -273,7 +276,8 @@ export default function CreditsPage() {
         </>
       )}
 
-      {/* Left Sidebar - Desktop only */}
+      {/* Left Sidebar - Desktop only - Hide when embedded */}
+      {!isEmbedded && (
       <div className="hidden md:flex w-64 bg-gray-950 border-r border-gray-800 flex-col fixed h-full">
         {/* Logo/Brand */}
         <div className="p-6 border-b border-gray-800">
@@ -365,10 +369,12 @@ export default function CreditsPage() {
           </DropdownMenu>
         </div>
       </div>
+      )}
 
       {/* Main Content */}
-      <div className="flex-1 md:ml-64 w-full">
-        {/* Mobile Header */}
+      <div className={`flex-1 w-full ${!isEmbedded ? 'md:ml-64' : ''}`}>
+        {/* Mobile Header - Hide when embedded */}
+        {!isEmbedded && (
         <div className="md:hidden border-b border-gray-800 bg-gray-950 sticky top-0 z-20 px-4 py-3">
           <div className="flex items-center justify-between">
             <button
@@ -384,10 +390,12 @@ export default function CreditsPage() {
             </div>
           </div>
         </div>
+        )}
 
         {/* Page Content */}
         <div className="px-4 md:px-8 py-6 md:py-8">
           {/* Desktop Header with Balance */}
+          {!isEmbedded && (
           <div className="hidden md:flex items-center justify-between mb-10">
             <div>
               <h1 className="text-2xl font-semibold text-white">Buy Credits</h1>
@@ -401,6 +409,7 @@ export default function CreditsPage() {
               </div>
             </div>
           </div>
+          )}
 
           {/* Success/Canceled Alerts */}
           {showSuccess && (
@@ -429,7 +438,7 @@ export default function CreditsPage() {
 
           {/* Credit Packages */}
           <div className="mb-12">
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 max-w-5xl mx-auto">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 max-w-5xl mx-auto">
               {packages.map((pkg) => (
                 <div
                   key={pkg.id}

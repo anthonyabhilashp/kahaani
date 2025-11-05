@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Plus, Loader2, PlayCircle, Clock, Film, Image as ImageIcon, Video, Settings, User, LogOut, Trash2, MoreHorizontal, Smartphone, Square, Monitor, Coins, List, ArrowLeft, Menu, X, Sparkles, Volume2 } from "lucide-react";
+import { Plus, Loader2, PlayCircle, Clock, Film, Image as ImageIcon, Video, User, LogOut, Trash2, MoreHorizontal, Smartphone, Square, Monitor, Coins, List, ArrowLeft, Menu, X, Sparkles, Volume2, Info, Play, StopCircle } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   DropdownMenu,
@@ -21,6 +21,7 @@ import { useCredits } from "../hooks/useCredits";
 import { CREDIT_COSTS } from "@/lib/creditConstants";
 import { toast } from "@/hooks/use-toast";
 import { Slider } from "@/components/ui/slider";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 type Story = {
   id: string;
@@ -44,6 +45,7 @@ type Series = {
   story_count: number;
   created_at: string;
   updated_at: string;
+  has_character_consistency?: boolean;
 };
 
 export default function Dashboard() {
@@ -73,11 +75,12 @@ export default function Dashboard() {
   const [removingFromSeries, setRemovingFromSeries] = useState(false);
   const [newSeriesTitle, setNewSeriesTitle] = useState("");
   const [newSeriesDescription, setNewSeriesDescription] = useState("");
-  const [hasCharacterConsistency, setHasCharacterConsistency] = useState(true);
+  const [hasCharacterConsistency, setHasCharacterConsistency] = useState(false);
   const [creatingSeries, setCreatingSeries] = useState(false);
-  const [showSeriesStories, setShowSeriesStories] = useState(false); // Hide series stories by default
   const [selectedSeriesView, setSelectedSeriesView] = useState<Series | null>(null); // Track selected series to view its stories
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false); // Track mobile sidebar state
+  const [showCreditsPage, setShowCreditsPage] = useState(false); // Track credits page view
+  const [showCreateStoryForm, setShowCreateStoryForm] = useState(false); // Track inline create story form
   const hasFetchedRef = useRef(false);
 
   // New story creation options
@@ -110,15 +113,27 @@ export default function Dashboard() {
 
   // Sync category from URL query parameter
   useEffect(() => {
-    if (router.isReady && router.query.category) {
-      const category = router.query.category as string;
-      if (category === "series") {
-        setSelectedCategory("series");
-      } else {
-        setSelectedCategory("faceless-videos");
+    if (router.isReady) {
+      // Handle category
+      if (router.query.category) {
+        const category = router.query.category as string;
+        if (category === "series") {
+          setSelectedCategory("series");
+
+          // Auto-select series if seriesId provided
+          if (router.query.seriesId && series.length > 0) {
+            const seriesId = router.query.seriesId as string;
+            const foundSeries = series.find(s => s.id === seriesId);
+            if (foundSeries) {
+              setSelectedSeriesView(foundSeries);
+            }
+          }
+        } else {
+          setSelectedCategory("faceless-videos");
+        }
       }
     }
-  }, [router.isReady, router.query.category]);
+  }, [router.isReady, router.query.category, router.query.seriesId, series]);
 
   // Countdown timer for delete confirmation
   useEffect(() => {
@@ -291,8 +306,8 @@ export default function Dashboard() {
           });
         }
 
-        // Close dialog and reset form
-        setDialogOpen(false);
+        // Close inline form and reset
+        setShowCreateStoryForm(false);
         setNewPrompt("");
         setSceneCount(5);
         setShowCustomScenes(false);
@@ -497,7 +512,7 @@ export default function Dashboard() {
         setSeriesDialogOpen(false);
         setNewSeriesTitle("");
         setNewSeriesDescription("");
-        setHasCharacterConsistency(true);
+        setHasCharacterConsistency(false);
         // Refresh series list
         await fetchSeries();
         // Navigate to series detail page
@@ -524,7 +539,11 @@ export default function Dashboard() {
 
   function openCreateStoryDialog(seriesId: string | null = null) {
     setSelectedSeriesForCreate(seriesId);
-    setDialogOpen(true);
+    setShowCreateStoryForm(true);
+    // Load voices automatically when opening the form
+    if (voices.length === 0 && !loadingVoices) {
+      fetchVoices();
+    }
   }
 
   // Group stories by series
@@ -540,8 +559,13 @@ export default function Dashboard() {
     storiesBySeries[key].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
   });
 
+  // Create series map for tooltips
+  const seriesMap = new Map(series.map(s => [s.id, s.title]));
+
   // Story Card Component
-  const StoryCard = ({ story, showEpisodeBadge = false }: { story: Story; showEpisodeBadge?: boolean }) => (
+  const StoryCard = ({ story, showEpisodeBadge = false, episodeNumber }: { story: Story; showEpisodeBadge?: boolean; episodeNumber?: number }) => {
+    const seriesName = story.series_id ? seriesMap.get(story.series_id) : null;
+    return (
     <div className="group cursor-pointer relative">
       <div
         onClick={() => router.push(`/story/${story.id}`)}
@@ -561,12 +585,13 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* Series Badge - Green icon when story is part of a series */}
-        {story.series_id && (
-          <div className="absolute top-1.5 left-1.5 bg-green-600/90 text-white p-1 rounded">
-            <Film className="w-2.5 h-2.5" />
+        {/* Episode Badge - Show episode number when viewing series */}
+        {showEpisodeBadge && episodeNumber && (
+          <div className="absolute top-1.5 left-1.5 bg-orange-900/90 text-orange-300 px-1.5 py-0.5 rounded text-[10px] font-semibold">
+            EP {episodeNumber}
           </div>
         )}
+
 
         {/* Menu Button */}
         <div className="absolute top-1.5 right-1.5">
@@ -590,32 +615,46 @@ export default function Dashboard() {
 
         {/* Info Overlay */}
         <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 via-black/70 to-transparent p-2">
-          <h3 className="text-xs font-semibold text-white line-clamp-2 mb-0.5">
+          {/* Series name if part of a series */}
+          {story.series_id && seriesName && !showEpisodeBadge && (
+            <div className="flex items-center gap-1 mb-1">
+              <Film className="w-2.5 h-2.5 text-orange-400" />
+              <span className="text-[9px] text-orange-400 font-medium uppercase tracking-wide">
+                {seriesName}
+              </span>
+            </div>
+          )}
+          <h3 className="text-xs font-semibold text-white line-clamp-2 mb-1.5">
             {story.title || "Untitled"}
           </h3>
-          <div className="flex items-center gap-1.5 text-[10px] text-gray-300">
-            <div className="flex items-center gap-0.5">
+          <div className="flex items-center flex-wrap gap-1">
+            {/* Scene Count Badge */}
+            <div className="flex items-center gap-0.5 bg-gray-800/80 border border-transparent px-1.5 py-0.5 rounded text-[9px] text-gray-300">
               <ImageIcon className="w-2.5 h-2.5" />
               <span>{story.scene_count}</span>
             </div>
-            {story.video_duration && (
-              <div className="flex items-center gap-0.5">
+
+            {/* Duration Badge */}
+            {story.video_duration && story.video_duration > 0 && (
+              <div className="flex items-center gap-0.5 bg-gray-800/80 border border-transparent px-1.5 py-0.5 rounded text-[9px] text-gray-300">
                 <Clock className="w-2.5 h-2.5" />
                 <span>{formatDuration(story.video_duration)}</span>
               </div>
             )}
+
+            {/* Video Ready Badge */}
             {story.video_url && (
-              <div className="flex items-center gap-0.5">
-                <span className="text-green-400 font-medium">
-                  Ready
-                </span>
+              <div className="flex items-center gap-0.5 bg-green-600/20 border border-green-600/40 px-1.5 py-0.5 rounded text-[9px] text-green-400 font-medium">
+                <Video className="w-2.5 h-2.5" />
+                <span>Ready</span>
               </div>
             )}
           </div>
         </div>
       </div>
     </div>
-  );
+    );
+  };
 
   // Series Card Component
   const SeriesCard = ({ series: s }: { series: Series }) => {
@@ -649,14 +688,29 @@ export default function Dashboard() {
 
           {/* Info Overlay */}
           <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 via-black/70 to-transparent p-2">
-            <h3 className="text-xs font-semibold text-white line-clamp-2 mb-0.5">
+            <h3 className="text-xs font-semibold text-white line-clamp-2 mb-1.5">
               {s.title}
             </h3>
-            <div className="flex items-center gap-1.5 text-[10px] text-gray-300">
-              <div className="flex items-center gap-0.5">
+            <div className="flex items-center gap-1 flex-wrap">
+              <div className="flex items-center gap-0.5 bg-orange-600/20 border border-orange-600/40 px-1.5 py-0.5 rounded text-[9px] text-orange-400 font-medium">
                 <Film className="w-2.5 h-2.5" />
-                <span>{s.story_count} {s.story_count === 1 ? 'story' : 'stories'}</span>
+                <span>{s.story_count} {s.story_count === 1 ? 'episode' : 'episodes'}</span>
               </div>
+              {s.has_character_consistency && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <div className="flex items-center gap-0.5 bg-green-600/20 border border-green-600/40 px-1.5 py-0.5 rounded text-[9px] text-green-400 font-medium cursor-help">
+                      <User className="w-2.5 h-2.5" />
+                      <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                      </svg>
+                    </div>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p className="text-xs">Visual Consistency enabled</p>
+                  </TooltipContent>
+                </Tooltip>
+              )}
             </div>
           </div>
         </div>
@@ -695,28 +749,32 @@ export default function Dashboard() {
 
   // Render the create story dialog content
   const renderDialogContent = () => (
-    <div className="space-y-6 mt-6">
+    <div className="space-y-4">
+      {/* Info Notice - Show when creating standalone story */}
+      {!selectedSeriesForCreate && (
+        <div className="bg-yellow-900/20 border border-yellow-700/50 rounded-lg p-3 flex items-start gap-2">
+          <Info className="w-4 h-4 text-yellow-400 flex-shrink-0 mt-0.5" />
+          <p className="text-xs text-yellow-300">
+            This story will be created independently and won't be part of any series.
+          </p>
+        </div>
+      )}
+
       {/* Story Input Section */}
       {!isBlankStory && (
         <div className="space-y-3">
           <div className="flex items-center justify-between">
-            <div>
-              <label className="text-sm font-semibold text-white flex items-center gap-2">
-                <Sparkles className="w-4 h-4 text-orange-400" />
-                Story Idea
-              </label>
-              <p className="text-xs text-gray-500 mt-0.5">Describe your story or provide a prompt</p>
-            </div>
+            <label className="text-base font-semibold text-white">Add your story or provide an idea</label>
 
-            {/* Compact Toggle Buttons */}
-            <div className="inline-flex gap-1.5 p-1 bg-gray-800 rounded-lg border border-gray-700">
+            {/* Toggle Buttons */}
+            <div className="inline-flex gap-1 p-1 bg-gray-800/50 rounded-lg border border-gray-700">
               <button
                 type="button"
                 onClick={() => setIsBlankStory(false)}
                 className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
                   !isBlankStory
-                    ? 'bg-orange-500 text-white shadow-sm'
-                    : 'text-gray-400 hover:text-gray-300'
+                    ? 'bg-orange-600 text-white'
+                    : 'text-gray-400 hover:text-white hover:bg-gray-700'
                 }`}
               >
                 AI Generated
@@ -726,8 +784,8 @@ export default function Dashboard() {
                 onClick={() => setIsBlankStory(true)}
                 className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
                   isBlankStory
-                    ? 'bg-orange-500 text-white shadow-sm'
-                    : 'text-gray-400 hover:text-gray-300'
+                    ? 'bg-orange-600 text-white'
+                    : 'text-gray-400 hover:text-white hover:bg-gray-700'
                 }`}
               >
                 Blank
@@ -739,8 +797,8 @@ export default function Dashboard() {
             placeholder="A young blacksmith forges a sword from fallen stars, awakening an ancient power that will either save the kingdom or doom it forever."
             value={newPrompt}
             onChange={(e) => setNewPrompt(e.target.value)}
-            rows={4}
-            className="w-full p-3.5 bg-gray-800 border border-gray-700 rounded-lg resize-none focus:ring-2 focus:ring-orange-500 focus:border-transparent text-white placeholder:text-gray-500 text-sm transition-all"
+            rows={6}
+            className="w-full p-4 bg-gray-800/50 border border-gray-700 rounded-lg resize-none focus:ring-2 focus:ring-orange-500 focus:border-orange-500 text-white placeholder:text-gray-500 text-base transition-all"
           />
         </div>
       )}
@@ -783,99 +841,83 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Divider */}
-      {!isBlankStory && <div className="border-t border-gray-800"></div>}
-
       {/* Scenes - Only show for AI-generated stories */}
       {!isBlankStory && (
-        <div className="space-y-3">
-          <div>
-            <label className="text-sm font-semibold text-white flex items-center gap-2">
-              <Film className="w-4 h-4 text-orange-400" />
-              Scenes
-            </label>
-            <p className="text-xs text-gray-500 mt-0.5">Choose the number of scenes for your story</p>
-          </div>
-          <div className="grid grid-cols-4 gap-2">
+        <div className="space-y-2">
+          <label className="text-sm font-semibold text-white">Number of scenes for your story</label>
+          <div className="grid grid-cols-3 gap-1.5">
             {[5, 10, 15].map((scenes) => {
-              const estimatedSeconds = scenes * 8;
-              const estimatedMinutes = Math.floor(estimatedSeconds / 60);
-              const remainingSeconds = estimatedSeconds % 60;
-              const timeDisplay = estimatedMinutes > 0
-                ? `~${estimatedMinutes}m ${remainingSeconds}s`
-                : `~${estimatedSeconds}s`;
-              const estimatedCredits = scenes * (CREDIT_COSTS.IMAGE_PER_SCENE + CREDIT_COSTS.AUDIO_PER_SCENE);
-              const isDisabled = creditBalance <= 15 && scenes > 5;
-              return (
-                <button
-                  key={scenes}
-                  type="button"
-                  onClick={() => {
-                    if (!isDisabled) {
-                      setSceneCount(scenes);
-                      setShowCustomScenes(false);
-                    }
-                  }}
-                  disabled={isDisabled}
-                  className={`p-2 pt-4 pb-3 rounded-lg border transition-all relative hover:scale-105 ${
-                    sceneCount === scenes && !showCustomScenes
-                      ? 'border-orange-500 bg-orange-500/20 text-orange-400 shadow-sm shadow-orange-500/20'
-                      : isDisabled
-                      ? 'border-gray-800 bg-gray-900 text-gray-600 cursor-not-allowed opacity-50'
-                      : 'border-gray-700 bg-gray-800 text-gray-400 hover:border-gray-600 hover:bg-gray-750'
-                  }`}
-                >
-                  {isDisabled && (
-                    <div className="absolute top-0 left-0 right-0 bg-orange-900/30 text-orange-400 text-[8px] font-medium py-0.5 rounded-t-lg text-center">
-                      Low credits
-                    </div>
-                  )}
-                  <div className="text-sm font-semibold mb-1">{scenes} scenes</div>
-                  <div className="flex items-center justify-center gap-1.5 text-[9px] text-gray-500">
-                    <span>{timeDisplay}</span>
-                    <span>•</span>
-                    <div className="flex items-center gap-0.5">
-                      <Coins className="w-2.5 h-2.5" />
-                      <span>~{estimatedCredits} credits</span>
-                    </div>
+            const estimatedSeconds = scenes * 8;
+            const estimatedMinutes = Math.floor(estimatedSeconds / 60);
+            const remainingSeconds = estimatedSeconds % 60;
+            const timeDisplay = estimatedMinutes > 0
+              ? `~${estimatedMinutes}m ${remainingSeconds}s`
+              : `~${estimatedSeconds}s`;
+            const estimatedCredits = scenes * (CREDIT_COSTS.IMAGE_PER_SCENE + CREDIT_COSTS.AUDIO_PER_SCENE);
+            const isDisabled = creditBalance <= 15 && scenes > 5;
+            return (
+              <button
+                key={scenes}
+                type="button"
+                onClick={() => {
+                  if (!isDisabled) {
+                    setSceneCount(scenes);
+                    setShowCustomScenes(false);
+                  }
+                }}
+                disabled={isDisabled}
+                className={`p-2.5 rounded-lg border-2 transition-all relative ${
+                  sceneCount === scenes && !showCustomScenes
+                    ? 'border-orange-500 bg-orange-500/10 text-orange-400'
+                    : isDisabled
+                    ? 'border-gray-800 bg-gray-900 text-gray-600 cursor-not-allowed opacity-50'
+                    : 'border-gray-700 bg-gray-800/50 text-gray-300 hover:border-orange-500/50 hover:bg-gray-800'
+                }`}
+              >
+                {isDisabled && (
+                  <div className="absolute top-0 left-0 right-0 bg-orange-900/30 text-orange-400 text-[8px] font-semibold py-0.5 rounded-t-md text-center">
+                    Low credits
                   </div>
-                </button>
-              );
-            })}
-            {/* Custom button */}
+                )}
+                <div className="text-xs font-bold mb-0.5">{scenes} scenes</div>
+                <div className="flex items-center justify-center gap-1 text-[9px] text-gray-500">
+                  <span>{timeDisplay}</span>
+                  <span>•</span>
+                  <span>{estimatedCredits} credits</span>
+                </div>
+              </button>
+            );
+          })}
+          </div>
+
+          {/* Custom scenes toggle */}
+          {!showCustomScenes && (
             <button
               type="button"
               onClick={() => setShowCustomScenes(true)}
-              className={`p-2 pt-5 rounded-lg border transition-all relative hover:scale-105 ${
-                showCustomScenes
-                  ? 'border-orange-500 bg-orange-500/20 text-orange-400 shadow-sm shadow-orange-500/20'
-                  : 'border-gray-700 bg-gray-800 text-gray-400 hover:border-gray-600 hover:bg-gray-750'
-              }`}
+              className="text-xs text-orange-400 hover:text-orange-300 underline"
             >
-              <div className="text-sm font-semibold">Custom</div>
-              <div className="text-xs opacity-75">&nbsp;</div>
+              Custom scene count
             </button>
-          </div>
+          )}
 
-          {/* Custom scene slider */}
+          {/* Custom scene slider - full width below buttons */}
           {showCustomScenes && (
-            <div className="mt-3 p-3 bg-gray-800 rounded-lg border border-gray-700">
-              <div className="flex justify-between items-start mb-3">
-                <label className="text-sm font-medium text-gray-300">
-                  Number of Scenes: <span className="text-orange-400 font-bold">{sceneCount}</span>
+            <div className="mt-2 p-2.5 bg-gray-800 rounded-lg border border-gray-700">
+              <div className="flex justify-between items-center mb-2">
+                <label className="text-xs font-medium text-gray-300">
+                  Scenes: <span className="text-orange-400 font-bold">{sceneCount}</span>
                 </label>
-                <div className="flex items-center gap-1.5 text-[10px] text-gray-400">
+                <div className="flex items-center gap-1 text-[9px] text-gray-400">
                   <span>~{(() => {
                     const estimatedSeconds = sceneCount * 8;
                     const mins = Math.floor(estimatedSeconds / 60);
                     const secs = estimatedSeconds % 60;
                     return mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
                   })()}</span>
-                  <span className="text-gray-600">•</span>
-                  <span className="flex items-center gap-0.5">
-                    <Coins className="w-3 h-3" />
-                    ~{sceneCount * (CREDIT_COSTS.IMAGE_PER_SCENE + CREDIT_COSTS.AUDIO_PER_SCENE)}
-                  </span>
+                  <span>•</span>
+                  <Coins className="w-2.5 h-2.5" />
+                  <span>~{sceneCount * (CREDIT_COSTS.IMAGE_PER_SCENE + CREDIT_COSTS.AUDIO_PER_SCENE)} credits</span>
                 </div>
               </div>
               <Slider
@@ -890,26 +932,17 @@ export default function Dashboard() {
           )}
 
           {creditBalance <= 15 && (
-            <p className="text-xs text-orange-400 mt-2">
-              You have {creditBalance} credits. Get more credits to create longer stories.
+            <p className="text-[10px] text-orange-400 mt-2">
+              You have {creditBalance} credits. Get more to create longer stories.
             </p>
           )}
         </div>
       )}
 
-      {/* Divider */}
-      <div className="border-t border-gray-800"></div>
-
       {/* Format */}
-      <div className="space-y-3">
-        <div>
-          <label className="text-sm font-semibold text-white flex items-center gap-2">
-            <Monitor className="w-4 h-4 text-orange-400" />
-            Format
-          </label>
-          <p className="text-xs text-gray-500 mt-0.5">Select aspect ratio for your video</p>
-        </div>
-        <div className="grid grid-cols-3 gap-2">
+      <div className="space-y-2">
+        <label className="text-sm font-semibold text-white">Format</label>
+        <div className="grid grid-cols-3 gap-1.5">
           {[
             { value: "9:16", icon: Smartphone, label: "9:16" },
             { value: "16:9", icon: Monitor, label: "16:9" },
@@ -919,14 +952,14 @@ export default function Dashboard() {
               key={value}
               type="button"
               onClick={() => setAspectRatio(value as any)}
-              className={`p-3 rounded-lg border transition-all hover:scale-105 ${
+              className={`p-2.5 rounded-lg border-2 transition-all ${
                 aspectRatio === value
-                  ? 'border-orange-500 bg-orange-500/20 shadow-sm shadow-orange-500/20'
-                  : 'border-gray-700 bg-gray-800 hover:border-gray-600 hover:bg-gray-750'
+                  ? 'border-orange-500 bg-orange-500/10'
+                  : 'border-gray-700 bg-gray-800/50 hover:border-orange-500/50 hover:bg-gray-800'
               }`}
             >
-              <Icon className={`w-5 h-5 mx-auto mb-1.5 ${aspectRatio === value ? 'text-orange-400' : 'text-gray-400'}`} />
-              <div className={`text-xs font-semibold ${aspectRatio === value ? 'text-orange-400' : 'text-gray-300'}`}>
+              <Icon className={`w-4 h-4 mx-auto mb-0.5 ${aspectRatio === value ? 'text-orange-400' : 'text-gray-400'}`} />
+              <div className={`text-xs font-bold ${aspectRatio === value ? 'text-orange-400' : 'text-gray-300'}`}>
                 {label}
               </div>
             </button>
@@ -934,58 +967,43 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Divider */}
-      <div className="border-t border-gray-800"></div>
-
       {/* Voice Selection */}
-      <div className="space-y-3">
-        <div>
-          <label className="text-sm font-semibold text-white flex items-center gap-2">
-            <Volume2 className="w-4 h-4 text-orange-400" />
-            Narrator Voice
-          </label>
-          <p className="text-xs text-gray-500 mt-0.5">Choose a voice for narration</p>
-        </div>
+      <div className="space-y-2">
+        <label className="text-sm font-semibold text-white">Voice</label>
         {loadingVoices ? (
-          <div className="flex items-center justify-center py-8 bg-gray-800 border border-gray-700 rounded-lg">
-            <Loader2 className="w-5 h-5 animate-spin text-orange-500" />
-            <span className="ml-2 text-sm text-gray-400">Loading voices...</span>
+          <div className="flex items-center justify-center py-8 bg-gray-800/50 border border-gray-700 rounded-lg">
+            <Loader2 className="w-4 h-4 animate-spin text-orange-500" />
+            <span className="ml-2 text-xs text-gray-400">Loading...</span>
           </div>
         ) : voices.length > 0 ? (
-          <div className="grid grid-cols-4 gap-2 max-h-[280px] overflow-y-auto">
+          <div className="grid grid-cols-4 gap-1.5">
             {voices.slice(0, 8).map((voice) => (
               <button
                 key={voice.id}
                 type="button"
                 onClick={() => setSelectedVoiceId(voice.id)}
-                className={`p-3 rounded-lg border transition-all text-left hover:scale-105 ${
+                className={`p-2.5 rounded-lg border-2 transition-all text-left relative group ${
                   selectedVoiceId === voice.id
-                    ? 'border-orange-500 bg-orange-500/20 shadow-sm shadow-orange-500/20'
-                    : 'border-gray-700 bg-gray-800 hover:border-gray-600 hover:bg-gray-750'
+                    ? 'border-orange-500 bg-orange-500/10'
+                    : 'border-gray-700 bg-gray-800/50 hover:border-orange-500/50 hover:bg-gray-800'
                 }`}
               >
-                {/* Voice Name */}
-                <div className={`text-sm font-medium mb-1 ${
-                  selectedVoiceId === voice.id ? 'text-orange-400' : 'text-white'
-                }`}>
+                <div className={`text-xs font-bold mb-1 ${selectedVoiceId === voice.id ? 'text-orange-400' : 'text-white'}`}>
                   {voice.name}
                 </div>
-
-                {/* Voice Tags */}
                 {voice.labels && formatVoiceLabels(voice.labels) && (
-                  <div className="text-xs text-gray-500 mb-2 line-clamp-2 min-h-[2rem]">
+                  <div className="text-[9px] text-gray-500 line-clamp-1 mb-1">
                     {formatVoiceLabels(voice.labels)}
                   </div>
                 )}
-
-                {/* Preview Button */}
+                {/* Preview button */}
                 {voice.preview_url && (
                   <div
                     onClick={(e) => {
                       e.stopPropagation();
                       playVoicePreview(voice.id, voice.preview_url);
                     }}
-                    className={`w-full px-2 py-1 rounded text-xs font-medium transition-colors text-center ${
+                    className={`w-full mt-1 px-2 py-1 rounded text-[9px] font-medium transition-colors text-center ${
                       playingPreviewId === voice.id
                         ? 'bg-orange-600 text-white'
                         : 'bg-gray-700/80 hover:bg-gray-600 text-gray-300'
@@ -998,14 +1016,14 @@ export default function Dashboard() {
             ))}
           </div>
         ) : (
-          <div className="p-3 bg-gray-800 border border-gray-700 rounded-lg text-sm text-gray-400 text-center">
-            Click to load voices
+          <div className="flex items-center justify-center py-8 bg-gray-800/50 border border-gray-700 rounded-lg">
+            <Loader2 className="w-4 h-4 animate-spin text-orange-500" />
           </div>
         )}
       </div>
 
       {/* Info note */}
-      <p className="text-xs text-gray-500 text-center">
+      <p className="text-[10px] text-gray-500 text-center -mt-1">
         All settings adjustable after creation
       </p>
 
@@ -1013,16 +1031,15 @@ export default function Dashboard() {
       <Button
         disabled={creating || (!isBlankStory && !newPrompt.trim())}
         onClick={createStory}
-        className="w-full bg-orange-600 hover:bg-orange-700 text-white font-semibold"
-        size="lg"
+        className="w-full bg-orange-600 hover:bg-orange-700 text-white font-bold text-base py-4 rounded-lg"
       >
         {creating ? (
           <>
-            <Loader2 className="animate-spin h-5 w-5 mr-2" /> Creating Story...
+            <Loader2 className="animate-spin h-5 w-5 mr-2" /> Creating Your Story...
           </>
         ) : (
           <>
-            <Plus className="w-5 h-5 mr-2" /> {isBlankStory ? 'Create Blank Story' : 'Create Story'}
+            <Sparkles className="w-5 h-5 mr-2" /> {isBlankStory ? 'Create Blank Story' : 'Create Story'}
           </>
         )}
       </Button>
@@ -1030,6 +1047,7 @@ export default function Dashboard() {
   );
 
   return (
+    <TooltipProvider>
     <div className="min-h-screen bg-black text-white flex">
       {/* Mobile Sidebar Overlay */}
       {mobileMenuOpen && (
@@ -1061,6 +1079,7 @@ export default function Dashboard() {
                 <button
                   onClick={() => {
                     setSelectedCategory("faceless-videos");
+                    setShowCreditsPage(false);
                     setMobileMenuOpen(false);
                   }}
                   className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors ${
@@ -1077,6 +1096,7 @@ export default function Dashboard() {
                   onClick={() => {
                     setSelectedCategory("series");
                     setSelectedSeriesView(null);
+                    setShowCreditsPage(false);
                     setMobileMenuOpen(false);
                   }}
                   className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors mt-1 ${
@@ -1117,7 +1137,7 @@ export default function Dashboard() {
                 </p>
                 <Button
                   onClick={() => {
-                    router.push('/credits');
+                    setShowCreditsPage(true);
                     setMobileMenuOpen(false);
                   }}
                   className="w-full mt-3 bg-orange-600 hover:bg-orange-700 text-white text-sm font-semibold"
@@ -1144,13 +1164,6 @@ export default function Dashboard() {
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-56 bg-gray-900 border-gray-800">
                   <DropdownMenuItem
-                    className="flex items-center gap-3 text-gray-400 hover:text-white hover:bg-gray-800 cursor-pointer"
-                    onClick={() => {/* Settings functionality can be added later */}}
-                  >
-                    <Settings className="w-4 h-4" />
-                    <span>Settings</span>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
                     className="flex items-center gap-3 text-gray-400 hover:text-red-400 hover:bg-gray-800 cursor-pointer"
                     onClick={signOut}
                   >
@@ -1165,75 +1178,84 @@ export default function Dashboard() {
       )}
 
       {/* Left Sidebar - Desktop only */}
-      <div className="hidden md:flex w-64 bg-gray-950 border-r border-gray-800 flex-col fixed h-full">
+      <div className="hidden md:flex w-64 bg-gray-950 border-r border-gray-800/50 flex-col fixed h-full">
         {/* Logo/Brand */}
         <div className="p-6 border-b border-gray-800">
-          <h1 className="text-2xl font-bold text-white">Kahaani</h1>
-          <p className="text-xs text-gray-500 mt-1">AI Story Studio</p>
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-orange-500 to-orange-600 flex items-center justify-center">
+              <Video className="w-6 h-6 text-white" />
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold text-white">Kahaani</h1>
+              <p className="text-xs text-gray-500 mt-0.5">AI Story Studio</p>
+            </div>
+          </div>
         </div>
 
         {/* Navigation */}
         <nav className="flex-1 p-4 space-y-1">
           <div className="mb-4">
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider px-3 mb-2">
+            <p className="text-[10px] font-bold text-gray-600 uppercase tracking-widest px-3 mb-3">
               Categories
             </p>
             <button
-              onClick={() => setSelectedCategory("faceless-videos")}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors ${
+              onClick={() => {
+                setSelectedCategory("faceless-videos");
+                setShowCreditsPage(false);
+              }}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all ${
                 selectedCategory === "faceless-videos"
                   ? "bg-orange-600 text-white"
                   : "text-gray-400 hover:bg-gray-900 hover:text-white"
               }`}
             >
               <Video className="w-5 h-5" />
-              <span className="font-medium">Stories</span>
+              <span className="font-semibold">Stories</span>
             </button>
 
             <button
               onClick={() => {
                 setSelectedCategory("series");
-                setSelectedSeriesView(null); // Clear selected series view when clicking Series in sidebar
+                setSelectedSeriesView(null);
+                setShowCreditsPage(false);
               }}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors mt-1 ${
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all mt-2 ${
                 selectedCategory === "series"
                   ? "bg-orange-600 text-white"
                   : "text-gray-400 hover:bg-gray-900 hover:text-white"
               }`}
             >
               <Film className="w-5 h-5" />
-              <span className="font-medium">Series</span>
+              <span className="font-semibold">Series</span>
             </button>
           </div>
         </nav>
 
         {/* Credit Balance Section */}
         <div className="border-t border-gray-800 p-4">
-          <div className="bg-gradient-to-br from-orange-600/20 to-pink-600/20 border border-orange-600/30 rounded-lg p-4">
-            <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-full bg-orange-600/30 flex items-center justify-center">
-                  <Coins className="w-4 h-4 text-orange-400" />
-                </div>
-                <span className="text-xs font-medium text-gray-400 uppercase tracking-wider">Credits</span>
+          <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <div className="w-8 h-8 rounded-lg bg-orange-600 flex items-center justify-center">
+                <Coins className="w-4 h-4 text-white" />
               </div>
+              <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Credits</span>
             </div>
-            <div className="flex items-baseline gap-1">
+            <div className="flex items-baseline gap-1.5 mb-3">
               {creditsLoading ? (
-                <Loader2 className="w-5 h-5 animate-spin text-orange-400" />
+                <Loader2 className="w-6 h-6 animate-spin text-orange-400" />
               ) : (
                 <>
                   <span className="text-3xl font-bold text-white">{creditBalance}</span>
-                  <span className="text-sm text-gray-400">available</span>
+                  <span className="text-sm text-gray-500">available</span>
                 </>
               )}
             </div>
-            <p className="text-xs text-gray-500 mt-2">
+            <p className="text-xs text-gray-600 mb-4">
               1 image or audio = 1 credit
             </p>
             <Button
-              onClick={() => router.push('/credits')}
-              className="w-full mt-3 bg-orange-600 hover:bg-orange-700 text-white text-sm font-semibold"
+              onClick={() => setShowCreditsPage(true)}
+              className="w-full bg-orange-600 hover:bg-orange-700 text-white text-sm font-semibold"
             >
               <Coins className="w-4 h-4 mr-2" />
               Buy Credits
@@ -1246,7 +1268,7 @@ export default function Dashboard() {
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <div className="flex items-center gap-3 px-2 py-2 rounded-lg hover:bg-gray-900 cursor-pointer transition-colors">
-                <div className="w-9 h-9 rounded-full bg-gradient-to-br from-orange-500 to-pink-500 flex items-center justify-center">
+                <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-orange-500 to-pink-500 flex items-center justify-center">
                   <User className="w-5 h-5 text-white" />
                 </div>
                 <div className="flex-1 min-w-0">
@@ -1256,13 +1278,6 @@ export default function Dashboard() {
               </div>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-56 bg-gray-900 border-gray-800">
-              <DropdownMenuItem
-                className="flex items-center gap-3 text-gray-400 hover:text-white hover:bg-gray-800 cursor-pointer"
-                onClick={() => {/* Settings functionality can be added later */}}
-              >
-                <Settings className="w-4 h-4" />
-                <span>Settings</span>
-              </DropdownMenuItem>
               <DropdownMenuItem
                 className="flex items-center gap-3 text-gray-400 hover:text-red-400 hover:bg-gray-800 cursor-pointer"
                 onClick={signOut}
@@ -1287,13 +1302,26 @@ export default function Dashboard() {
               <Menu className="w-6 h-6" />
             </button>
             <h1 className="text-xl font-bold text-white">Kahaani</h1>
-            <Button
-              size="sm"
-              className="bg-orange-600 hover:bg-orange-700 text-white font-semibold"
-              onClick={() => openCreateStoryDialog(selectedCategory === "series" && selectedSeriesView ? selectedSeriesView.id : null)}
-            >
-              <Plus className="w-4 h-4 mr-1" /> New
-            </Button>
+            {/* Show New button only when not viewing a specific series (has + tile) and not on create form/credits page */}
+            {!selectedSeriesView && !showCreateStoryForm && !showCreditsPage && (
+              <Button
+                size="sm"
+                className="bg-orange-600 hover:bg-orange-700 text-white font-semibold"
+                onClick={() => {
+                  if (selectedCategory === "series") {
+                    setSeriesDialogOpen(true);
+                  } else {
+                    openCreateStoryDialog(null);
+                  }
+                }}
+              >
+                <Plus className="w-4 h-4 mr-1" /> New
+              </Button>
+            )}
+            {/* Show spacer when button is hidden to maintain layout */}
+            {(selectedSeriesView || showCreateStoryForm || showCreditsPage) && (
+              <div className="w-[60px]"></div>
+            )}
             <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
               <DialogContent className="sm:max-w-2xl bg-gray-900 text-white border-gray-800 max-h-[90vh] overflow-y-auto">
                 <DialogHeader>
@@ -1309,19 +1337,85 @@ export default function Dashboard() {
         <div className="px-4 md:px-8 py-6 md:py-8">
           {/* Header with Create Buttons */}
           <div className="flex items-center justify-between mb-6">
-            <h1 className="text-3xl font-bold text-white">
-              {selectedCategory === "series"
-                ? selectedSeriesView
-                  ? `Series: ${selectedSeriesView.title}`
-                  : "Series"
-                : "Stories"
-              }
-            </h1>
-            {/* Desktop Create Buttons - Hidden on mobile */}
-            <div className="hidden md:flex gap-2">
+            {showCreditsPage ? (
+              <div className="flex flex-col gap-1">
+                <div className="flex items-center gap-2">
+                  <Coins className="w-6 h-6 text-orange-500" />
+                  <h1 className="text-3xl font-bold text-white">Buy Credits</h1>
+                </div>
+                <button
+                  onClick={() => setShowCreditsPage(false)}
+                  className="text-sm text-gray-400 hover:text-orange-400 transition-colors flex items-center gap-1 w-fit"
+                >
+                  <ArrowLeft className="w-3 h-3" />
+                  <span>Back to Dashboard</span>
+                </button>
+              </div>
+            ) : showCreateStoryForm ? (
+              <div className="flex flex-col gap-1">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="w-6 h-6 text-orange-500" />
+                  <h1 className="text-3xl font-bold text-white">
+                    {selectedSeriesForCreate && selectedSeriesView
+                      ? `Create New Story in ${selectedSeriesView.title} series`
+                      : 'Create New Story'}
+                  </h1>
+                </div>
+                <button
+                  onClick={() => {
+                    setShowCreateStoryForm(false);
+                    setSelectedSeriesForCreate(null);
+                    setNewPrompt("");
+                    setIsBlankStory(false);
+                  }}
+                  className="text-sm text-gray-400 hover:text-orange-400 transition-colors flex items-center gap-1 w-fit"
+                >
+                  <ArrowLeft className="w-3 h-3" />
+                  <span>Back to {selectedSeriesView ? selectedSeriesView.title : 'Stories'}</span>
+                </button>
+              </div>
+            ) : selectedCategory === "series" && selectedSeriesView ? (
+              <div className="flex flex-col gap-1">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <Film className="w-6 h-6 text-orange-500" />
+                  <h1 className="text-3xl font-bold text-white">{selectedSeriesView.title}</h1>
+                  {selectedSeriesView.has_character_consistency && (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="flex items-center gap-1.5 px-2.5 py-1 bg-green-600/20 border border-green-600/40 rounded-lg text-green-400 text-xs font-medium cursor-help">
+                          <User className="w-3.5 h-3.5" />
+                          <span>Visual Consistency</span>
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                          </svg>
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p className="text-xs">Characters and environments have consistent appearance across all episodes</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  )}
+                </div>
+                <button
+                  onClick={() => setSelectedSeriesView(null)}
+                  className="text-sm text-gray-400 hover:text-orange-400 transition-colors flex items-center gap-1 w-fit"
+                >
+                  <ArrowLeft className="w-3 h-3" />
+                  <span>Back to Series Dashboard</span>
+                </button>
+              </div>
+            ) : (
+              <h1 className="text-3xl font-bold text-white">
+                {selectedCategory === "series" ? "Series" : "Stories"}
+              </h1>
+            )}
+            {/* Desktop Create Buttons - Hidden on mobile, credits page, and create form */}
+            {!showCreditsPage && !showCreateStoryForm && (
+            <div className="hidden md:flex gap-3">
+              {selectedCategory === "series" && !selectedSeriesView && (
               <Dialog open={seriesDialogOpen} onOpenChange={setSeriesDialogOpen}>
                 <DialogTrigger asChild>
-                  <Button variant="outline" className="border-gray-700">
+                  <Button variant="outline" className="border-gray-700 hover:border-gray-600 bg-gray-900 hover:bg-gray-800">
                     <Plus className="w-4 h-4 mr-2" />
                     New Series
                   </Button>
@@ -1364,10 +1458,10 @@ export default function Dashboard() {
                               htmlFor="character-consistency"
                               className="text-sm font-semibold text-white cursor-pointer block"
                             >
-                              Character & Environment Consistency
+                              Visual Consistency
                             </label>
                             <p className="text-xs text-gray-300 mt-1">
-                              When enabled, characters and environments will look identical across all episodes.
+                              When enabled, characters and environments will have consistent appearance across all episodes.
                             </p>
                             <p className="text-xs text-orange-300 mt-1.5 font-medium">
                               Example: "Ray the rabbit" will have the same appearance in every episode.
@@ -1400,14 +1494,18 @@ export default function Dashboard() {
                     </div>
                   </DialogContent>
                 </Dialog>
+              )}
 
+              {/* Only show New Story button on Stories tab */}
+              {selectedCategory !== "series" && (
               <Button
                 className="bg-orange-600 hover:bg-orange-700"
-                onClick={() => openCreateStoryDialog(selectedCategory === "series" && selectedSeriesView ? selectedSeriesView.id : null)}
+                onClick={() => openCreateStoryDialog(null)}
               >
                 <Plus className="w-4 h-4 mr-2" />
                 New Story
               </Button>
+              )}
               <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
                 <DialogContent className="sm:max-w-2xl bg-gray-900 text-white border-gray-800 max-h-[90vh] overflow-y-auto">
                   <DialogHeader>
@@ -1417,9 +1515,24 @@ export default function Dashboard() {
                 </DialogContent>
               </Dialog>
             </div>
+            )}
           </div>
 
-        {loading ? (
+        {showCreditsPage ? (
+          // Credits page iframe
+          <div className="w-full h-[calc(100vh-200px)]">
+            <iframe
+              src="/credits?embedded=true"
+              className="w-full h-full border-0 rounded-lg"
+              title="Buy Credits"
+            />
+          </div>
+        ) : showCreateStoryForm ? (
+          // Inline Create Story Form
+          <div className="max-w-3xl mx-auto">
+            {renderDialogContent()}
+          </div>
+        ) : loading ? (
           <div className="flex items-center justify-center py-20">
             <Loader2 className="animate-spin h-8 w-8 text-orange-500 mr-3" />
             <span className="text-gray-400 text-lg">Loading...</span>
@@ -1443,13 +1556,6 @@ export default function Dashboard() {
           selectedSeriesView ? (
             // Viewing stories from a specific series
             <>
-              {/* Series Description (if exists) */}
-              {selectedSeriesView.description && (
-                <div className="mb-6">
-                  <p className="text-gray-400">{selectedSeriesView.description}</p>
-                </div>
-              )}
-
               {/* Stories from this series */}
               {(!storiesBySeries[selectedSeriesView.id] || storiesBySeries[selectedSeriesView.id].length === 0) ? (
                 <div className="text-center py-20">
@@ -1460,17 +1566,32 @@ export default function Dashboard() {
                   </div>
                   <h3 className="text-2xl font-semibold text-white mb-4">No Stories in This Series Yet</h3>
                   <p className="text-gray-400 mb-8 max-w-md mx-auto">
-                    Start building your series by creating the first story. Add episodes to build a connected narrative with consistent characters.
+                    Start building your series by creating the first story.
                   </p>
                   <Button onClick={() => openCreateStoryDialog(selectedSeriesView.id)} className="bg-orange-600 hover:bg-orange-700">
                     <Plus className="w-4 h-4 mr-2" /> Create First Episode
                   </Button>
                 </div>
               ) : (
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
-                  {(storiesBySeries[selectedSeriesView.id] || []).map((story) => (
-                    <StoryCard key={story.id} story={story} showEpisodeBadge={true} />
-                  ))}
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
+                  {/* Add New Episode Placeholder */}
+                  <button
+                    onClick={() => openCreateStoryDialog(selectedSeriesView.id)}
+                    className="aspect-[9/16] rounded-lg border-2 border-dashed border-gray-700 hover:border-orange-500 bg-gray-900/50 hover:bg-gray-800/50 transition-all flex flex-col items-center justify-center gap-3 group"
+                  >
+                    <div className="w-12 h-12 rounded-full bg-orange-600/20 group-hover:bg-orange-600/30 flex items-center justify-center transition-colors">
+                      <Plus className="w-6 h-6 text-orange-500" />
+                    </div>
+                    <span className="text-sm font-medium text-gray-400 group-hover:text-orange-400 transition-colors">Add Episode</span>
+                  </button>
+
+                  {(storiesBySeries[selectedSeriesView.id] || []).map((story, index) => {
+                    // Calculate episode number: most recent first, so reverse the index
+                    const episodeNumber = (storiesBySeries[selectedSeriesView.id] || []).length - index;
+                    return (
+                      <StoryCard key={story.id} story={story} showEpisodeBadge={true} episodeNumber={episodeNumber} />
+                    );
+                  })}
                 </div>
               )}
             </>
@@ -1490,7 +1611,7 @@ export default function Dashboard() {
               </Button>
             </div>
           ) : (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
               {series.map((s) => (
                 <SeriesCard key={s.id} series={s} />
               ))}
@@ -1498,57 +1619,29 @@ export default function Dashboard() {
           )
         ) : (
           <>
-            {/* Filter toggle - right above stories grid */}
-            <div className="flex items-center justify-between mb-4 px-1">
-              <div className="flex items-center gap-2">
-                <Checkbox
-                  id="show-series-stories"
-                  checked={showSeriesStories}
-                  onCheckedChange={(checked) => setShowSeriesStories(checked === true)}
-                />
-                <label
-                  htmlFor="show-series-stories"
-                  className="text-sm text-gray-400 hover:text-gray-300 transition-colors cursor-pointer"
-                >
-                  Include stories from series
-                </label>
-              </div>
-              <span className="text-xs text-gray-500">
-                {stories.filter(s => showSeriesStories || !s.series_id).length} of {stories.length} stories
-              </span>
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
+              {stories.map((story) => (
+                <StoryCard key={story.id} story={story} showEpisodeBadge={false} />
+              ))}
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
-              {stories.map((story) => {
-                const isVisible = showSeriesStories || !story.series_id;
-                return (
-                  <div key={story.id} style={{ display: isVisible ? 'block' : 'none' }}>
-                    <StoryCard story={story} showEpisodeBadge={!!story.series_id} />
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* Show empty state only if no visible stories */}
-            {(() => {
-              const visibleCount = stories.filter(s => showSeriesStories || !s.series_id).length;
-              return visibleCount === 0 ? (
+            {/* Show empty state only if no stories */}
+            {stories.length === 0 && (
             <div className="text-center py-20">
               <div className="mb-6 flex justify-center">
                 <div className="w-24 h-24 rounded-full bg-orange-900/20 flex items-center justify-center">
                   <Film className="w-12 h-12 text-orange-400" />
                 </div>
               </div>
-              <h3 className="text-2xl font-semibold text-white mb-4">All your stories are in series</h3>
+              <h3 className="text-2xl font-semibold text-white mb-4">No stories yet</h3>
               <p className="text-gray-400 mb-8 max-w-md mx-auto">
-                Enable "Include stories from series" above to see them here, or visit the Series tab.
+                Create your first story to get started.
               </p>
-              <Button onClick={() => setShowSeriesStories(true)} className="bg-orange-600 hover:bg-orange-700">
-                Show Stories from Series
+              <Button onClick={() => openCreateStoryDialog()} className="bg-orange-600 hover:bg-orange-700">
+                <Plus className="w-4 h-4 mr-2" /> Create Story
               </Button>
             </div>
-              ) : null;
-            })()}
+            )}
           </>
         )}
         </div>
@@ -1748,5 +1841,6 @@ export default function Dashboard() {
         </DialogContent>
       </Dialog>
     </div>
+    </TooltipProvider>
   );
 }
