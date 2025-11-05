@@ -28,51 +28,87 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     logger = new JobLogger(scene.story_id, "generate_scene_image");
     logger?.log(`🎨 Generating image for scene ${scene.order + 1}: ${scene_id}`);
 
-    // 1.5️⃣ Check if story belongs to a series and get aspect ratio
+    // 1.5️⃣ Check if story belongs to a series and get aspect ratio + story reference
     const { data: story, error: storyErr } = await supabaseAdmin
       .from("stories")
-      .select("series_id, aspect_ratio")
+      .select("series_id, aspect_ratio, reference_image_url, character_library")
       .eq("id", scene.story_id)
       .single();
 
     const storyAspectRatio = story?.aspect_ratio || "9:16";
+    const storyReference = story?.reference_image_url || null;
+    const storyLibrary = story?.character_library || null;
     let seriesReference: string | null = null;
     let characterLibrary: any = null;
     const isSeriesStory = story && story.series_id;
+    let hasCharacterConsistency = false;
 
     if (isSeriesStory) {
       logger?.log(`📺 Story belongs to series: ${story.series_id}`);
 
-      // Load series reference image and character library
+      // Load series settings
       const { data: series, error: seriesErr } = await supabaseAdmin
         .from("series")
-        .select("reference_image_url, character_library")
+        .select("has_character_consistency")
         .eq("id", story.series_id)
         .single();
 
       if (!seriesErr && series) {
-        seriesReference = series.reference_image_url;
-        characterLibrary = series.character_library;
+        hasCharacterConsistency = series.has_character_consistency !== false; // Default to true if not set
 
-        logger?.log(`📚 Series reference loaded:`);
-        logger?.log(`   🖼️ Reference image: ${seriesReference ? 'exists' : 'none'}`);
-        logger?.log(`   👥 Character library: ${characterLibrary?.characters?.length || 0} characters`);
+        if (hasCharacterConsistency) {
+          // Use this story's own reference and library (already loaded above)
+          if (storyReference && storyLibrary) {
+            seriesReference = storyReference;
+            characterLibrary = storyLibrary;
+            logger?.log(`📚 Using story's own reference and library (series consistency enabled):`);
+            logger?.log(`   🖼️ Reference image: ${seriesReference ? 'exists' : 'none'}`);
+            logger?.log(`   👥 Character library: ${characterLibrary?.characters?.length || 0} characters`);
+          } else {
+            // Fallback: load from latest story in series (for new stories)
+            logger?.log(`🔍 Story has no reference yet, loading from latest story in series...`);
+            const { data: latestStory, error: latestErr } = await supabaseAdmin
+              .from("stories")
+              .select("character_library, reference_image_url")
+              .eq("series_id", story.series_id)
+              .neq("id", scene.story_id)
+              .not("character_library", "is", null)
+              .order("created_at", { ascending: false })
+              .limit(1)
+              .maybeSingle();
+
+            if (!latestErr && latestStory) {
+              seriesReference = latestStory.reference_image_url;
+              characterLibrary = latestStory.character_library;
+              logger?.log(`📚 Loaded from latest story:`);
+              logger?.log(`   🖼️ Reference image: ${seriesReference ? 'exists' : 'none'}`);
+              logger?.log(`   👥 Character library: ${characterLibrary?.characters?.length || 0} characters`);
+            }
+          }
+        } else {
+          logger?.log(`⚠️ Character consistency disabled for this series - treating stories independently`);
+        }
       }
     }
 
-    // Fallback: If no series reference, use other scene images from current story
+    // Fallback hierarchy: series reference > story reference > scene images
     let referenceScenes: any[] = [];
     if (!seriesReference) {
-      const { data: allScenes } = await supabaseAdmin
-        .from("scenes")
-        .select("id, text, order, image_url")
-        .eq("story_id", scene.story_id)
-        .not("image_url", "is", null)
-        .neq("id", scene_id)
-        .order("order", { ascending: true });
+      if (storyReference) {
+        logger?.log(`🖼️ Using story reference image for consistency`);
+      } else {
+        // Last resort: use other scene images from current story
+        const { data: allScenes } = await supabaseAdmin
+          .from("scenes")
+          .select("id, text, order, image_url")
+          .eq("story_id", scene.story_id)
+          .not("image_url", "is", null)
+          .neq("id", scene_id)
+          .order("order", { ascending: true });
 
-      referenceScenes = allScenes || [];
-      logger?.log(`📸 No series reference - using ${referenceScenes.length} scene images for consistency`);
+        referenceScenes = allScenes || [];
+        logger?.log(`📸 No reference image - using ${referenceScenes.length} scene images for consistency`);
+      }
     }
 
     // 2️⃣ Clean up old image if exists
@@ -126,8 +162,9 @@ Style: ${finalStyle}
 
 `;
 
-    // Add series reference context if available
+    // Add reference context based on priority
     if (seriesReference && characterLibrary) {
+      // Priority 1: Series reference (cross-episode consistency)
       promptText += `⚠️ SERIES CHARACTER REFERENCE PROVIDED ABOVE:
 A reference sheet image is provided showing all characters from this series.
 
@@ -145,8 +182,21 @@ CRITICAL REQUIREMENTS:
 - DO NOT recreate the reference sheet - use it as a guide for character appearance
 
 `;
+    } else if (storyReference) {
+      // Priority 2: Story reference (within-story consistency)
+      promptText += `⚠️ STORY CHARACTER REFERENCE PROVIDED ABOVE:
+A reference sheet image is provided showing all characters from this story.
+
+CRITICAL REQUIREMENTS:
+- Use the reference sheet image above to maintain EXACT character designs
+- Characters must look IDENTICAL to how they appear in the reference
+- Match art style, color palette, and visual mood from the reference
+- Maintain visual consistency with other scenes in this story
+- DO NOT recreate the reference sheet - use it as a guide for character appearance
+
+`;
     } else if (referenceScenes.length > 0) {
-      // Fallback to scene images if no series reference
+      // Priority 3: Scene images fallback
       promptText += `IMPORTANT - Visual Consistency:
 You have ${referenceScenes.length} reference image(s) from previous scenes in this story (shown above for reference only).
 - Maintain EXACT SAME character designs, faces, clothing, and appearance as in the reference images
@@ -160,7 +210,7 @@ You have ${referenceScenes.length} reference image(s) from previous scenes in th
     promptText += `Requirements:
 - Generate ONE SINGLE IMAGE ONLY (not multiple images or panels)
 - Create a visually compelling image that captures the essence of THIS SPECIFIC scene only
-- Use consistent artistic style${seriesReference || referenceScenes.length > 0 ? ' matching the reference' : ''}
+- Use consistent artistic style${seriesReference || storyReference || referenceScenes.length > 0 ? ' matching the reference' : ''}
 - Match the emotional tone of the description
 - High detail and professional quality
 - DO NOT create a comic strip, storyboard, or sequence of images
@@ -177,7 +227,7 @@ Do NOT generate multiple scenes, panels, or images in one. Just one standalone i
     // Build message content with reference (multimodal)
     const messageContent: any[] = [];
 
-    // Priority 1: Use series reference if available
+    // Priority 1: Use series reference if available (cross-episode consistency)
     if (seriesReference) {
       logger?.log(`🖼️ Including series reference image for character consistency`);
       messageContent.push({
@@ -189,7 +239,19 @@ Do NOT generate multiple scenes, panels, or images in one. Just one standalone i
         text: "This is the series character reference sheet. Use it to maintain character consistency."
       });
     }
-    // Priority 2: Fallback to scene images if no series reference
+    // Priority 2: Use story reference if available (within-story consistency)
+    else if (storyReference) {
+      logger?.log(`🖼️ Including story reference image for character consistency`);
+      messageContent.push({
+        type: "image_url",
+        image_url: { url: storyReference }
+      });
+      messageContent.push({
+        type: "text",
+        text: "This is the story character reference sheet. Use it to maintain character consistency."
+      });
+    }
+    // Priority 3: Fallback to scene images if no reference exists
     else if (referenceScenes.length > 0) {
       const limitedReferences = referenceScenes.slice(0, 3); // Limit to 3 most recent for API efficiency
       logger?.log(`🖼️ Including ${limitedReferences.length} scene reference images for consistency`);

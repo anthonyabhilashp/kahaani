@@ -29,7 +29,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (req.method === 'POST') {
       // Create new series
-      const { title, description, thumbnail_url } = req.body;
+      const { title, description, thumbnail_url, has_character_consistency } = req.body;
 
       if (!title) {
         return res.status(400).json({ error: "Title is required" });
@@ -42,6 +42,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           title,
           description,
           thumbnail_url,
+          has_character_consistency: has_character_consistency !== undefined ? has_character_consistency : true,
         })
         .select()
         .single();

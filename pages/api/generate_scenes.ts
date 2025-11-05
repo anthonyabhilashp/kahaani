@@ -133,7 +133,8 @@ RULES:
 - Make each scene clear, engaging, and easy to visualize
 - Focus on creating compelling, high-quality content for each scene
 - If the user provides a long story, intelligently condense or summarize it into exactly ${sceneCount} scenes
-- The LAST scene should provide closure appropriate to the content type
+- For STORIES: The last scene should provide narrative closure
+- For FACTS/EDUCATIONAL content: Each scene is an independent fact - DO NOT add moral lessons, calls to action, or preachy endings. Just provide interesting, standalone facts.
 
 Return ONLY valid JSON in this exact format:
 {

@@ -73,6 +73,7 @@ export default function Dashboard() {
   const [removingFromSeries, setRemovingFromSeries] = useState(false);
   const [newSeriesTitle, setNewSeriesTitle] = useState("");
   const [newSeriesDescription, setNewSeriesDescription] = useState("");
+  const [hasCharacterConsistency, setHasCharacterConsistency] = useState(true);
   const [creatingSeries, setCreatingSeries] = useState(false);
   const [showSeriesStories, setShowSeriesStories] = useState(false); // Hide series stories by default
   const [selectedSeriesView, setSelectedSeriesView] = useState<Series | null>(null); // Track selected series to view its stories
@@ -487,6 +488,7 @@ export default function Dashboard() {
         body: JSON.stringify({
           title: newSeriesTitle,
           description: newSeriesDescription,
+          has_character_consistency: hasCharacterConsistency,
         }),
       });
 
@@ -495,6 +497,7 @@ export default function Dashboard() {
         setSeriesDialogOpen(false);
         setNewSeriesTitle("");
         setNewSeriesDescription("");
+        setHasCharacterConsistency(true);
         // Refresh series list
         await fetchSeries();
         // Navigate to series detail page
@@ -574,23 +577,6 @@ export default function Dashboard() {
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="bg-gray-900 border-gray-800">
-              {story.series_id ? (
-                <DropdownMenuItem
-                  onClick={(e) => handleRemoveFromSeriesClick(e as any, story)}
-                  className="text-gray-200 hover:text-white hover:bg-gray-800 cursor-pointer"
-                >
-                  <List className="w-4 h-4 mr-2" />
-                  Remove from series
-                </DropdownMenuItem>
-              ) : (
-                <DropdownMenuItem
-                  onClick={(e) => handleAddToSeriesClick(e as any, story)}
-                  className="text-gray-200 hover:text-white hover:bg-gray-800 cursor-pointer"
-                >
-                  <List className="w-4 h-4 mr-2" />
-                  Add to series
-                </DropdownMenuItem>
-              )}
               <DropdownMenuItem
                 onClick={(e) => handleDeleteClick(e as any, story.id)}
                 className="text-red-400 hover:text-red-300 hover:bg-gray-800 cursor-pointer"
@@ -1364,6 +1350,36 @@ export default function Dashboard() {
                           rows={3}
                         />
                       </div>
+
+                      <div className="bg-orange-950/30 border border-orange-700/50 rounded-lg p-4 space-y-3">
+                        <div className="flex items-start space-x-3">
+                          <Checkbox
+                            id="character-consistency"
+                            checked={hasCharacterConsistency}
+                            onCheckedChange={(checked) => setHasCharacterConsistency(checked as boolean)}
+                            className="mt-1"
+                          />
+                          <div className="flex-1">
+                            <label
+                              htmlFor="character-consistency"
+                              className="text-sm font-semibold text-white cursor-pointer block"
+                            >
+                              Character & Environment Consistency
+                            </label>
+                            <p className="text-xs text-gray-300 mt-1">
+                              When enabled, characters and environments will look identical across all episodes.
+                            </p>
+                            <p className="text-xs text-orange-300 mt-1.5 font-medium">
+                              Example: "Ray the rabbit" will have the same appearance in every episode.
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-start space-x-2 text-xs text-orange-200/80">
+                          <span className="font-bold">⚠️</span>
+                          <span>This cannot be changed after series creation</span>
+                        </div>
+                      </div>
+
                       <Button
                         onClick={createSeries}
                         disabled={!newSeriesTitle.trim() || creatingSeries}

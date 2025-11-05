@@ -37,10 +37,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     logger.info(`[${story_id}] 🎨 Starting image generation`);
     logger.info(`[${story_id}] User: ${user.email}`);
 
-    // Get story metadata (title, aspect ratio, series_id)
+    // Get story metadata (title, aspect ratio, series_id, reference_image_url, character_library)
     const { data: story, error: storyErr } = await supabaseAdmin
       .from("stories")
-      .select("title, aspect_ratio, series_id")
+      .select("title, aspect_ratio, series_id, reference_image_url, character_library")
       .eq("id", story_id)
       .single();
 
@@ -101,68 +101,140 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let characters: any[] = [];
     let environments: any[] = [];
     let props: any[] = [];
+    const maxRetries = 3;
 
-    // 🎬 SERIES CHARACTER LIBRARY SYSTEM
+    // 🎬 CHARACTER CONSISTENCY SYSTEM (per-story storage)
     let seriesLibrary: any = null;
     let seriesReferenceImageUrl: string | null = null;
     let isSeriesStory = false;
+    let hasCharacterConsistency = false;
+    let skipLibraryGeneration = false;
 
     if (story.series_id) {
       isSeriesStory = true;
       logger.info(`[${story_id}] 📺 Story belongs to series: ${story.series_id}`);
 
-      // Load series character library and reference image
+      // Load series settings
       const { data: series, error: seriesErr } = await supabaseAdmin
         .from("series")
-        .select("character_library, reference_image_url, style_guide")
+        .select("has_character_consistency")
         .eq("id", story.series_id)
         .single();
 
       if (!seriesErr && series) {
-        seriesLibrary = series.character_library || { characters: [], environments: [], props: [] };
-        seriesReferenceImageUrl = series.reference_image_url;
+        hasCharacterConsistency = series.has_character_consistency !== false; // Default to true if not set
 
-        logger.info(`[${story_id}] 📚 Series library loaded:`);
-        logger.info(`[${story_id}]    👥 ${seriesLibrary.characters?.length || 0} existing characters`);
-        logger.info(`[${story_id}]    🖼️ Reference image: ${seriesReferenceImageUrl ? 'exists' : 'none'}`);
+        if (hasCharacterConsistency) {
+          // Check if this story already has character library and reference
+          if (story.character_library && story.reference_image_url) {
+            skipLibraryGeneration = true;
+            logger.info(`[${story_id}] 📦 Story already has character library and reference - skipping regeneration`);
+            logger.info(`[${story_id}]    👥 ${story.character_library.characters?.length || 0} characters`);
+            logger.info(`[${story_id}]    🖼️ Reference: ${story.reference_image_url}`);
+          } else {
+            // Load from latest story in series
+            logger.info(`[${story_id}] 🔍 Loading character library from latest story in series...`);
+
+            const { data: latestStory, error: latestErr } = await supabaseAdmin
+              .from("stories")
+              .select("character_library, reference_image_url, created_at")
+              .eq("series_id", story.series_id)
+              .neq("id", story_id)
+              .not("character_library", "is", null)
+              .order("created_at", { ascending: false })
+              .limit(1)
+              .maybeSingle();
+
+            if (!latestErr && latestStory) {
+              seriesLibrary = latestStory.character_library || { characters: [], environments: [], props: [] };
+              seriesReferenceImageUrl = latestStory.reference_image_url;
+
+              logger.info(`[${story_id}] 📚 Loaded from latest story (created: ${latestStory.created_at}):`);
+              logger.info(`[${story_id}]    👥 ${seriesLibrary.characters?.length || 0} existing characters`);
+              logger.info(`[${story_id}]    🖼️ Reference image: ${seriesReferenceImageUrl ? 'exists' : 'none'}`);
+              if (seriesReferenceImageUrl) {
+                logger.info(`[${story_id}]    📎 Reference URL: ${seriesReferenceImageUrl}`);
+              }
+            } else {
+              logger.info(`[${story_id}] 🆕 First story in series - starting fresh`);
+            }
+          }
+        } else {
+          logger.info(`[${story_id}] ⚠️ Character consistency disabled for this series - each story is independent`);
+        }
+      }
+    } else {
+      logger.info(`[${story_id}] 📖 Standalone story - will generate reference for within-story consistency`);
+
+      // Check if standalone story already has library and reference
+      if (story.character_library && story.reference_image_url) {
+        skipLibraryGeneration = true;
+        logger.info(`[${story_id}] 📦 Story already has character library and reference - skipping regeneration`);
       }
     }
 
-    // 🧠 Always generate scene descriptions via LLM (with instructions if provided)
-    logger.info(`[${story_id}] 🧠 Step 1: Extracting all story elements (characters, environments, props)...`);
-    logger.info(`[${story_id}] 🎨 Target style: ${finalStyle}`);
-    if (instructions && instructions.trim()) {
-      logger.info(`[${story_id}] 📝 Additional Instructions will be incorporated: "${instructions}"`);
-    }
+    // 🧠 Extract story elements OR use existing library
+    if (skipLibraryGeneration) {
+      // Use existing character library from story
+      characters = story.character_library?.characters || [];
+      environments = story.character_library?.environments || [];
+      props = story.character_library?.props || [];
+      logger.info(`[${story_id}] ✅ Using existing character library from story`);
+      logger.info(`[${story_id}]    👥 ${characters.length} characters`);
+      logger.info(`[${story_id}]    🌍 ${environments.length} environments`);
+      logger.info(`[${story_id}]    🎯 ${props.length} props`);
 
-    // Build prompt for all scenes
-    const scenesForPrompt = scenes.map((s, i) => {
-      return `Scene ${i + 1}: ${s.text}`;
-    }).join('\n');
+      // Use scene text directly as visual descriptions (no LLM call needed)
+      visualDescriptions = scenes.map(s => s.text);
+      logger.info(`[${story_id}] ✅ Using scene text as visual descriptions (${visualDescriptions.length} scenes)`);
+    } else {
+      // Extract via LLM (with instructions if provided)
+      logger.info(`[${story_id}] 🧠 Step 1: Extracting all story elements (characters, environments, props)...`);
+      logger.info(`[${story_id}] 🎨 Target style: ${finalStyle}`);
+      if (instructions && instructions.trim()) {
+        logger.info(`[${story_id}] 📝 Additional Instructions will be incorporated: "${instructions}"`);
+      }
+
+      // Build prompt for all scenes
+      const scenesForPrompt = scenes.map((s, i) => {
+        return `Scene ${i + 1}: ${s.text}`;
+      }).join('\n');
 
     const elementsPrompt = `You are a visual director analyzing a story to create a master reference sheet for AI image generation.
 
-${isSeriesStory && seriesLibrary?.characters?.length > 0 ? `🎬 EXISTING CHARACTER LIBRARY (from previous episodes in this series):
+${hasCharacterConsistency && seriesLibrary?.characters?.length > 0 ? `🎬 EXISTING LIBRARY (from previous episodes in this series):
+
+CHARACTERS:
 ${JSON.stringify(seriesLibrary.characters, null, 2)}
 
-⚠️ CRITICAL RULES FOR CHARACTER ACCUMULATION:
-1. **NEVER REMOVE existing characters** - Even if they don't appear in the current episode, KEEP THEM ALL in the library
-2. If a character in the new story matches an existing character (same person, even with slightly different names like "Ollie" vs "Ollie the Owl"), use the EXACT description from the existing library
-3. Only ADD new characters that don't already exist in the library
-4. Characters can appear in future episodes, so preserve the entire character universe
-5. Match intelligently based on character identity, not just exact name match
+${seriesLibrary?.environments?.length > 0 ? `ENVIRONMENTS:
+${JSON.stringify(seriesLibrary.environments, null, 2)}
+` : ''}${seriesLibrary?.props?.length > 0 ? `PROPS:
+${JSON.stringify(seriesLibrary.props, null, 2)}
+` : ''}
+⚠️ CRITICAL RULES FOR ACCUMULATION (APPLIES TO CHARACTERS, ENVIRONMENTS, AND PROPS):
+1. **NEVER REMOVE existing elements** - Even if they don't appear in the current episode, KEEP THEM ALL
+   - If previous library had "Dense Forest", keep it in the output even if current episode is at "Lakeside"
+   - If previous library had 2 environments, output must have AT LEAST 2 (previous) + any new ones
+2. If an element in the new story matches an existing one, use the EXACT description from the existing library
+3. Only ADD new elements that don't already exist
+4. All elements can reappear in future episodes, so preserve the complete accumulated universe
+5. Match intelligently based on identity, not just exact name match
 
-YOUR TASK: Return ALL existing characters (copy them exactly) + any NEW characters from the current episode.
+YOUR TASK:
+- Characters: Return ALL ${seriesLibrary.characters.length} existing + any new from current episode
+- Environments: Return ALL ${seriesLibrary.environments?.length || 0} existing + any new from current episode
+- Props: Return ALL ${seriesLibrary.props?.length || 0} existing + any new from current episode
 
 ` : ''}STORY SCENES:
 ${scenesForPrompt}
 
 TARGET VISUAL STYLE: ${finalStyle}${extraNotes}
 
-Extract ALL unique elements from this story:
-1. CHARACTERS: ${isSeriesStory && seriesLibrary?.characters?.length > 0 ? '**RETURN ALL EXISTING CHARACTERS + NEW ONES** - Copy all existing characters exactly, then add only new characters from this episode' : 'List every character with detailed physical description (age, height, build, hair, face, clothing, defining features)'}
-2. ENVIRONMENTS: List every location/setting mentioned (these are episode-specific, extract from current story only)
-3. PROPS/OBJECTS: Important items that appear in the story (these are episode-specific, extract from current story only)
+Extract ALL unique elements for the CUMULATIVE library (must include both existing + new):
+1. CHARACTERS: ${hasCharacterConsistency && seriesLibrary?.characters?.length > 0 ? `**MUST RETURN ALL ${seriesLibrary.characters.length} EXISTING + NEW ONES** - First copy all ${seriesLibrary.characters.length} existing characters from above exactly as they are, then add any new characters from this episode` : 'List every character with detailed physical description (age, height, build, hair, face, clothing, defining features)'}
+2. ENVIRONMENTS: ${hasCharacterConsistency && seriesLibrary?.environments?.length > 0 ? `**MUST RETURN ALL ${seriesLibrary.environments.length} EXISTING + NEW ONES** - First copy all ${seriesLibrary.environments.length} existing environments from above exactly as they are, then add any new environments from this episode` : 'List every location/setting mentioned with detailed description'}
+3. PROPS/OBJECTS: ${hasCharacterConsistency && seriesLibrary?.props?.length > 0 ? `**MUST RETURN ALL ${seriesLibrary.props.length} EXISTING + NEW ONES** - First copy all ${seriesLibrary.props.length} existing props from above exactly as they are, then add any new props from this episode` : 'List important items/objects that appear or are mentioned in the story (tools, weapons, vehicles, magical items, everyday objects, etc.). Even if no props appear in this episode, return empty array []'}
 
 Then create visual descriptions for each scene.
 
@@ -195,12 +267,11 @@ Return ONLY valid JSON in this exact format:
 
 Return exactly ${scenes.length} visual descriptions in the visual_descriptions array.`;
 
-    // 🔄 Retry logic for visual descriptions generation (MANDATORY - must succeed)
-    let descGenerationSuccess = false;
-    let lastError = "";
-    const maxRetries = 3;
+      // 🔄 Retry logic for visual descriptions generation (MANDATORY - must succeed)
+      let descGenerationSuccess = false;
+      let lastError = "";
 
-    for (let attempt = 1; attempt <= maxRetries && !descGenerationSuccess; attempt++) {
+      for (let attempt = 1; attempt <= maxRetries && !descGenerationSuccess; attempt++) {
       try {
         logger.info(`[${story_id}] 🔄 Attempt ${attempt}/${maxRetries}: Generating visual descriptions...`);
 
@@ -299,12 +370,13 @@ Return exactly ${scenes.length} visual descriptions in the visual_descriptions a
       }
     }
 
-    // 🚨 If visual descriptions failed after all retries, stop here
-    if (!descGenerationSuccess) {
-      const errorMsg = `Failed to generate visual descriptions after ${maxRetries} attempts. Last error: ${lastError}. Please try again.`;
-      logger.error(`❌ ${errorMsg}`);
-      throw new Error(errorMsg);
-    }
+      // 🚨 If visual descriptions failed after all retries, stop here
+      if (!descGenerationSuccess) {
+        const errorMsg = `Failed to generate visual descriptions after ${maxRetries} attempts. Last error: ${lastError}. Please try again.`;
+        logger.error(`❌ ${errorMsg}`);
+        throw new Error(errorMsg);
+      }
+    } // End of else block for extraction
 
     // Visual descriptions are now guaranteed to exist (no fallback needed)
 
@@ -371,111 +443,45 @@ Return exactly ${scenes.length} visual descriptions in the visual_descriptions a
     logger.info(`[${story_id}] 📐 Story aspect ratio: ${aspect}, using ${imageSize}`);
     logger.info(`[${story_id}] 🧠 Using ${provider} model: ${model}`);
 
-    // 🔄 Generate master reference image (MANDATORY if characters exist - must succeed)
+    // 🔄 Generate master reference image (MANDATORY if characters exist - for within-story consistency)
     let referenceImageUrl: string | null = null;
 
-    if (characters.length > 0) {
+    if (skipLibraryGeneration) {
+      // Use existing reference image from story
+      referenceImageUrl = story.reference_image_url;
+      logger.info(`[${story_id}] ✅ Using existing reference image: ${referenceImageUrl}`);
+    } else if (characters.length > 0) {
       logger.info(`[${story_id}] \n🎨 Step 2: Generating master reference image with all story elements...`);
 
       // Check if series has existing reference to build upon
       const hasSeriesReference = isSeriesStory && seriesReferenceImageUrl;
 
-      let existingChars: any[] = [];
-      let newChars: any[] = [];
-
       if (hasSeriesReference) {
-        logger.info(`[${story_id}] 🔗 Using series reference as base for consistency`);
-
-        // Split characters into existing (from series library) vs new
-        existingChars = characters.filter((c: any) =>
-          seriesLibrary.characters.find((sc: any) =>
-            sc.name.toLowerCase() === c.name.toLowerCase() ||
-            sc.name.toLowerCase().includes(c.name.toLowerCase()) ||
-            c.name.toLowerCase().includes(sc.name.toLowerCase())
-          )
-        );
-
-        newChars = characters.filter((c: any) =>
-          !seriesLibrary.characters.find((sc: any) =>
-            sc.name.toLowerCase() === c.name.toLowerCase() ||
-            sc.name.toLowerCase().includes(c.name.toLowerCase()) ||
-            c.name.toLowerCase().includes(sc.name.toLowerCase())
-          )
-        );
-
-        logger.info(`[${story_id}]    🔒 Existing characters (copy from reference): ${existingChars.length}`);
-        existingChars.forEach((c: any) => logger.info(`[${story_id}]       - ${c.name}`));
-        logger.info(`[${story_id}]    🆕 New characters (generate): ${newChars.length}`);
-        newChars.forEach((c: any) => logger.info(`[${story_id}]       - ${c.name}`));
+        logger.info(`[${story_id}] 🔗 Using series reference as base`);
+        logger.info(`[${story_id}]    📎 Reference URL: ${seriesReferenceImageUrl}`);
       }
 
+      // Log what we're passing to Gemini
+      logger.info(`[${story_id}] 📋 Elements being sent to Gemini for reference image:`);
+      logger.info(`[${story_id}]    👥 ${characters.length} characters: ${characters.map((c: any) => c.name).join(', ')}`);
+      logger.info(`[${story_id}]    🌍 ${environments.length} environments: ${environments.map((e: any) => e.name).join(', ')}`);
+      logger.info(`[${story_id}]    🎯 ${props.length} props: ${props.map((p: any) => p.name).join(', ')}`);
+
       const referencePrompt = hasSeriesReference
-        ? `⚠️ CRITICAL: You are updating a REFERENCE SHEET for a series.
+        ? `Generate a reference sheet image showing all characters, environments, and props from this JSON:
 
-The EXISTING REFERENCE IMAGE provided above contains characters, environments, and props from previous episodes.
+${JSON.stringify({ characters, environments, props }, null, 2)}
 
-YOUR TASK: Create an UPDATED reference sheet that:
-1. PRESERVES everything from the existing reference image (copy it exactly)
-2. ADDS any new elements listed below
+Style: ${finalStyle}
+Layout: Reference sheet with labels
+Background: Clean/neutral${extraNotes ? `\n${extraNotes}` : ''}`
+        : `Generate a reference sheet image showing all characters, environments, and props from this JSON:
 
-═══════════════════════════════════════
+${JSON.stringify({ characters, environments, props }, null, 2)}
 
-COMPLETE CHARACTER LIST (${characters.length} total):
-
-🔒 EXISTING CHARACTERS (already in reference image - COPY THEM EXACTLY AS SHOWN):
-${existingChars.map((c: any, i: number) => `${i + 1}. ${c.name}: ${c.description}`).join('\n')}
-
-${newChars.length > 0 ? `🆕 NEW CHARACTERS (NOT in reference image - GENERATE these):
-${newChars.map((c: any, i: number) => `${i + 1}. ${c.name}: ${c.description}`).join('\n')}` : ''}
-
-${environments.length > 0 ? `\nENVIRONMENTS (${environments.length} total):
-${environments.map((e: any, i: number) => `${i + 1}. ${e.name}: ${e.description}`).join('\n')}` : ''}
-
-${props.length > 0 ? `\nPROPS (${props.length} total):
-${props.map((p: any, i: number) => `${i + 1}. ${p.name}: ${p.description}`).join('\n')}` : ''}
-
-═══════════════════════════════════════
-
-STYLE: ${finalStyle}${extraNotes}
-
-CRITICAL REQUIREMENTS:
-✓ START by copying the ENTIRE existing reference image exactly as it appears
-✓ Keep ALL existing characters in their EXACT positions with IDENTICAL appearance
-✓ Keep ALL existing environments with IDENTICAL visuals
-✓ Keep ALL existing props with IDENTICAL visuals
-✓ Then ADD new characters/environments/props in available spaces
-✓ DO NOT remove, redraw, or modify ANY existing elements
-✓ Must include ALL ${existingChars.length} existing + ${newChars.length} new = ${characters.length} TOTAL characters
-✓ Use efficient grid/multi-row layout to fit all elements
-✓ Adjust character size if needed to accommodate all elements
-✓ Professional reference sheet layout with clear labels
-✓ Neutral background, consistent lighting
-
-REMEMBER: You are UPDATING an existing sheet, not creating from scratch. Preserve everything that's already there!`
-        : `Create a CHARACTER REFERENCE SHEET in "${finalStyle}" style.
-
-This is a reference sheet showing all characters and key elements for a story. Display each element clearly for reference purposes.
-
-CHARACTERS TO INCLUDE:
-${characters.map((c: any, i: number) => `${i + 1}. ${c.name}: ${c.description}`).join('\n')}
-
-${environments.length > 0 ? `\nENVIRONMENTS TO SHOW:
-${environments.map((e: any, i: number) => `${i + 1}. ${e.name}: ${e.description}`).join('\n')}` : ''}
-
-${props.length > 0 ? `\nKEY PROPS:
-${props.map((p: any, i: number) => `${i + 1}. ${p.name}: ${p.description}`).join('\n')}` : ''}
-
-STYLE: ${finalStyle}${extraNotes}
-
-REQUIREMENTS:
-- Create a clean reference sheet layout showing all ${characters.length} character(s) clearly
-- Each character should be shown in full or 3/4 view to establish their design
-- Include environment elements and props if space allows
-- Use "${finalStyle}" aesthetic consistently
-- This is a REFERENCE SHEET for maintaining consistency, not a scene from the story
-- Professional character design sheet style
-- Clear, well-lit, neutral background
-- Label each character if possible`;
+Style: ${finalStyle}
+Layout: Reference sheet with labels
+Background: Clean/neutral${extraNotes ? `\n${extraNotes}` : ''}`;
 
       let refImageSuccess = false;
       let refLastError = "";
@@ -483,12 +489,15 @@ REQUIREMENTS:
       for (let attempt = 1; attempt <= maxRetries && !refImageSuccess; attempt++) {
         try {
           logger.info(`[${story_id}] 🔄 Attempt ${attempt}/${maxRetries}: Generating reference image...`);
+          logger.info(`[${story_id}] 📝 Reference prompt (first 800 chars): ${referencePrompt.substring(0, 800)}...`);
 
           // Build messages array - include series reference if exists
           const refMessages: any[] = [];
 
           if (hasSeriesReference) {
             // Pass existing reference as visual input
+            logger.info(`[${story_id}] 📸 Passing reference image to LLM:`);
+            logger.info(`[${story_id}]    📎 Reference URL: ${seriesReferenceImageUrl}`);
             refMessages.push({
               role: "user",
               content: [
@@ -500,7 +509,7 @@ REQUIREMENTS:
                 },
                 {
                   type: "text",
-                  text: "This is the EXISTING CHARACTER REFERENCE SHEET. You MUST copy the existing characters shown here EXACTLY - same visuals, same poses, same everything. Do not redraw or reinterpret them. Only add new characters if specified."
+                  text: "Reference image"
                 }
               ]
             });
@@ -522,7 +531,7 @@ REQUIREMENTS:
               model,
               messages: refMessages,
               modalities: ["image", "text"],
-              image_config: { aspect_ratio: aspect },
+              // No aspect_ratio restriction - let model choose best layout for reference sheet
             }),
           });
 
@@ -583,58 +592,42 @@ REQUIREMENTS:
 
           refImageSuccess = true;
 
-          // 💾 Save updated library and reference to series (if this is a series story)
-          if (isSeriesStory && story.series_id) {
-            try {
-              const updatedLibrary = {
-                characters: characters,
-                environments: environments,
-                props: props
-              };
+          // 💾 Save character library and reference to stories table (for all stories)
+          // Each story maintains its own library and reference
+          try {
+            const updatedLibrary = {
+              characters: characters,
+              environments: environments,
+              props: props
+            };
 
-              const { error: seriesUpdateErr } = await supabaseAdmin
-                .from("series")
-                .update({
-                  character_library: updatedLibrary,
-                  reference_image_url: referenceImageStorageUrl,
-                  style_guide: finalStyle
-                })
-                .eq("id", story.series_id);
+            // Update story with new reference URL and character library
+            const { error: storyUpdateErr } = await supabaseAdmin
+              .from("stories")
+              .update({
+                reference_image_url: referenceImageStorageUrl,
+                character_library: updatedLibrary
+              })
+              .eq("id", story_id);
 
-              if (seriesUpdateErr) {
-                logger.error(`[${story_id}] ⚠️ Failed to update series library: ${seriesUpdateErr.message}`);
-              } else {
-                logger.info(`[${story_id}] ✅ Series library updated successfully!`);
-                logger.info(`[${story_id}]    👥 ${characters.length} characters saved`);
-                logger.info(`[${story_id}]    🖼️ Reference image URL saved: ${referenceImageStorageUrl}`);
+            if (storyUpdateErr) {
+              logger.error(`[${story_id}] ⚠️ Failed to update story: ${storyUpdateErr.message}`);
+            } else {
+              logger.info(`[${story_id}] ✅ Story updated successfully!`);
+              logger.info(`[${story_id}]    👥 ${characters.length} characters saved`);
+              logger.info(`[${story_id}]    🌍 ${environments.length} environments saved`);
+              logger.info(`[${story_id}]    🎯 ${props.length} props saved`);
+              logger.info(`[${story_id}]    🖼️ Reference image URL saved`);
 
-                // 🧹 Now safe to delete old reference image (DB already points to new one)
-                if (seriesReferenceImageUrl) {
-                  try {
-                    // Extract filename from URL (format: .../images/reference-xxx.png)
-                    const oldFileName = seriesReferenceImageUrl.split('/images/').pop();
-                    if (oldFileName && oldFileName !== refFileName) {
-                      logger.info(`[${story_id}] 🗑️ Deleting old reference image: ${oldFileName}`);
-                      const { error: deleteErr } = await supabaseAdmin.storage
-                        .from("images")
-                        .remove([oldFileName]);
-
-                      if (deleteErr) {
-                        logger.warn(`[${story_id}] ⚠️ Failed to delete old reference: ${deleteErr.message}`);
-                      } else {
-                        logger.info(`[${story_id}] ✅ Old reference image deleted from storage`);
-                      }
-                    }
-                  } catch (cleanupErr: any) {
-                    logger.warn(`[${story_id}] ⚠️ Error during cleanup: ${cleanupErr.message}`);
-                    // Don't fail the whole process if cleanup fails
-                  }
-                }
+              // 📦 Keep old reference images - each episode preserves its own reference
+              // Don't delete for series with consistency - each episode has its own character sheet
+              if (hasCharacterConsistency) {
+                logger.info(`[${story_id}] 📦 Keeping all previous reference images (series consistency enabled)`);
               }
-            } catch (seriesSaveErr: any) {
-              logger.error(`[${story_id}] ⚠️ Error saving to series: ${seriesSaveErr.message}`);
-              // Don't fail the whole process if series save fails
             }
+          } catch (storyUpdateErr: any) {
+            logger.error(`[${story_id}] ⚠️ Error saving to story: ${storyUpdateErr.message}`);
+            // Don't fail the whole process if story save fails
           }
         } catch (err: any) {
           refLastError = err.message || "Unknown error";
@@ -740,6 +733,8 @@ Generate one beautiful image for Scene ${i + 1} in "${finalStyle}" style${refere
 
       // Add reference image first if available
       if (referenceImageUrl) {
+        logger.info(`[${story_id}] 📸 Scene ${i + 1}: Using reference image for character consistency`);
+        logger.info(`[${story_id}]    📎 Reference URL: ${referenceImageUrl.substring(0, 100)}...`);
         messages.push({
           role: "user",
           content: [
