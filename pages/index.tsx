@@ -402,7 +402,7 @@ export default function Dashboard() {
         // Use callback form to avoid dependency on current stories state
         setStories(prevStories => {
           const existingIds = new Set(prevStories.map(s => s.id));
-          const newStories = (data.stories || []).filter(s => !existingIds.has(s.id));
+          const newStories = (data.stories || []).filter((s: Story) => !existingIds.has(s.id));
           if (newStories.length > 0) {
             return [...prevStories, ...newStories];
           }
