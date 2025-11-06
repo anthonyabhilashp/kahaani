@@ -462,11 +462,24 @@ export default function StoryDetailsPage() {
             const actualIndex = scenes.findIndex(s => s === scene);
             const audioElement = new Audio(scene.audio_url!);
             audioElement.volume = volume; // Set initial volume
-            audioElement.oncanplaythrough = () => {
+
+            // Set timeout to prevent getting stuck on mobile
+            const timeout = setTimeout(() => {
+              console.warn(`⏱️ Audio preload timeout for scene ${actualIndex}, continuing anyway`);
+              audioCache[actualIndex] = audioElement;
+              resolve(void 0);
+            }, 3000); // 3 second timeout
+
+            // Use loadedmetadata instead of canplaythrough for better mobile compatibility
+            audioElement.onloadedmetadata = () => {
+              clearTimeout(timeout);
               audioCache[actualIndex] = audioElement;
               resolve(void 0);
             };
-            audioElement.onerror = () => resolve(void 0); // Continue even if audio fails
+            audioElement.onerror = () => {
+              clearTimeout(timeout);
+              resolve(void 0); // Continue even if audio fails
+            };
             audioElement.preload = 'metadata';
           });
         });
