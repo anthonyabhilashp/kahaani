@@ -2888,9 +2888,9 @@ export default function StoryDetailsPage() {
                   >
                     <ArrowLeft className="w-3 h-3" />
                     <span className="hidden sm:inline">
-                      {story?.series_id ? "Back to series" : "Back to stories"}
+                      {story?.series_id ? "← Back to Series" : "← Back to All Stories"}
                     </span>
-                    <span className="sm:hidden">Back</span>
+                    <span className="sm:hidden">← Back</span>
                   </button>
                 </>
               )}

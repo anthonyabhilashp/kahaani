@@ -1978,6 +1978,32 @@ export default function Dashboard() {
           selectedSeriesView ? (
             // Viewing stories from a specific series
             <>
+              {/* Series Filter Banner - Mobile Responsive */}
+              <div className="mb-6 bg-gradient-to-r from-orange-900/20 to-orange-800/10 border border-orange-600/30 rounded-lg p-3 sm:p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
+                  <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-orange-600/20 flex items-center justify-center flex-shrink-0">
+                    <Film className="w-4 h-4 sm:w-5 sm:h-5 text-orange-400" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[10px] sm:text-xs text-orange-300/70 font-medium uppercase tracking-wider">Viewing Series</p>
+                    <h2 className="text-base sm:text-lg font-semibold text-white truncate">{selectedSeriesView.title}</h2>
+                  </div>
+                </div>
+                <Button
+                  onClick={() => {
+                    setSelectedSeriesView(null);
+                    setCurrentSeriesFilter(null);
+                    fetchStories(true, null);
+                  }}
+                  variant="outline"
+                  size="sm"
+                  className="bg-gray-800/50 border-gray-700 text-gray-300 hover:bg-gray-700 hover:text-white hover:border-orange-500 w-full sm:w-auto flex-shrink-0"
+                >
+                  <span className="hidden sm:inline">View All Stories</span>
+                  <span className="sm:hidden">View All</span>
+                </Button>
+              </div>
+
               {stories.length === 0 && !loading ? (
                 <div className="text-center py-20">
                   <div className="mb-6 flex justify-center">
@@ -2064,14 +2090,34 @@ export default function Dashboard() {
               </Button>
             </div>
           ) : (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
-              {series.map((s) => (
-                <SeriesCard key={s.id} series={s} />
-              ))}
-            </div>
+            <>
+              {/* Page Header for All Series */}
+              <div className="mb-6">
+                <h2 className="text-2xl font-bold text-white">All Series</h2>
+                <p className="text-sm text-gray-400 mt-1">
+                  {series.length > 0 ? `${series.length} ${series.length === 1 ? 'series' : 'series'} total` : 'No series yet'}
+                </p>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
+                {series.map((s) => (
+                  <SeriesCard key={s.id} series={s} />
+                ))}
+              </div>
+            </>
           )
         ) : (
           <>
+            {/* Page Header for All Stories */}
+            <div className="mb-6 flex items-center justify-between">
+              <div>
+                <h2 className="text-2xl font-bold text-white">All Stories</h2>
+                <p className="text-sm text-gray-400 mt-1">
+                  {totalStories > 0 ? `${totalStories} ${totalStories === 1 ? 'story' : 'stories'} total` : 'No stories yet'}
+                </p>
+              </div>
+            </div>
+
             {/* Use memoized StoryGrid to prevent flickering on load more */}
             <StoryGrid
               stories={stories}
