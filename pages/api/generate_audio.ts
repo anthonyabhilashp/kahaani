@@ -47,6 +47,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const { scene_id, voice_id } = req.body;
   if (!scene_id) return res.status(400).json({ error: "scene_id is required" });
 
+  let logger: any = null;
+  let storyIdForLog: string | null = null;
+
   try {
     // 1️⃣ Fetch scene data
     const { data: scene, error: sceneErr } = await supabaseAdmin
@@ -59,6 +62,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!scene) throw new Error("Scene not found.");
 
     const sceneText = scene.text;
+    storyIdForLog = scene.story_id;
 
     // 🔐 Get authenticated user from session
     const authHeader = req.headers.authorization;
@@ -74,7 +78,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const userId = user.id;
-    const logger = getUserLogger(userId);
+    logger = getUserLogger(userId);
 
     logger.info(`[${scene.story_id}] 🎙️ Starting audio generation for scene: ${scene_id}`);
     logger.info(`[${scene.story_id}] User: ${user.email}`);
@@ -265,7 +269,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   } catch (err: any) {
     // No refund needed since credits are only deducted after success
-    logger.error(`[${scene.story_id}] ❌ Error during audio generation: ${err.message}`);
+    if (logger && storyIdForLog) {
+      logger.error(`[${storyIdForLog}] ❌ Error during audio generation: ${err.message}`);
+    } else {
+      console.error(`❌ Error during audio generation: ${err.message}`);
+    }
     res.status(500).json({ error: err.message });
   }
 }

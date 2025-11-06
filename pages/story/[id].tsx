@@ -4157,7 +4157,7 @@ export default function StoryDetailsPage() {
                             <button
                               onClick={isPlayingPreview ? stopVideoPreview : startVideoPreview}
                               disabled={!mediaPreloaded}
-                              className="w-8 h-8 flex items-center justify-center hover:bg-white/10 text-white rounded disabled:opacity-50 disabled:cursor-not-allowed"
+                              className="w-8 h-8 flex items-center justify-center hover:bg-white/10 active:bg-white/20 text-white rounded disabled:opacity-50 disabled:cursor-not-allowed touch-manipulation"
                               title={!mediaPreloaded ? "Loading audio..." : (isPlayingPreview ? "Pause" : "Play")}
                             >
                               {!mediaPreloaded ? (
@@ -4169,7 +4169,7 @@ export default function StoryDetailsPage() {
                               )}
                             </button>
 
-                            {/* Volume Group - Shows slider on hover */}
+                            {/* Volume Group - Shows slider on hover (desktop) or always (mobile) */}
                             <div className="flex items-center gap-1 group/volume">
                               <button
                                 onClick={() => {
@@ -4182,7 +4182,7 @@ export default function StoryDetailsPage() {
                                     setVolume(0);
                                   }
                                 }}
-                                className="w-8 h-8 flex items-center justify-center hover:bg-white/10 text-white rounded"
+                                className="w-8 h-8 flex items-center justify-center hover:bg-white/10 active:bg-white/20 text-white rounded touch-manipulation"
                               >
                                 {volume === 0 ? (
                                   <VolumeX className="w-6 h-6" />
@@ -4191,7 +4191,7 @@ export default function StoryDetailsPage() {
                                 )}
                               </button>
 
-                              <div className="overflow-hidden transition-all duration-200 w-0 group-hover/volume:w-16">
+                              <div className="overflow-hidden transition-all duration-200 w-16 md:w-0 md:group-hover/volume:w-16">
                                 <Slider
                                   value={[volume]}
                                   max={1}
@@ -4217,16 +4217,42 @@ export default function StoryDetailsPage() {
                           {/* Fullscreen */}
                           <button
                             onClick={() => {
-                              const element = document.querySelector('.video-preview-container');
+                              const element = document.querySelector('.video-preview-container') as any;
                               if (element) {
-                                if (document.fullscreenElement) {
-                                  document.exitFullscreen();
+                                // Check if already in fullscreen
+                                const isFullscreen = document.fullscreenElement ||
+                                                    (document as any).webkitFullscreenElement ||
+                                                    (document as any).mozFullScreenElement ||
+                                                    (document as any).msFullscreenElement;
+
+                                if (isFullscreen) {
+                                  // Exit fullscreen
+                                  if (document.exitFullscreen) {
+                                    document.exitFullscreen();
+                                  } else if ((document as any).webkitExitFullscreen) {
+                                    (document as any).webkitExitFullscreen();
+                                  } else if ((document as any).mozCancelFullScreen) {
+                                    (document as any).mozCancelFullScreen();
+                                  } else if ((document as any).msExitFullscreen) {
+                                    (document as any).msExitFullscreen();
+                                  }
                                 } else {
-                                  element.requestFullscreen();
+                                  // Enter fullscreen with vendor prefixes for iOS Safari
+                                  if (element.requestFullscreen) {
+                                    element.requestFullscreen();
+                                  } else if (element.webkitRequestFullscreen) {
+                                    element.webkitRequestFullscreen();
+                                  } else if (element.webkitEnterFullscreen) {
+                                    element.webkitEnterFullscreen();
+                                  } else if (element.mozRequestFullScreen) {
+                                    element.mozRequestFullScreen();
+                                  } else if (element.msRequestFullscreen) {
+                                    element.msRequestFullscreen();
+                                  }
                                 }
                               }
                             }}
-                            className="w-8 h-8 flex items-center justify-center hover:bg-white/10 text-white rounded"
+                            className="w-8 h-8 flex items-center justify-center hover:bg-white/10 active:bg-white/20 text-white rounded touch-manipulation"
                           >
                             <Maximize className="w-6 h-6" />
                           </button>
