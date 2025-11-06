@@ -16,6 +16,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!story_id) return res.status(400).json({ error: "story_id required" });
 
   let logger: any = null;
+  let jobId: string | null = null;
 
   try {
     // 🔐 Get authenticated user from session
@@ -36,6 +37,61 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     logger.info(`[${story_id}] 🎨 Starting image generation`);
     logger.info(`[${story_id}] User: ${user.email}`);
+
+    // 🚨 CHECK IF IMAGE GENERATION IS ALREADY IN PROGRESS FOR THIS STORY
+    const { data: existingJob } = await supabaseAdmin
+      .from('image_generation_jobs')
+      .select('id, started_at')
+      .eq('story_id', story_id)
+      .eq('status', 'processing')
+      .maybeSingle();
+
+    if (existingJob) {
+      // Check if job is stale (older than 5 minutes) - assume it crashed or timed out
+      const jobAge = Date.now() - new Date(existingJob.started_at).getTime();
+      const fiveMinutes = 5 * 60 * 1000;
+
+      if (jobAge > fiveMinutes) {
+        // Job is stale - mark as failed and allow new generation
+        logger.warn(`[${story_id}] ⚠️ Stale job detected (${Math.floor(jobAge / 60000)} minutes old), marking as failed`);
+        await supabaseAdmin
+          .from('image_generation_jobs')
+          .update({
+            status: 'failed',
+            completed_at: new Date().toISOString(),
+            error: `Job timed out (stale for more than 5 minutes)`
+          })
+          .eq('id', existingJob.id);
+
+        logger.info(`[${story_id}] ✅ Cleared stale job, proceeding with new generation`);
+      } else {
+        // Job is recent - still processing
+        const ageMinutes = Math.floor(jobAge / 60000);
+        const ageSeconds = Math.floor((jobAge % 60000) / 1000);
+        logger.warn(`[${story_id}] ❌ Image generation already in progress (started ${ageMinutes}m ${ageSeconds}s ago)`);
+        return res.status(409).json({
+          error: `Image generation already in progress for this story (started ${ageMinutes}m ${ageSeconds}s ago). Please wait or clear the stuck job.`,
+          job_id: existingJob.id
+        });
+      }
+    }
+
+    // 🆕 CREATE JOB RECORD TO MARK AS PROCESSING
+    const { data: newJob, error: jobError } = await supabaseAdmin
+      .from('image_generation_jobs')
+      .insert({
+        story_id,
+        status: 'processing'
+      })
+      .select('id')
+      .single();
+
+    if (jobError || !newJob) {
+      throw new Error(`Failed to create image generation job: ${jobError?.message}`);
+    }
+
+    jobId = newJob.id;
+    logger.info(`[${story_id}] ✅ Created image generation job: ${jobId}`);
 
     // Get story metadata (title, aspect ratio, series_id, reference_image_url, character_library)
     const { data: story, error: storyErr } = await supabaseAdmin
@@ -976,6 +1032,18 @@ Generate one beautiful image for Scene ${i + 1} in "${finalStyle}" style${refere
     await updateStoryMetadata(story_id);
     logger.info(`[${story_id}] ✅ Story metadata updated`);
 
+    // 🆗 MARK JOB AS COMPLETED
+    if (jobId) {
+      await supabaseAdmin
+        .from('image_generation_jobs')
+        .update({
+          status: 'completed',
+          completed_at: new Date().toISOString()
+        })
+        .eq('id', jobId);
+      logger.info(`[${story_id}] ✅ Image generation job completed: ${jobId}`);
+    }
+
     res.status(200).json({
       story_id,
       updated_scenes: uploads,
@@ -990,6 +1058,20 @@ Generate one beautiful image for Scene ${i + 1} in "${finalStyle}" style${refere
 
   } catch (err: any) {
     logger?.error(`[${story_id}] ❌ Error generating images: ${err.message}`);
+
+    // 🚨 MARK JOB AS FAILED
+    if (jobId) {
+      await supabaseAdmin
+        .from('image_generation_jobs')
+        .update({
+          status: 'failed',
+          completed_at: new Date().toISOString(),
+          error: err.message || 'Image generation failed'
+        })
+        .eq('id', jobId);
+      logger?.error(`[${story_id}] ❌ Image generation job failed: ${jobId}`);
+    }
+
     // No refund needed since credits are only deducted after success
     res.status(500).json({ error: err.message || "Image generation failed" });
   }

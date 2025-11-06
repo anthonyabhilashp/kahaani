@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/router";
 import { Button } from "../../components/ui/button";
+import { ProductTour } from "../../components/ProductTour";
 import { Input } from "../../components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "../../components/ui/popover";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../components/ui/alert-dialog";
@@ -8,7 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../componen
 import { Slider } from "../../components/ui/slider";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../components/ui/tooltip";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../../components/ui/dropdown-menu";
-import { ArrowLeft, Play, Pause, Download, Volume2, VolumeX, Maximize, Loader2, ImageIcon, Image, Pencil, Trash2, Check, X, PlayCircle, ChevronDown, Plus, Type, Music, Upload, Sparkles, ExternalLink, MoreHorizontal, Coins, Info, Copy, Layers } from "lucide-react";
+import { ArrowLeft, Play, Pause, Download, Volume2, VolumeX, Maximize, Loader2, ImageIcon, Image, Pencil, Trash2, Check, X, PlayCircle, ChevronDown, Plus, Type, Music, Upload, Sparkles, ExternalLink, MoreHorizontal, Coins, Copy, Layers, HelpCircle, Search, ChevronRight, MessageCircle } from "lucide-react";
 import { WordByWordCaption, SimpleCaption, type WordTimestamp } from "../../components/WordByWordCaption";
 import { EffectSelectionModal } from "../../components/EffectSelectionModal";
 import { OverlaySelectionModal } from "../../components/OverlaySelectionModal";
@@ -19,6 +20,7 @@ import { CREDIT_COSTS } from "../../lib/creditConstants";
 import { useAuth } from "../../contexts/AuthContext";
 import { supabase } from "../../lib/supabaseClient";
 import { toast } from "@/hooks/use-toast";
+import { knowledgeBase, categories, type KnowledgeArticle } from "@/lib/knowledgeBase";
 
 type Scene = {
   id?: string;
@@ -273,8 +275,14 @@ export default function StoryDetailsPage() {
   const [captionInactiveColor, setCaptionInactiveColor] = useState("#FFFFFF"); // White
   const [captionWordsPerBatch, setCaptionWordsPerBatch] = useState(3); // Default 3 words at a time
   const [captionTextTransform, setCaptionTextTransform] = useState<"none" | "uppercase" | "lowercase" | "capitalize">("none");
-  const [leftPanelView, setLeftPanelView] = useState<"scenes" | "captions" | "background_music">("scenes");
+  const [leftPanelView, setLeftPanelView] = useState<"scenes" | "captions" | "background_music" | "help">("scenes");
   const [mobileView, setMobileView] = useState<"timeline" | "preview">("timeline"); // Mobile: show timeline or preview
+  const [runTour, setRunTour] = useState(false); // Product tour state
+
+  // Help Page State
+  const [helpSearchQuery, setHelpSearchQuery] = useState('');
+  const [selectedHelpArticle, setSelectedHelpArticle] = useState<KnowledgeArticle | null>(null);
+  const [selectedHelpCategory, setSelectedHelpCategory] = useState<string | null>(null);
 
   // Background Music State
   const [bgMusicEnabled, setBgMusicEnabled] = useState(false);
@@ -300,6 +308,8 @@ export default function StoryDetailsPage() {
   // Stuck job dialog state
   const [stuckJobDialogOpen, setStuckJobDialogOpen] = useState(false);
   const [clearingStuckJob, setClearingStuckJob] = useState(false);
+  const [stuckImageJobDialogOpen, setStuckImageJobDialogOpen] = useState(false);
+  const [clearingImageJob, setClearingImageJob] = useState(false);
 
   // Import dialogs
   const [importUrlDialog, setImportUrlDialog] = useState(false);
@@ -391,16 +401,39 @@ export default function StoryDetailsPage() {
       }
     };
 
+    // Silent cleanup (no state updates to avoid hot reload issues)
+    const cleanupAudio = () => {
+      previewCancelledRef.current = true;
+
+      // Stop background music
+      if (bgMusicAudioRef.current) {
+        bgMusicAudioRef.current.pause();
+        bgMusicAudioRef.current = null;
+      }
+
+      // Stop all audio elements on page
+      const audios = document.querySelectorAll('audio');
+      audios.forEach(audio => {
+        audio.pause();
+        audio.currentTime = 0;
+      });
+
+      // Clear intervals
+      if (progressIntervalRef.current) {
+        clearInterval(progressIntervalRef.current);
+        progressIntervalRef.current = null;
+      }
+    };
+
     // Listen for route changes
     router.events.on('routeChangeStart', handleRouteChange);
 
-    // Cleanup on unmount
+    // Cleanup on unmount - use empty dependency array to prevent re-registration
     return () => {
-      console.log("🧹 Component unmounting: stopping all audio");
       router.events.off('routeChangeStart', handleRouteChange);
-      handleRouteChange(); // Also stop on unmount
+      cleanupAudio(); // Silent cleanup without state updates
     };
-  }, [router]);
+  }, []); // Empty dependency array to prevent re-registration
 
   // Update volume for all preloaded audio when volume changes
   useEffect(() => {
@@ -1197,9 +1230,10 @@ export default function StoryDetailsPage() {
 
   const generateImages = async (style?: string, instructions?: string) => {
     if (!id) return;
+
+    // Show generating state and spinner immediately
     setGeneratingImages(true);
     setImageProgress({ current: 0, total: scenes.length });
-    setBulkImageDrawerOpen(false); // Close drawer when generation starts
 
     // Show spinners on all scene tile buttons
     setGeneratingSceneImage(prev => {
@@ -1230,6 +1264,19 @@ export default function StoryDetailsPage() {
           instructions: instructions || imageInstructions
         }),
       });
+
+      if (res.status === 409) {
+        // Image generation already in progress - clear states and show dialog
+        setGeneratingImages(false);
+        setImageProgress({ current: 0, total: 0 });
+        setGeneratingSceneImage(new Set());
+        setStuckImageJobDialogOpen(true);
+        return;
+      }
+
+      // Close drawer only after successful generation starts
+      setBulkImageDrawerOpen(false);
+
       if (!res.ok) {
         const errorData = await res.json();
         throw new Error(errorData.error || "Image generation failed");
@@ -1843,13 +1890,53 @@ export default function StoryDetailsPage() {
         throw new Error('Failed to clear stuck job');
       }
 
-      toast({ description: 'Stuck job cleared successfully!' });
+      // Reset video generation state
+      setGeneratingVideo(false);
+      setVideoProgress(0);
+
+      // Clear progress interval if exists
+      if (videoProgressIntervalRef.current) {
+        clearInterval(videoProgressIntervalRef.current);
+        videoProgressIntervalRef.current = null;
+      }
+
+      toast({ description: 'Video Generation Stopped' });
       setStuckJobDialogOpen(false);
     } catch (err) {
-      console.error("❌ Error clearing stuck job:", err);
-      toast({ description: `Failed to clear stuck job: ${err instanceof Error ? err.message : 'Unknown error'}`, variant: "destructive" });
+      console.error("❌ Error stopping video generation:", err);
+      toast({ description: `Failed to stop video generation: ${err instanceof Error ? err.message : 'Unknown error'}`, variant: "destructive" });
     } finally {
       setClearingStuckJob(false);
+    }
+  };
+
+  const clearImageJob = async () => {
+    if (!id || typeof id !== 'string') return;
+
+    setClearingImageJob(true);
+
+    try {
+      const headers = await getAuthHeaders();
+      const clearRes = await fetch("/api/clear_image_job", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ story_id: id }),
+      });
+
+      if (!clearRes.ok) {
+        throw new Error('Failed to cancel image generation');
+      }
+
+      toast({ description: 'Image generation cancelled. Starting new generation...' });
+      setStuckImageJobDialogOpen(false);
+
+      // Retry image generation after clearing
+      await generateImages();
+    } catch (err) {
+      console.error("❌ Error cancelling image generation:", err);
+      toast({ description: `Failed to cancel image generation: ${err instanceof Error ? err.message : 'Unknown error'}`, variant: "destructive" });
+    } finally {
+      setClearingImageJob(false);
     }
   };
 
@@ -2716,6 +2803,7 @@ export default function StoryDetailsPage() {
   }
 
   return (
+    <TooltipProvider>
     <div className="flex flex-col h-screen bg-black">
       {/* Top Header */}
       <header className="bg-black border-b border-gray-800">
@@ -2959,9 +3047,9 @@ export default function StoryDetailsPage() {
             <AlertDialog open={stuckJobDialogOpen} onOpenChange={setStuckJobDialogOpen}>
               <AlertDialogContent className="bg-gray-900 border-gray-700 text-white">
                 <AlertDialogHeader>
-                  <AlertDialogTitle>Video Generation In Progress</AlertDialogTitle>
+                  <AlertDialogTitle>Video Generation Job running in Background</AlertDialogTitle>
                   <AlertDialogDescription className="text-gray-400">
-                    A video generation job is already running for this story. You can wait for it to complete (usually 1-2 minutes) or clear it to start fresh.
+                    Do you want to kill the Video Generation in Progress?
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
@@ -2969,7 +3057,7 @@ export default function StoryDetailsPage() {
                     className="bg-gray-800 border-gray-700 text-white hover:bg-gray-700 hover:text-white"
                     disabled={clearingStuckJob}
                   >
-                    Close
+                    No
                   </AlertDialogCancel>
                   <AlertDialogAction
                     onClick={(e) => {
@@ -2982,10 +3070,47 @@ export default function StoryDetailsPage() {
                     {clearingStuckJob ? (
                       <>
                         <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                        Clearing...
+                        Stopping...
                       </>
                     ) : (
-                      'Clear Job'
+                      'Yes'
+                    )}
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+
+            {/* Image Generation In Progress Dialog */}
+            <AlertDialog open={stuckImageJobDialogOpen} onOpenChange={setStuckImageJobDialogOpen}>
+              <AlertDialogContent className="bg-gray-900 border-gray-700 text-white">
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Image Generation In Progress</AlertDialogTitle>
+                  <AlertDialogDescription className="text-gray-400">
+                    An image generation job is already running for this story. Would you like to cancel the current job and start a new one, or wait for it to finish?
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel
+                    className="bg-gray-800 border-gray-700 text-white hover:bg-gray-700 hover:text-white"
+                    disabled={clearingImageJob}
+                  >
+                    Wait
+                  </AlertDialogCancel>
+                  <AlertDialogAction
+                    onClick={(e) => {
+                      e.preventDefault();
+                      clearImageJob();
+                    }}
+                    disabled={clearingImageJob}
+                    className="bg-orange-600 hover:bg-orange-700 text-white disabled:opacity-50"
+                  >
+                    {clearingImageJob ? (
+                      <>
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        Cancelling...
+                      </>
+                    ) : (
+                      'Cancel & Restart'
                     )}
                   </AlertDialogAction>
                 </AlertDialogFooter>
@@ -3072,33 +3197,61 @@ export default function StoryDetailsPage() {
 
             {/* Export Button with Video Link - Compact on mobile */}
             <div className="flex items-center gap-1 md:gap-2">
-              <Button
-                onClick={generateVideo}
-                disabled={generatingVideo}
-                size="sm"
-                className="bg-orange-600 hover:bg-orange-700 text-white font-medium min-w-0 md:min-w-[150px] px-2 md:px-4"
-              >
-                {generatingVideo ? (
-                  <>
-                    <Loader2 className="w-3 h-3 md:w-4 md:h-4 mr-1 md:mr-2 animate-spin" />
-                    <span className="text-xs md:text-sm">{videoProgress > 0 ? `${videoProgress}%` : 'Starting...'}</span>
-                  </>
-                ) : (
-                  <>
-                    <Download className="w-3 h-3 md:w-4 md:h-4 md:mr-2" />
-                    <span className="hidden md:inline">Export / Share</span>
-                    <span className="md:hidden text-xs">Export</span>
-                  </>
+              <div className="flex items-center">
+                <Button
+                  data-tour="export-button"
+                  onClick={generateVideo}
+                  disabled={generatingVideo}
+                  size="sm"
+                  className={`bg-orange-600 hover:bg-orange-700 text-white font-medium min-w-0 md:min-w-[150px] px-2 md:px-4 ${generatingVideo ? 'rounded-r-none' : ''}`}
+                >
+                  {generatingVideo ? (
+                    <>
+                      <Loader2 className="w-3 h-3 md:w-4 md:h-4 mr-1 md:mr-2 animate-spin" />
+                      <span className="text-xs md:text-sm">{videoProgress > 0 ? `${videoProgress}%` : 'Starting...'}</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="hidden md:inline">Generate Video</span>
+                      <span className="md:hidden text-xs">Generate</span>
+                    </>
+                  )}
+                </Button>
+
+                {/* Dropdown menu when video is generating */}
+                {generatingVideo && (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        size="sm"
+                        className="bg-orange-600 hover:bg-orange-700 text-white border-l border-orange-700 rounded-l-none px-2"
+                      >
+                        <ChevronDown className="w-3 h-3 md:w-4 md:h-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="bg-gray-900 border-gray-700">
+                      <DropdownMenuItem
+                        onClick={() => setStuckJobDialogOpen(true)}
+                        className="text-white hover:bg-gray-800 cursor-pointer"
+                      >
+                        <X className="w-3 h-3 mr-2" />
+                        Stop Video Generation
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 )}
-              </Button>
+              </div>
 
               {/* Video link - Show if video exists */}
               {video?.video_url && (
-                <TooltipProvider>
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <button
-                        onClick={() => window.open(video.video_url, '_blank')}
+                        onClick={() => {
+                          // Add timestamp to prevent caching and ensure latest video is shown
+                          const urlWithTimestamp = `${video.video_url}${video.video_url.includes('?') ? '&' : '?'}t=${Date.now()}`;
+                          window.open(urlWithTimestamp, '_blank');
+                        }}
                         className="p-1 md:p-1.5 text-gray-400 hover:text-white transition-colors rounded hover:bg-gray-800"
                         aria-label="View generated video"
                       >
@@ -3109,7 +3262,6 @@ export default function StoryDetailsPage() {
                       <p>View generated video</p>
                     </TooltipContent>
                   </Tooltip>
-                </TooltipProvider>
               )}
             </div>
           </div>
@@ -3121,6 +3273,7 @@ export default function StoryDetailsPage() {
         <aside className="md:w-20 bg-black border-t md:border-t-0 md:border-r border-gray-800 flex md:flex-col items-center py-2 md:py-6 gap-4 md:gap-6 order-last md:order-first justify-around md:justify-start">
           {/* Scenes/Frames Icon */}
           <button
+            data-tour="scenes-tab"
             onClick={() => setLeftPanelView("scenes")}
             className={`w-10 h-10 flex flex-col items-center justify-center transition-colors ${
               leftPanelView === "scenes" ? "text-orange-400 bg-orange-900/20" : "text-gray-400 hover:text-white"
@@ -3133,6 +3286,7 @@ export default function StoryDetailsPage() {
 
           {/* Captions Icon */}
           <button
+            data-tour="captions-tab"
             onClick={() => setLeftPanelView("captions")}
             className={`w-10 h-10 flex flex-col items-center justify-center transition-colors ${
               leftPanelView === "captions" ? "text-orange-400 bg-orange-900/20" : "text-gray-400 hover:text-white"
@@ -3145,6 +3299,7 @@ export default function StoryDetailsPage() {
 
           {/* Background Music Icon */}
           <button
+            data-tour="music-tab"
             onClick={() => setLeftPanelView("background_music")}
             className={`w-10 h-10 flex flex-col items-center justify-center transition-colors ${
               leftPanelView === "background_music" ? "text-orange-400 bg-orange-900/20" : "text-gray-400 hover:text-white"
@@ -3157,6 +3312,18 @@ export default function StoryDetailsPage() {
               <div className="absolute top-1 right-1 w-2 h-2 rounded-full bg-green-500"></div>
             )}
           </button>
+
+          {/* Help Icon */}
+          <button
+            onClick={() => setLeftPanelView("help")}
+            className={`w-10 h-10 flex flex-col items-center justify-center transition-colors ${
+              leftPanelView === "help" ? "text-orange-400 bg-orange-900/20" : "text-gray-400 hover:text-white"
+            }`}
+            title="Help & Support"
+          >
+            <HelpCircle className="w-5 h-5" />
+            <span className="text-[10px] mt-1">Help</span>
+          </button>
         </aside>
 
         {/* Main Content - Toggle on mobile, Side by Side on tablets/desktop */}
@@ -3165,15 +3332,15 @@ export default function StoryDetailsPage() {
           <div className={`${mobileView === 'timeline' ? 'flex' : 'hidden'} md:flex md:w-[45%] border-r border-gray-800 bg-black overflow-y-auto flex-col w-full`}>
             {leftPanelView === "scenes" ? (
               /* Scenes Timeline View */
-              <TooltipProvider delayDuration={300}>
                 <div className="relative">
                   {/* Sticky Header with Bulk Actions */}
                   <div className="sticky top-0 z-10 bg-black border-b border-gray-800 px-3 md:px-10 py-3">
-                    <div className="flex gap-2 md:gap-3">
+                    <div className="flex items-center gap-2 md:gap-3">
                       {/* Generate All Images Button */}
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <Button
+                            data-tour="generate-images-button"
                             onClick={() => setBulkImageDrawerOpen(true)}
                             disabled={generatingImages}
                             size="sm"
@@ -3205,6 +3372,7 @@ export default function StoryDetailsPage() {
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <Button
+                            data-tour="generate-audio-button"
                             onClick={() => setBulkAudioDrawerOpen(true)}
                             disabled={generatingAudios}
                             size="sm"
@@ -3261,6 +3429,7 @@ export default function StoryDetailsPage() {
                   {/* Scene Tile */}
                 <div
                   key={`${scene.id}-${scene.image_url}`}
+                  data-tour={index === 0 ? "scene-tile" : undefined}
                   onClick={() => {
                     stopVideoPreview();
                     setSelectedScene(index);
@@ -3607,7 +3776,6 @@ export default function StoryDetailsPage() {
               </div>
                   </div>
                 </div>
-              </TooltipProvider>
             ) : leftPanelView === "captions" ? (
               /* Captions Settings View */
               <div className="p-3 md:p-6 space-y-4 md:space-y-6">
@@ -3823,7 +3991,7 @@ export default function StoryDetailsPage() {
                   </>
                 )}
               </div>
-            ) : (
+            ) : leftPanelView === "background_music" ? (
               /* Background Music Settings View */
               <div className="p-3 md:p-6 space-y-4">
                 <h2 className="text-xl font-semibold text-white">Background music</h2>
@@ -3928,7 +4096,7 @@ export default function StoryDetailsPage() {
                       disabled={importing}
                       className="border-2 border-dashed border-gray-700 rounded-lg p-4 text-center transition-colors hover:border-gray-600 disabled:opacity-50"
                     >
-                      <ExternalLink className="w-8 h-8 mx-auto mb-2 text-gray-400" />
+                      <Download className="w-8 h-8 mx-auto mb-2 text-gray-400" />
                       <p className="text-xs font-medium text-white leading-tight">Import from URL</p>
                     </button>
 
@@ -4028,12 +4196,172 @@ export default function StoryDetailsPage() {
                   )}
                 </div>
               </div>
+            ) : (
+              /* Help & Support View */
+              <div className="p-3 md:p-6 pb-20">
+                {/* Breadcrumb Navigation */}
+                <div className="mb-6 flex items-center gap-2 text-sm">
+                  <button
+                    onClick={() => {
+                      setSelectedHelpArticle(null);
+                      setSelectedHelpCategory(null);
+                      setHelpSearchQuery('');
+                    }}
+                    className="text-gray-400 hover:text-orange-500 transition-colors font-medium"
+                  >
+                    Help & Support
+                  </button>
+                  {selectedHelpCategory && (
+                    <>
+                      <ChevronRight className="w-4 h-4 text-gray-600" />
+                      <button
+                        onClick={() => {
+                          setSelectedHelpArticle(null);
+                        }}
+                        className="text-gray-400 hover:text-orange-500 transition-colors font-medium"
+                      >
+                        {categories.find(c => c.id === selectedHelpCategory)?.name}
+                      </button>
+                    </>
+                  )}
+                  {selectedHelpArticle && (
+                    <>
+                      <ChevronRight className="w-4 h-4 text-gray-600" />
+                      <span className="text-white font-medium">{selectedHelpArticle.title}</span>
+                    </>
+                  )}
+                </div>
+
+                {selectedHelpArticle ? (
+                  // Article View
+                  <div>
+                    <article className="prose prose-lg dark:prose-invert max-w-none bg-gray-900/50 rounded-xl p-8">
+                      {selectedHelpArticle.content.split('\n').map((line, idx) => {
+                        if (line.trim() === '') return <div key={idx} className="h-4" />;
+                        if (line.startsWith('# ')) return <h1 key={idx} className="text-3xl font-bold text-white mt-8 mb-4 first:mt-0">{line.substring(2)}</h1>;
+                        if (line.startsWith('## ')) return <h2 key={idx} className="text-2xl font-semibold text-white mt-8 mb-4 first:mt-0 pb-2 border-b border-gray-800">{line.substring(3)}</h2>;
+                        if (line.startsWith('### ')) return <h3 key={idx} className="text-xl font-semibold text-orange-400 mt-6 mb-3 first:mt-0">{line.substring(4)}</h3>;
+                        if (line.match(/^\d+\.\s/)) {
+                          const text = line.replace(/^\d+\.\s/, '');
+                          const number = line.match(/^(\d+)\./)?.[1];
+                          return <div key={idx} className="flex gap-3 mb-3 items-start"><span className="flex-shrink-0 w-6 h-6 rounded-full bg-orange-500 text-white text-sm font-semibold flex items-center justify-center">{number}</span><span className="flex-1 text-gray-300 pt-0.5">{text}</span></div>;
+                        }
+                        if (line.startsWith('- ')) return <div key={idx} className="flex gap-3 mb-2 items-start"><span className="text-orange-500 text-lg leading-6 font-bold">•</span><span className="flex-1 text-gray-300">{line.substring(2)}</span></div>;
+                        if (line.match(/^(✅|❌|⚠️|💡|⭐|🎯|📝|🔧) /)) {
+                          return <div key={idx} className="flex gap-3 mb-2 items-start"><span className="text-xl leading-6">{line[0]}</span><span className="flex-1 text-gray-300">{line.substring(2)}</span></div>;
+                        }
+                        return <p key={idx} className="text-gray-300 leading-relaxed mb-4 text-base" dangerouslySetInnerHTML={{ __html: line.replace(/\*\*(.*?)\*\*/g, '<strong class="text-white font-semibold">$1</strong>') }} />;
+                      })}
+                    </article>
+                  </div>
+                ) : (
+                  // Browse View
+                  <div>
+                    {/* Search Bar */}
+                    <div className="mb-8">
+                      <div className="relative">
+                        <Search className="absolute left-4 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-500" />
+                        <Input
+                          type="text"
+                          placeholder="Search for help articles..."
+                          value={helpSearchQuery}
+                          onChange={(e) => setHelpSearchQuery(e.target.value)}
+                          className="pl-12 pr-4 py-6 bg-gray-900 border-gray-800 text-white placeholder:text-gray-500 focus:border-orange-500 focus:ring-orange-500 rounded-xl text-base"
+                        />
+                      </div>
+                      {(helpSearchQuery || selectedHelpCategory) && (
+                        <button onClick={() => { setHelpSearchQuery(''); setSelectedHelpCategory(null); }} className="text-sm text-gray-500 hover:text-white mt-3 font-medium">
+                          Clear filters
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Product Tour CTA */}
+                    {!helpSearchQuery && !selectedHelpCategory && (
+                      <div className="mb-8 p-6 bg-gradient-to-br from-orange-900/30 to-orange-800/20 border border-orange-600/30 rounded-xl">
+                        <div className="flex items-start gap-4">
+                          <div className="w-12 h-12 rounded-lg bg-orange-600 flex items-center justify-center flex-shrink-0">
+                            <Play className="w-6 h-6 text-white" />
+                          </div>
+                          <div className="flex-1">
+                            <h3 className="text-lg font-semibold text-white mb-2">New to the Video Editor?</h3>
+                            <p className="text-gray-400 text-sm mb-4">
+                              Take a quick guided tour to learn how to create amazing videos with images, audio, and effects.
+                              It only takes a minute!
+                            </p>
+                            <Button
+                              onClick={() => setRunTour(true)}
+                              className="bg-orange-600 hover:bg-orange-700 text-white"
+                            >
+                              <Play className="w-4 h-4 mr-2" />
+                              Take Product Tour
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Category Grid */}
+                    {!helpSearchQuery && !selectedHelpCategory && (
+                      <div className="mb-8">
+                        <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-4">Browse by Category</h3>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 gap-3">
+                          {categories.map(cat => (
+                            <button key={cat.id} onClick={() => setSelectedHelpCategory(cat.id)} className="flex items-center justify-between p-4 bg-gray-900 hover:bg-gray-800 border border-gray-800 hover:border-orange-500 rounded-xl transition-all text-left group">
+                              <span className="text-white font-medium">{cat.name}</span>
+                              <ChevronRight className="w-5 h-5 text-gray-500 group-hover:text-orange-500 group-hover:translate-x-1 transition-all" />
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Articles List */}
+                    {(helpSearchQuery || selectedHelpCategory) && (
+                      <div>
+                        {selectedHelpCategory && <div className="mb-4"><h3 className="text-lg font-semibold text-white">{categories.find(c => c.id === selectedHelpCategory)?.name}</h3></div>}
+                        <div className="grid grid-cols-1 gap-3">
+                          {knowledgeBase.filter(article => {
+                            if (selectedHelpCategory && article.category !== selectedHelpCategory) return false;
+                            if (helpSearchQuery) {
+                              const q = helpSearchQuery.toLowerCase();
+                              return article.title.toLowerCase().includes(q) || article.keywords.some(k => k.toLowerCase().includes(q)) || article.content.toLowerCase().includes(q);
+                            }
+                            return true;
+                          }).map(article => (
+                            <button key={article.id} onClick={() => setSelectedHelpArticle(article)} className="flex items-start justify-between p-4 bg-gray-900 hover:bg-gray-800 border border-gray-800 hover:border-gray-700 rounded-xl transition-all text-left group">
+                              <div className="flex-1">
+                                <h5 className="text-white font-medium mb-1 group-hover:text-orange-400 transition-colors">{article.title}</h5>
+                                <p className="text-xs text-gray-500 line-clamp-2">{article.content.substring(0, 120)}...</p>
+                              </div>
+                              <ChevronRight className="w-5 h-5 text-gray-500 group-hover:text-orange-400 transition-colors flex-shrink-0 ml-3 mt-1" />
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Chat with Support Button */}
+                    <div className="mt-8 p-6 bg-gradient-to-br from-orange-900/20 to-orange-800/10 border border-orange-900/30 rounded-xl">
+                      <h3 className="text-lg font-semibold text-white mb-2 flex items-center gap-2">
+                        <MessageCircle className="w-5 h-5 text-orange-400" />
+                        Can't find what you need?
+                      </h3>
+                      <p className="text-gray-400 text-sm mb-4">Chat with our support team for personalized help</p>
+                      <Button onClick={() => { if (typeof window !== 'undefined' && (window as any).Tawk_API) (window as any).Tawk_API.maximize(); }} className="bg-orange-600 hover:bg-orange-700 text-white">
+                        <MessageCircle className="w-4 h-4 mr-2" />
+                        Chat with Support
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </div>
             )}
           </div>
 
           {/* Right Preview Section - Toggleable on mobile, 55% on tablets/desktop */}
           <div className={`${mobileView === 'preview' ? 'flex' : 'hidden'} md:flex flex-1 md:w-[55%] items-center justify-center p-3 bg-black w-full`}>
-            <div className="video-preview-container">
+            <div className="video-preview-container" data-tour="video-preview">
               {scenes[selectedScene]?.image_url ? (
                 <div className="relative">
                   {/* Main Preview Container */}
@@ -5990,6 +6318,40 @@ export default function StoryDetailsPage() {
           </div>
         </div>
       )}
+
+      {/* Product Tour */}
+      <ProductTour
+        run={runTour}
+        mode="editor"
+        onFinish={() => {
+          setRunTour(false);
+        }}
+        onStepChange={(stepIndex) => {
+          // Automatically switch to the appropriate tab for each tour step
+          // Video editor tour steps:
+          // 0: Welcome (body)
+          // 1: Scenes tab button
+          // 2: Scene tile - needs scenes view
+          // 3: Generate images button - needs scenes view
+          // 4: Generate audio button - needs scenes view
+          // 5: Captions tab - switch to captions
+          // 6: Music tab - switch to music
+          // 7: Video preview
+          // 8: Export button
+
+          if (stepIndex >= 1 && stepIndex <= 4) {
+            // Steps 1-4: ensure we're on scenes tab
+            setLeftPanelView("scenes");
+          } else if (stepIndex === 5) {
+            // Step 5: switch to captions tab
+            setLeftPanelView("captions");
+          } else if (stepIndex === 6) {
+            // Step 6: switch to music tab
+            setLeftPanelView("background_music");
+          }
+        }}
+      />
     </div>
+    </TooltipProvider>
   );
 }

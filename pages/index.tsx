@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/router";
 import Link from "next/link";
 import Image from "next/image";
@@ -23,6 +23,7 @@ import { toast } from "@/hooks/use-toast";
 import { Slider } from "@/components/ui/slider";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { knowledgeBase, categories, type KnowledgeArticle } from "@/lib/knowledgeBase";
+import { ProductTour } from "@/components/ProductTour";
 
 type Story = {
   id: string;
@@ -48,6 +49,174 @@ type Series = {
   updated_at: string;
   has_character_consistency?: boolean;
 };
+
+// Helper function to format duration
+function formatDuration(seconds: number | null): string {
+  if (!seconds) return "0:00";
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  return `${mins}:${secs.toString().padStart(2, "0")}`;
+}
+
+// Story Card Component (memoized, defined outside to prevent recreation)
+const StoryCard = React.memo(({
+  story,
+  showEpisodeBadge = false,
+  episodeNumber,
+  seriesName,
+  onDelete,
+  onNavigate
+}: {
+  story: Story;
+  showEpisodeBadge?: boolean;
+  episodeNumber?: number;
+  seriesName?: string | null;
+  onDelete: (e: React.MouseEvent, storyId: string) => void;
+  onNavigate: (storyId: string) => void;
+}) => {
+  return (
+    <div className="group cursor-pointer relative">
+      <div
+        onClick={() => onNavigate(story.id)}
+        className="relative rounded-md overflow-hidden bg-gray-900 border border-gray-800 hover:border-orange-600 transition-all duration-200 aspect-[9/16]"
+      >
+        {story.first_scene_image ? (
+          <Image
+            src={story.first_scene_image}
+            alt={story.title || "Story"}
+            fill
+            className="object-cover group-hover:scale-105 transition-transform duration-300"
+            loading="lazy"
+          />
+        ) : (
+          <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-gray-800 to-gray-900">
+            <ImageIcon className="w-8 h-8 text-gray-600" />
+          </div>
+        )}
+
+        {/* Episode Badge */}
+        {showEpisodeBadge && episodeNumber && (
+          <div className="absolute top-1.5 left-1.5 bg-orange-900/90 text-orange-300 px-1.5 py-0.5 rounded text-[10px] font-semibold">
+            EP {episodeNumber}
+          </div>
+        )}
+
+        {/* Menu Button */}
+        <div className="absolute top-1.5 right-1.5">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
+              <button className="p-1.5 bg-black/60 hover:bg-black/80 rounded-md transition-colors backdrop-blur-sm">
+                <MoreHorizontal className="w-3.5 h-3.5 text-white" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="bg-gray-900 border-gray-800">
+              <DropdownMenuItem
+                onClick={(e) => onDelete(e as any, story.id)}
+                className="text-red-400 hover:text-red-300 hover:bg-gray-800 cursor-pointer"
+              >
+                <Trash2 className="w-4 h-4 mr-2" />
+                Delete story
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+
+        {/* Info Overlay */}
+        <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 via-black/70 to-transparent p-2">
+          {story.series_id && seriesName && !showEpisodeBadge && (
+            <div className="flex items-center gap-1 mb-1">
+              <Film className="w-2.5 h-2.5 text-orange-400" />
+              <span className="text-[9px] text-orange-400 font-medium uppercase tracking-wide">
+                {seriesName}
+              </span>
+            </div>
+          )}
+          <h3 className="text-xs font-semibold text-white line-clamp-2 mb-1.5">
+            {story.title || "Untitled"}
+          </h3>
+          <div className="flex items-center flex-wrap gap-1">
+            <div className="flex items-center gap-0.5 bg-gray-800/80 border border-transparent px-1.5 py-0.5 rounded text-[9px] text-gray-300">
+              <ImageIcon className="w-2.5 h-2.5" />
+              <span>{story.scene_count}</span>
+            </div>
+            {story.video_duration && story.video_duration > 0 && (
+              <div className="flex items-center gap-0.5 bg-gray-800/80 border border-transparent px-1.5 py-0.5 rounded text-[9px] text-gray-300">
+                <Clock className="w-2.5 h-2.5" />
+                <span>{formatDuration(story.video_duration)}</span>
+              </div>
+            )}
+            {story.video_url && (
+              <div className="flex items-center gap-0.5 bg-green-600/20 border border-green-600/40 px-1.5 py-0.5 rounded text-[9px] text-green-400 font-medium">
+                <Video className="w-2.5 h-2.5" />
+                <span>Ready</span>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}, (prevProps, nextProps) => {
+  return (
+    prevProps.story.id === nextProps.story.id &&
+    prevProps.story.video_url === nextProps.story.video_url &&
+    prevProps.story.first_scene_image === nextProps.story.first_scene_image &&
+    prevProps.story.scene_count === nextProps.story.scene_count &&
+    prevProps.story.video_duration === nextProps.story.video_duration &&
+    prevProps.showEpisodeBadge === nextProps.showEpisodeBadge &&
+    prevProps.episodeNumber === nextProps.episodeNumber &&
+    prevProps.seriesName === nextProps.seriesName
+  );
+});
+StoryCard.displayName = 'StoryCard';
+
+// Memoized Story Grid Component
+const StoryGrid = React.memo(({
+  stories,
+  showEpisodeBadge = false,
+  totalStories = 0,
+  seriesMap,
+  onDelete,
+  onNavigate
+}: {
+  stories: Story[];
+  showEpisodeBadge?: boolean;
+  totalStories?: number;
+  seriesMap: Map<string, string>;
+  onDelete: (e: React.MouseEvent, storyId: string) => void;
+  onNavigate: (storyId: string) => void;
+}) => {
+  return (
+    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
+      {stories.map((story, index) => {
+        const episodeNumber = showEpisodeBadge ? totalStories - index : undefined;
+        const seriesName = story.series_id ? seriesMap.get(story.series_id) : null;
+        return (
+          <StoryCard
+            key={story.id}
+            story={story}
+            showEpisodeBadge={showEpisodeBadge}
+            episodeNumber={episodeNumber}
+            seriesName={seriesName}
+            onDelete={onDelete}
+            onNavigate={onNavigate}
+          />
+        );
+      })}
+    </div>
+  );
+}, (prevProps, nextProps) => {
+  if (prevProps.stories.length !== nextProps.stories.length) return false;
+  if (prevProps.showEpisodeBadge !== nextProps.showEpisodeBadge) return false;
+  if (prevProps.totalStories !== nextProps.totalStories) return false;
+
+  for (let i = 0; i < prevProps.stories.length; i++) {
+    if (prevProps.stories[i].id !== nextProps.stories[i].id) return false;
+  }
+
+  return true;
+});
+StoryGrid.displayName = 'StoryGrid';
 
 export default function Dashboard() {
   const router = useRouter();
@@ -86,7 +255,18 @@ export default function Dashboard() {
   const [helpSearchQuery, setHelpSearchQuery] = useState('');
   const [selectedHelpArticle, setSelectedHelpArticle] = useState<KnowledgeArticle | null>(null);
   const [selectedHelpCategory, setSelectedHelpCategory] = useState<string | null>(null);
+  const [runTour, setRunTour] = useState(false); // Product tour state
+  const [deleteSeriesDialogOpen, setDeleteSeriesDialogOpen] = useState(false); // Delete series dialog state
+  const [seriesToDelete, setSeriesToDelete] = useState<Series | null>(null); // Series to delete
+  const [deletingSeries, setDeletingSeries] = useState(false); // Deleting series state
   const hasFetchedRef = useRef(false);
+
+  // Pagination state
+  const [storiesOffset, setStoriesOffset] = useState(0);
+  const [hasMoreStories, setHasMoreStories] = useState(false);
+  const [loadingMoreStories, setLoadingMoreStories] = useState(false);
+  const [totalStories, setTotalStories] = useState(0);
+  const [currentSeriesFilter, setCurrentSeriesFilter] = useState<string | null>(null); // Track which series we're filtering by
 
   // New story creation options
   const [selectedVoiceId, setSelectedVoiceId] = useState<string>("ash"); // ElevenLabs Ash - default
@@ -110,7 +290,10 @@ export default function Dashboard() {
     // Only fetch stories if user is authenticated
     if (!authLoading && user) {
       hasFetchedRef.current = true;
-      fetchStories();
+      // Only fetch stories if NOT coming from a series link (will be handled by query param effect)
+      if (!router.query.seriesId) {
+        fetchStories();
+      }
       fetchSeries();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -131,6 +314,8 @@ export default function Dashboard() {
             const foundSeries = series.find(s => s.id === seriesId);
             if (foundSeries) {
               setSelectedSeriesView(foundSeries);
+              // Fetch stories filtered by this series
+              fetchStories(true, seriesId);
             }
           }
         } else {
@@ -139,6 +324,19 @@ export default function Dashboard() {
       }
     }
   }, [router.isReady, router.query.category, router.query.seriesId, series]);
+
+  // Auto-start product tour for new users
+  useEffect(() => {
+    if (!authLoading && user) {
+      const hasSeenTour = localStorage.getItem('kahaani_tour_completed');
+      if (!hasSeenTour) {
+        // Start tour after a short delay to ensure page is loaded
+        setTimeout(() => {
+          setRunTour(true);
+        }, 1000);
+      }
+    }
+  }, [user, authLoading]);
 
   // Countdown timer for delete confirmation
   useEffect(() => {
@@ -161,8 +359,12 @@ export default function Dashboard() {
     }
   }, [deleteDialogOpen]);
 
-  async function fetchStories() {
-    setLoading(true);
+  async function fetchStories(reset = true, seriesId: string | null = null) {
+    if (reset) {
+      setLoading(true);
+      setStoriesOffset(0);
+    }
+
     try {
       // Get session token for authentication
       const { data: { session } } = await supabase.auth.getSession();
@@ -171,23 +373,62 @@ export default function Dashboard() {
         return;
       }
 
-      const res = await fetch("/api/get_stories", {
+      const offset = reset ? 0 : storiesOffset;
+      const limit = 10;
+
+      // Build URL with series filter if provided
+      let url = `/api/get_stories?limit=${limit}&offset=${offset}`;
+      if (seriesId) {
+        url += `&series_id=${seriesId}`;
+      }
+
+      const res = await fetch(url, {
         headers: {
           "Authorization": `Bearer ${session.access_token}`
         }
       });
       if (!res.ok) {
         console.error("Failed to fetch stories:", res.status);
-        setStories([]);
+        if (reset) setStories([]);
         return;
       }
       const data = await res.json();
-      setStories(data || []);
+
+      if (reset) {
+        setStories(data.stories || []);
+        setStoriesOffset(10);
+      } else {
+        // Only append new stories without creating duplicates
+        // Use callback form to avoid dependency on current stories state
+        setStories(prevStories => {
+          const existingIds = new Set(prevStories.map(s => s.id));
+          const newStories = (data.stories || []).filter(s => !existingIds.has(s.id));
+          if (newStories.length > 0) {
+            return [...prevStories, ...newStories];
+          }
+          return prevStories; // Return same reference if no new stories
+        });
+        setStoriesOffset(offset + 10);
+      }
+
+      setHasMoreStories(data.hasMore || false);
+      setTotalStories(data.total || 0);
+      setCurrentSeriesFilter(seriesId);
     } catch (err) {
       console.error("Error fetching stories:", err);
-      setStories([]);
+      if (reset) setStories([]);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function loadMoreStories() {
+    setLoadingMoreStories(true);
+    try {
+      // Pass the current series filter to maintain context
+      await fetchStories(false, currentSeriesFilter);
+    } finally {
+      setLoadingMoreStories(false);
     }
   }
 
@@ -230,12 +471,6 @@ export default function Dashboard() {
 
   // Scene count is now managed directly by user selection (no need to calculate from duration)
 
-  // Load voices when dialog opens
-  useEffect(() => {
-    if (dialogOpen && voices.length === 0) {
-      fetchVoices();
-    }
-  }, [dialogOpen]);
 
   // Play voice preview
   const playVoicePreview = (voiceId: string, previewUrl?: string) => {
@@ -372,6 +607,53 @@ export default function Dashboard() {
     e.stopPropagation(); // Prevent navigation to story page
     setStoryToDelete(storyId);
     setDeleteDialogOpen(true);
+  }
+
+  async function deleteSeries() {
+    if (!seriesToDelete) return;
+    setDeletingSeries(true);
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        toast({ description: "Please log in", variant: "destructive" });
+        return;
+      }
+
+      const res = await fetch("/api/delete_series", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${session.access_token}`
+        },
+        body: JSON.stringify({
+          series_id: seriesToDelete.id,
+        }),
+      });
+
+      if (res.ok) {
+        // Remove series from local state
+        setSeries(series.filter(s => s.id !== seriesToDelete.id));
+        setDeleteSeriesDialogOpen(false);
+        setSeriesToDelete(null);
+        toast({ description: "Series deleted successfully" });
+      } else {
+        const data = await res.json();
+        console.error("Error deleting series:", data.error);
+        toast({ description: `Failed to delete series: ${data.error}`, variant: "destructive" });
+      }
+    } catch (error) {
+      console.error("Error deleting series:", error);
+      toast({ description: "Failed to delete series. Please try again.", variant: "destructive" });
+    } finally {
+      setDeletingSeries(false);
+    }
+  }
+
+  function handleDeleteSeriesClick(e: React.MouseEvent, series: Series) {
+    e.stopPropagation(); // Prevent navigation to series view
+    setSeriesToDelete(series);
+    setDeleteSeriesDialogOpen(true);
   }
 
   function handleAddToSeriesClick(e: React.MouseEvent, story: Story) {
@@ -534,14 +816,6 @@ export default function Dashboard() {
     }
   }
 
-  // Format duration in seconds to MM:SS
-  function formatDuration(seconds: number | null): string {
-    if (!seconds) return "0:00";
-    const mins = Math.floor(seconds / 60);
-    const secs = Math.floor(seconds % 60);
-    return `${mins}:${secs.toString().padStart(2, "0")}`;
-  }
-
   function openCreateStoryDialog(seriesId: string | null = null) {
     setSelectedSeriesForCreate(seriesId);
     setShowCreateStoryForm(true);
@@ -551,115 +825,36 @@ export default function Dashboard() {
     }
   }
 
-  // Group stories by series
-  const storiesBySeries = stories.reduce((acc, story) => {
-    const key = story.series_id || 'no-series';
-    if (!acc[key]) acc[key] = [];
-    acc[key].push(story);
-    return acc;
-  }, {} as Record<string, Story[]>);
+  // Group stories by series (memoized to prevent recalculation on every render)
+  const storiesBySeries = React.useMemo(() => {
+    const grouped = stories.reduce((acc, story) => {
+      const key = story.series_id || 'no-series';
+      if (!acc[key]) acc[key] = [];
+      acc[key].push(story);
+      return acc;
+    }, {} as Record<string, Story[]>);
 
-  // Sort stories within each series by created_at (most recent first)
-  Object.keys(storiesBySeries).forEach(key => {
-    storiesBySeries[key].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-  });
+    // Sort stories within each series by created_at (most recent first)
+    Object.keys(grouped).forEach(key => {
+      grouped[key].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    });
 
-  // Create series map for tooltips
-  const seriesMap = new Map(series.map(s => [s.id, s.title]));
+    return grouped;
+  }, [stories]);
 
-  // Story Card Component
-  const StoryCard = ({ story, showEpisodeBadge = false, episodeNumber }: { story: Story; showEpisodeBadge?: boolean; episodeNumber?: number }) => {
-    const seriesName = story.series_id ? seriesMap.get(story.series_id) : null;
-    return (
-    <div className="group cursor-pointer relative">
-      <div
-        onClick={() => router.push(`/story/${story.id}`)}
-        className="relative rounded-md overflow-hidden bg-gray-900 border border-gray-800 hover:border-orange-600 transition-all duration-200 aspect-[9/16]"
-      >
-        {story.first_scene_image ? (
-          <Image
-            src={story.first_scene_image}
-            alt={story.title || "Story"}
-            fill
-            className="object-cover group-hover:scale-105 transition-transform duration-300"
-            loading="lazy"
-          />
-        ) : (
-          <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-gray-800 to-gray-900">
-            <ImageIcon className="w-8 h-8 text-gray-600" />
-          </div>
-        )}
+  // Create series map for tooltips (memoized)
+  const seriesMap = React.useMemo(() => {
+    return new Map(series.map(s => [s.id, s.title]));
+  }, [series]);
 
-        {/* Episode Badge - Show episode number when viewing series */}
-        {showEpisodeBadge && episodeNumber && (
-          <div className="absolute top-1.5 left-1.5 bg-orange-900/90 text-orange-300 px-1.5 py-0.5 rounded text-[10px] font-semibold">
-            EP {episodeNumber}
-          </div>
-        )}
+  // Stable callbacks for StoryCard
+  const handleStoryNavigate = React.useCallback((storyId: string) => {
+    router.push(`/story/${storyId}`);
+  }, [router]);
 
-
-        {/* Menu Button */}
-        <div className="absolute top-1.5 right-1.5">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
-              <button className="p-1.5 bg-black/60 hover:bg-black/80 rounded-md transition-colors backdrop-blur-sm">
-                <MoreHorizontal className="w-3.5 h-3.5 text-white" />
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="bg-gray-900 border-gray-800">
-              <DropdownMenuItem
-                onClick={(e) => handleDeleteClick(e as any, story.id)}
-                className="text-red-400 hover:text-red-300 hover:bg-gray-800 cursor-pointer"
-              >
-                <Trash2 className="w-4 h-4 mr-2" />
-                Delete story
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-
-        {/* Info Overlay */}
-        <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 via-black/70 to-transparent p-2">
-          {/* Series name if part of a series */}
-          {story.series_id && seriesName && !showEpisodeBadge && (
-            <div className="flex items-center gap-1 mb-1">
-              <Film className="w-2.5 h-2.5 text-orange-400" />
-              <span className="text-[9px] text-orange-400 font-medium uppercase tracking-wide">
-                {seriesName}
-              </span>
-            </div>
-          )}
-          <h3 className="text-xs font-semibold text-white line-clamp-2 mb-1.5">
-            {story.title || "Untitled"}
-          </h3>
-          <div className="flex items-center flex-wrap gap-1">
-            {/* Scene Count Badge */}
-            <div className="flex items-center gap-0.5 bg-gray-800/80 border border-transparent px-1.5 py-0.5 rounded text-[9px] text-gray-300">
-              <ImageIcon className="w-2.5 h-2.5" />
-              <span>{story.scene_count}</span>
-            </div>
-
-            {/* Duration Badge */}
-            {story.video_duration && story.video_duration > 0 && (
-              <div className="flex items-center gap-0.5 bg-gray-800/80 border border-transparent px-1.5 py-0.5 rounded text-[9px] text-gray-300">
-                <Clock className="w-2.5 h-2.5" />
-                <span>{formatDuration(story.video_duration)}</span>
-              </div>
-            )}
-
-            {/* Video Ready Badge */}
-            {story.video_url && (
-              <div className="flex items-center gap-0.5 bg-green-600/20 border border-green-600/40 px-1.5 py-0.5 rounded text-[9px] text-green-400 font-medium">
-                <Video className="w-2.5 h-2.5" />
-                <span>Ready</span>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-    </div>
-    );
-  };
+  const handleStoryDelete = React.useCallback((e: React.MouseEvent, storyId: string) => {
+    handleDeleteClick(e, storyId);
+  }, []);
 
   // Series Card Component
   const SeriesCard = ({ series: s }: { series: Series }) => {
@@ -668,7 +863,11 @@ export default function Dashboard() {
 
     return (
       <div
-        onClick={() => setSelectedSeriesView(s)}
+        onClick={() => {
+          setSelectedSeriesView(s);
+          // Load stories for this series with pagination
+          fetchStories(true, s.id);
+        }}
         className="group cursor-pointer"
       >
         <div className="relative rounded-md overflow-hidden bg-gray-900 border border-gray-800 hover:border-orange-600 transition-all duration-200 aspect-[9/16]">
@@ -690,6 +889,31 @@ export default function Dashboard() {
           <div className="absolute top-1.5 left-1.5 bg-blue-900/90 text-blue-300 px-1.5 py-0.5 rounded text-[10px] font-semibold">
             SERIES
           </div>
+
+          {/* 3-dots menu for empty series */}
+          {s.story_count === 0 && (
+            <div className="absolute top-1.5 right-1.5" onClick={(e) => e.stopPropagation()}>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    className="p-1 rounded-full bg-gray-900/80 hover:bg-gray-800 text-white transition-colors"
+                    aria-label="Series options"
+                  >
+                    <MoreHorizontal className="w-3.5 h-3.5" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="bg-gray-900 border-gray-700">
+                  <DropdownMenuItem
+                    onClick={(e) => handleDeleteSeriesClick(e, s)}
+                    className="text-red-400 hover:text-red-300 hover:bg-gray-800 cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5 mr-2" />
+                    Delete Series
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          )}
 
           {/* Info Overlay */}
           <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 via-black/70 to-transparent p-2">
@@ -799,6 +1023,7 @@ export default function Dashboard() {
           </div>
 
           <textarea
+            data-tour="story-prompt-input"
             placeholder="A young blacksmith forges a sword from fallen stars, awakening an ancient power that will either save the kingdom or doom it forever."
             value={newPrompt}
             onChange={(e) => setNewPrompt(e.target.value)}
@@ -850,7 +1075,7 @@ export default function Dashboard() {
       {!isBlankStory && (
         <div className="space-y-2">
           <label className="text-sm font-semibold text-white">Number of scenes for your story</label>
-          <div className="grid grid-cols-3 gap-1.5">
+          <div data-tour="scene-count-selector" className="grid grid-cols-3 gap-1.5">
             {[5, 10, 15].map((scenes) => {
             const estimatedSeconds = scenes * 8;
             const estimatedMinutes = Math.floor(estimatedSeconds / 60);
@@ -947,7 +1172,7 @@ export default function Dashboard() {
       {/* Format */}
       <div className="space-y-2">
         <label className="text-sm font-semibold text-white">Format</label>
-        <div className="grid grid-cols-3 gap-1.5">
+        <div data-tour="format-selector" className="grid grid-cols-3 gap-1.5">
           {[
             { value: "9:16", icon: Smartphone, label: "9:16" },
             { value: "16:9", icon: Monitor, label: "16:9" },
@@ -981,7 +1206,7 @@ export default function Dashboard() {
             <span className="ml-2 text-xs text-gray-400">Loading...</span>
           </div>
         ) : voices.length > 0 ? (
-          <div className="grid grid-cols-4 gap-1.5">
+          <div data-tour="voice-selector" className="grid grid-cols-4 gap-1.5">
             {voices.slice(0, 8).map((voice) => (
               <button
                 key={voice.id}
@@ -1034,6 +1259,7 @@ export default function Dashboard() {
 
       {/* Create Button */}
       <Button
+        data-tour="create-button"
         disabled={creating || (!isBlankStory && !newPrompt.trim())}
         onClick={createStory}
         className="w-full bg-orange-600 hover:bg-orange-700 text-white font-bold text-base py-4 rounded-lg"
@@ -1087,6 +1313,10 @@ export default function Dashboard() {
                     setShowCreditsPage(false);
                     setShowHelpPage(false);
                     setMobileMenuOpen(false);
+                    // Clear series filter when switching to Stories tab
+                    if (currentSeriesFilter !== null) {
+                      fetchStories(true, null);
+                    }
                   }}
                   className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors ${
                     selectedCategory === "faceless-videos"
@@ -1099,12 +1329,17 @@ export default function Dashboard() {
                 </button>
 
                 <button
+                  data-tour="series-tab"
                   onClick={() => {
                     setSelectedCategory("series");
                     setSelectedSeriesView(null);
                     setShowCreditsPage(false);
                     setShowHelpPage(false);
                     setMobileMenuOpen(false);
+                    // Clear series filter when switching to Series tab
+                    if (currentSeriesFilter !== null) {
+                      fetchStories(true, null);
+                    }
                   }}
                   className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors mt-1 ${
                     selectedCategory === "series"
@@ -1120,7 +1355,7 @@ export default function Dashboard() {
 
             {/* Credit Balance Section */}
             <div className="border-t border-gray-800 p-4">
-              <div className="bg-gradient-to-br from-orange-600/20 to-pink-600/20 border border-orange-600/30 rounded-lg p-3">
+              <div data-tour="credits-display" className="bg-gradient-to-br from-orange-600/20 to-pink-600/20 border border-orange-600/30 rounded-lg p-3">
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-2">
                     <Coins className="w-4 h-4 text-orange-400" />
@@ -1152,6 +1387,7 @@ export default function Dashboard() {
 
               {/* Help & Support Button */}
               <Button
+                data-tour="help-button"
                 onClick={() => {
                   setShowHelpPage(true);
                   setShowCreditsPage(false);
@@ -1354,14 +1590,6 @@ export default function Dashboard() {
             {(selectedSeriesView || showCreateStoryForm || showCreditsPage) && (
               <div className="w-[60px]"></div>
             )}
-            <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-              <DialogContent className="sm:max-w-2xl bg-gray-900 text-white border-gray-800 max-h-[90vh] overflow-y-auto">
-                <DialogHeader>
-                  <DialogTitle className="text-2xl font-bold">Create a New Story</DialogTitle>
-                </DialogHeader>
-                {renderDialogContent()}
-              </DialogContent>
-            </Dialog>
           </div>
         </div>
 
@@ -1429,7 +1657,11 @@ export default function Dashboard() {
                   )}
                 </div>
                 <button
-                  onClick={() => setSelectedSeriesView(null)}
+                  onClick={() => {
+                    setSelectedSeriesView(null);
+                    // Clear series filter and reload all stories
+                    fetchStories(true, null);
+                  }}
                   className="text-sm text-gray-400 hover:text-orange-400 transition-colors flex items-center gap-1 w-fit"
                 >
                   <ArrowLeft className="w-3 h-3" />
@@ -1447,7 +1679,7 @@ export default function Dashboard() {
               {selectedCategory === "series" && !selectedSeriesView && (
               <Dialog open={seriesDialogOpen} onOpenChange={setSeriesDialogOpen}>
                 <DialogTrigger asChild>
-                  <Button variant="outline" className="border-gray-700 hover:border-gray-600 bg-gray-900 hover:bg-gray-800">
+                  <Button className="bg-orange-600 hover:bg-orange-700">
                     <Plus className="w-4 h-4 mr-2" />
                     New Series
                   </Button>
@@ -1531,6 +1763,7 @@ export default function Dashboard() {
               {/* Only show New Story button on Stories tab */}
               {selectedCategory !== "series" && (
               <Button
+                data-tour="create-story-button"
                 className="bg-orange-600 hover:bg-orange-700"
                 onClick={() => openCreateStoryDialog(null)}
               >
@@ -1538,14 +1771,6 @@ export default function Dashboard() {
                 New Story
               </Button>
               )}
-              <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-                <DialogContent className="sm:max-w-2xl bg-gray-900 text-white border-gray-800 max-h-[90vh] overflow-y-auto">
-                  <DialogHeader>
-                    <DialogTitle className="text-2xl font-bold">Create a New Story</DialogTitle>
-                  </DialogHeader>
-                  {renderDialogContent()}
-                </DialogContent>
-              </Dialog>
             </div>
             )}
           </div>
@@ -1630,6 +1855,35 @@ export default function Dashboard() {
                     </button>
                   )}
                 </div>
+
+                {/* Product Tour CTA */}
+                {!helpSearchQuery && !selectedHelpCategory && (
+                  <div className="mb-8 p-6 bg-gradient-to-br from-orange-900/30 to-orange-800/20 border border-orange-600/30 rounded-xl">
+                    <div>
+                      <h3 className="text-lg font-semibold text-white mb-2">New to Kahaani?</h3>
+                      <p className="text-gray-400 text-sm mb-4">
+                        Take a quick guided tour to learn how to create amazing AI-powered stories.
+                        It only takes a minute!
+                      </p>
+                        <Button
+                          onClick={() => {
+                            // Navigate to Stories tab and reset all views before starting tour
+                            setShowHelpPage(false);
+                            setShowCreditsPage(false);
+                            setSelectedSeriesView(null);
+                            setShowCreateStoryForm(false);
+                            setSelectedCategory("faceless-videos");
+                            // Start tour after state updates
+                            setTimeout(() => setRunTour(true), 100);
+                          }}
+                          className="bg-orange-600 hover:bg-orange-700 text-white"
+                        >
+                          <Play className="w-4 h-4 mr-2" />
+                          Take Product Tour
+                        </Button>
+                    </div>
+                  </div>
+                )}
 
                 {/* Category Grid */}
                 {!helpSearchQuery && !selectedHelpCategory && (
@@ -1724,8 +1978,7 @@ export default function Dashboard() {
           selectedSeriesView ? (
             // Viewing stories from a specific series
             <>
-              {/* Stories from this series */}
-              {(!storiesBySeries[selectedSeriesView.id] || storiesBySeries[selectedSeriesView.id].length === 0) ? (
+              {stories.length === 0 && !loading ? (
                 <div className="text-center py-20">
                   <div className="mb-6 flex justify-center">
                     <div className="w-24 h-24 rounded-full bg-orange-900/20 flex items-center justify-center">
@@ -1741,26 +1994,58 @@ export default function Dashboard() {
                   </Button>
                 </div>
               ) : (
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
-                  {/* Add New Episode Placeholder */}
-                  <button
-                    onClick={() => openCreateStoryDialog(selectedSeriesView.id)}
-                    className="aspect-[9/16] rounded-lg border-2 border-dashed border-gray-700 hover:border-orange-500 bg-gray-900/50 hover:bg-gray-800/50 transition-all flex flex-col items-center justify-center gap-3 group"
-                  >
-                    <div className="w-12 h-12 rounded-full bg-orange-600/20 group-hover:bg-orange-600/30 flex items-center justify-center transition-colors">
-                      <Plus className="w-6 h-6 text-orange-500" />
-                    </div>
-                    <span className="text-sm font-medium text-gray-400 group-hover:text-orange-400 transition-colors">Add Episode</span>
-                  </button>
+                <>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
+                    {/* Add New Episode Placeholder */}
+                    <button
+                      onClick={() => openCreateStoryDialog(selectedSeriesView.id)}
+                      className="aspect-[9/16] rounded-lg border-2 border-dashed border-gray-700 hover:border-orange-500 bg-gray-900/50 hover:bg-gray-800/50 transition-all flex flex-col items-center justify-center gap-3 group"
+                    >
+                      <div className="w-12 h-12 rounded-full bg-orange-600/20 group-hover:bg-orange-600/30 flex items-center justify-center transition-colors">
+                        <Plus className="w-6 h-6 text-orange-500" />
+                      </div>
+                      <span className="text-sm font-medium text-gray-400 group-hover:text-orange-400 transition-colors">Add Episode</span>
+                    </button>
 
-                  {(storiesBySeries[selectedSeriesView.id] || []).map((story, index) => {
-                    // Calculate episode number: most recent first, so reverse the index
-                    const episodeNumber = (storiesBySeries[selectedSeriesView.id] || []).length - index;
-                    return (
-                      <StoryCard key={story.id} story={story} showEpisodeBadge={true} episodeNumber={episodeNumber} />
-                    );
-                  })}
-                </div>
+                    {/* Render story cards in series view */}
+                    {stories.map((story, index) => {
+                      const episodeNumber = totalStories - index;
+                      const seriesName = story.series_id ? seriesMap.get(story.series_id) : null;
+                      return (
+                        <StoryCard
+                          key={story.id}
+                          story={story}
+                          showEpisodeBadge={true}
+                          episodeNumber={episodeNumber}
+                          seriesName={seriesName}
+                          onDelete={handleStoryDelete}
+                          onNavigate={handleStoryNavigate}
+                        />
+                      );
+                    })}
+                  </div>
+
+                  {/* Load More button for series view */}
+                  {hasMoreStories && stories.length > 0 && (
+                    <div className="flex justify-center mt-8">
+                      <Button
+                        onClick={loadMoreStories}
+                        disabled={loadingMoreStories}
+                        variant="outline"
+                        className="bg-gray-800 border-gray-700 text-white hover:bg-gray-700 hover:text-white"
+                      >
+                        {loadingMoreStories ? (
+                          <>
+                            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                            Loading...
+                          </>
+                        ) : (
+                          `Load More (${totalStories - stories.length} remaining)`
+                        )}
+                      </Button>
+                    </div>
+                  )}
+                </>
               )}
             </>
           ) : series.length === 0 ? (
@@ -1787,11 +2072,36 @@ export default function Dashboard() {
           )
         ) : (
           <>
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
-              {stories.map((story) => (
-                <StoryCard key={story.id} story={story} showEpisodeBadge={false} />
-              ))}
-            </div>
+            {/* Use memoized StoryGrid to prevent flickering on load more */}
+            <StoryGrid
+              stories={stories}
+              showEpisodeBadge={false}
+              totalStories={totalStories}
+              seriesMap={seriesMap}
+              onDelete={handleStoryDelete}
+              onNavigate={handleStoryNavigate}
+            />
+
+            {/* Load More button */}
+            {hasMoreStories && stories.length > 0 && (
+              <div className="flex justify-center mt-8">
+                <Button
+                  onClick={loadMoreStories}
+                  disabled={loadingMoreStories}
+                  variant="outline"
+                  className="bg-gray-800 border-gray-700 text-white hover:bg-gray-700 hover:text-white"
+                >
+                  {loadingMoreStories ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Loading...
+                    </>
+                  ) : (
+                    `Load More (${totalStories - stories.length} remaining)`
+                  )}
+                </Button>
+              </div>
+            )}
 
             {/* Show empty state only if no stories */}
             {stories.length === 0 && (
@@ -1864,6 +2174,53 @@ export default function Dashboard() {
                   <>
                     <Trash2 className="w-4 h-4 mr-2" />
                     Delete Story
+                  </>
+                )}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Series Confirmation Dialog */}
+      <Dialog open={deleteSeriesDialogOpen} onOpenChange={setDeleteSeriesDialogOpen}>
+        <DialogContent className="sm:max-w-md bg-gray-900 text-white border-gray-800">
+          <DialogHeader>
+            <DialogTitle className="text-xl font-bold">Delete Series?</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-gray-300">
+              Are you sure you want to delete the series "{seriesToDelete?.title}"?
+            </p>
+            <p className="text-red-400 text-sm font-semibold">
+              This action cannot be undone.
+            </p>
+            <div className="flex gap-3 justify-end mt-6">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setDeleteSeriesDialogOpen(false);
+                  setSeriesToDelete(null);
+                }}
+                disabled={deletingSeries}
+                className="bg-gray-800 hover:bg-gray-700 text-white border-gray-700"
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={deleteSeries}
+                disabled={deletingSeries}
+                className="bg-red-600 hover:bg-red-700 text-white disabled:opacity-50"
+              >
+                {deletingSeries ? (
+                  <>
+                    <Loader2 className="animate-spin h-4 w-4 mr-2" />
+                    Deleting...
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-4 h-4 mr-2" />
+                    Delete Series
                   </>
                 )}
               </Button>
@@ -2008,6 +2365,24 @@ export default function Dashboard() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Product Tour */}
+      <ProductTour
+        run={runTour}
+        mode="dashboard"
+        onFinish={() => {
+          setRunTour(false);
+          setShowCreateStoryForm(false); // Close inline form when tour finishes
+          localStorage.setItem('kahaani_tour_completed', 'true');
+        }}
+        onStepChange={(stepIndex) => {
+          // Open form when entering step 2 (story input field)
+          // This means step 1 (New Story button) has been shown
+          if (stepIndex === 2) {
+            openCreateStoryDialog(null);
+          }
+        }}
+      />
     </div>
     </TooltipProvider>
   );

@@ -48,6 +48,7 @@
     "openai": "^6.3.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
+    "react-joyride": "^2.9.3",
     "remotion-subtitle": "^1.0.7",
     "sharp": "^0.34.4",
     "stripe": "^19.2.0",

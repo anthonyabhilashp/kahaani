@@ -262,8 +262,9 @@ export function LandingPage() {
                     <div className="relative aspect-[9/16] rounded-xl overflow-hidden bg-gray-900 border-2 border-gray-800 hover:border-orange-500 shadow-2xl">
                       <video
                         src={video.videoUrl}
-                        preload="metadata"
+                        preload="auto"
                         loop
+                        playsInline
                         className="w-full h-full object-cover cursor-pointer"
                         onClick={(e) => {
                           const videoEl = e.currentTarget as HTMLVideoElement;
@@ -332,8 +333,9 @@ export function LandingPage() {
                     <div className="relative aspect-[9/16] rounded-lg overflow-hidden bg-gray-900 border border-gray-800 shadow-lg">
                       <video
                         src={video.videoUrl}
-                        preload="metadata"
+                        preload="auto"
                         loop
+                        playsInline
                         className="w-full h-full object-cover cursor-pointer"
                         onClick={(e) => {
                           const videoEl = e.currentTarget as HTMLVideoElement;
@@ -411,8 +413,9 @@ export function LandingPage() {
                   <div className="relative aspect-[9/16] rounded-xl overflow-hidden bg-gray-900 border-2 border-gray-800 hover:border-orange-500 transition-all shadow-xl hover:shadow-orange-500/40 hover:scale-105">
                     <video
                       src={video.videoUrl}
-                      preload="metadata"
+                      preload="auto"
                       loop
+                      playsInline
                       className="w-full h-full object-cover cursor-pointer"
                       onClick={(e) => {
                         const videoEl = e.currentTarget as HTMLVideoElement;

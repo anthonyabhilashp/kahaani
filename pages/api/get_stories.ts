@@ -25,19 +25,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const isAdmin = userData?.is_admin === true;
 
+    // 📄 Pagination parameters
+    const limit = parseInt(req.query.limit as string) || 10;
+    const offset = parseInt(req.query.offset as string) || 0;
+    const seriesId = req.query.series_id as string;
+
     // 🚀 OPTIMIZED: Use VIEW to get all data in ONE query
     // This replaces 3 queries per story with 1 query total
     let viewQuery = supabaseAdmin
       .from("stories_dashboard")
-      .select("*")
+      .select("*", { count: 'exact' })
       .order("created_at", { ascending: false })
-      .limit(50);
+      .range(offset, offset + limit - 1);
 
     if (!isAdmin) {
       viewQuery = viewQuery.eq('user_id', user.id);
     }
 
-    const { data: rawData, error: queryError } = await viewQuery;
+    // Filter by series if series_id is provided
+    if (seriesId) {
+      viewQuery = viewQuery.eq('series_id', seriesId);
+    }
+
+    const { data: rawData, error: queryError, count } = await viewQuery;
 
     if (queryError) {
       // Fallback to old method if view doesn't exist
@@ -45,15 +55,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       let query = supabaseAdmin
         .from("stories")
-        .select("*")
+        .select("*", { count: 'exact' })
         .order("created_at", { ascending: false })
-        .limit(50); // Limit to 50 stories for performance
+        .range(offset, offset + limit - 1);
 
       if (!isAdmin) {
         query = query.eq('user_id', user.id);
       }
 
-      const { data: stories, error } = await query;
+      // Filter by series if series_id is provided
+      if (seriesId) {
+        query = query.eq('series_id', seriesId);
+      }
+
+      const { data: stories, error, count: fallbackCount } = await query;
       if (error) throw error;
 
       // Simplified enrichment - get scene counts and first images in batch
@@ -101,11 +116,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         };
       });
 
-      return res.status(200).json(enrichedStories);
+      return res.status(200).json({
+        stories: enrichedStories,
+        total: fallbackCount || 0,
+        hasMore: (offset + limit) < (fallbackCount || 0)
+      });
     }
 
     // Use optimized function result
-    res.status(200).json(rawData || []);
+    res.status(200).json({
+      stories: rawData || [],
+      total: count || 0,
+      hasMore: (offset + limit) < (count || 0)
+    });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

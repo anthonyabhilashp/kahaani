@@ -363,21 +363,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     await updateJobProgress(jobId, 30);
 
-    // 6️⃣ Clean up old videos for this story
+    // 6️⃣ Get old videos for cleanup later (after successful generation)
     const { data: oldVideos } = await supabaseAdmin
       .from("videos")
       .select("video_url")
       .eq("story_id", story_id);
-
-    if (oldVideos?.length) {
-      logger.info(`[${story_id}] 🧹 Cleaning up ${oldVideos.length} old video(s)...`);
-      const paths = oldVideos.map((v) => v.video_url.split("/videos/")[1]);
-      if (paths.length) {
-        const { error: delErr } = await supabaseAdmin.storage.from("videos").remove(paths);
-        if (delErr) logger.warn(`[${story_id}] ⚠️ Error deleting old videos: ${delErr.message}`);
-      }
-      await supabaseAdmin.from("videos").delete().eq("story_id", story_id);
-    }
 
     // 7️⃣ Get video dimensions based on aspect ratio
     const aspectRatioMap: { [key: string]: { width: number; height: number } } = {
@@ -964,6 +954,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (upsertErr) throw upsertErr;
 
     logger.info(`[${story_id}] ☁️ Uploaded video → ${publicUrl} (${totalDuration.toFixed(1)}s total)`);
+
+    // 🧹 Clean up old videos ONLY after new video is successfully uploaded and saved
+    if (oldVideos?.length) {
+      logger.info(`[${story_id}] 🧹 Cleaning up ${oldVideos.length} old video(s)...`);
+      const paths = oldVideos
+        .map((v) => {
+          try {
+            return v.video_url.split("/videos/")[1];
+          } catch (err) {
+            return null;
+          }
+        })
+        .filter((p): p is string => p !== null && p !== fileName); // Don't delete the video we just uploaded
+
+      if (paths.length > 0) {
+        const { error: delErr } = await supabaseAdmin.storage.from("videos").remove(paths);
+        if (delErr) {
+          logger.warn(`[${story_id}] ⚠️ Error deleting old videos: ${delErr.message}`);
+        } else {
+          logger.info(`[${story_id}] ✅ Deleted ${paths.length} old video file(s) from storage`);
+        }
+      }
+    }
 
     await updateJobProgress(jobId, 95);
 
