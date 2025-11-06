@@ -61,9 +61,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (sceneErr || !scenes?.length) throw new Error("No scenes found");
     logger.info(`[${story_id}] 📚 Found ${scenes.length} scenes to generate images for`);
 
-    // 💳 Calculate credits needed: 1 credit per scene
+    // 💳 Check credits (will deduct AFTER successful generation)
     const creditsNeeded = scenes.length * CREDIT_COSTS.IMAGE_PER_SCENE;
-    logger.info(`[${story_id}] 💳 Credits needed: ${creditsNeeded} (${scenes.length} scenes × ${CREDIT_COSTS.IMAGE_PER_SCENE} credit per image)`);
+    logger.info(`[${story_id}] 💳 Credits needed: ${creditsNeeded} (${scenes.length} scenes × ${CREDIT_COSTS.IMAGE_PER_SCENE} credit per image - will charge after success)`);
 
     // 💳 Check credit balance
     const currentBalance = await getUserCredits(userId);
@@ -77,22 +77,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         current_balance: currentBalance
       });
     }
-
-    // 💳 Deduct credits before starting generation
-    const deductResult = await deductCredits(
-      userId,
-      creditsNeeded,
-      'deduction_images',
-      `Image generation for ${scenes.length} scenes in story: ${story.title || story_id}`,
-      story_id
-    );
-
-    if (!deductResult.success) {
-      logger.error(`[${story_id}] ❌ Failed to deduct credits: ${deductResult.error}`);
-      return res.status(500).json({ error: deductResult.error });
-    }
-
-    logger.info(`[${story_id}] ✅ Deducted ${creditsNeeded} credits. New balance: ${deductResult.newBalance}`);
 
     const finalStyle = style || "cinematic illustration";
     const extraNotes = instructions ? `\nAdditional Instructions: ${instructions}` : "";
@@ -964,6 +948,29 @@ Generate one beautiful image for Scene ${i + 1} in "${finalStyle}" style${refere
       logger.info(`[${story_id}]    🎯 ${props.length} props`);
     }
 
+    // 💳 Deduct credits ONLY for successful images
+    const successfulCount = uploads.length;
+    if (successfulCount > 0 && userId) {
+      const chargeAmount = successfulCount * CREDIT_COSTS.IMAGE_PER_SCENE;
+      logger.info(`[${story_id}] 💳 Deducting ${chargeAmount} credits for ${successfulCount} successful images...`);
+
+      const deductResult = await deductCredits(
+        userId,
+        chargeAmount,
+        'deduction_images',
+        `Image generation for ${successfulCount} successful scenes in story: ${story.title || story_id}`,
+        story_id
+      );
+
+      if (deductResult.success) {
+        logger.info(`[${story_id}] ✅ Deducted ${chargeAmount} credits. New balance: ${deductResult.newBalance}`);
+      } else {
+        logger.error(`[${story_id}] ⚠️ Failed to deduct credits: ${deductResult.error}`);
+        // Images were generated successfully, so we don't fail the request
+        // Admin can manually adjust credits if needed
+      }
+    }
+
     // Update story metadata (completion status)
     logger.info(`[${story_id}] 📊 Updating story metadata...`);
     await updateStoryMetadata(story_id);
@@ -983,43 +990,7 @@ Generate one beautiful image for Scene ${i + 1} in "${finalStyle}" style${refere
 
   } catch (err: any) {
     logger?.error(`[${story_id}] ❌ Error generating images: ${err.message}`);
-
-    // 💳 Auto-refund credits if generation failed
-    try {
-      // Try to get user ID from story for refund
-      const { data: story } = await supabaseAdmin
-        .from("stories")
-        .select("user_id, title")
-        .eq("id", story_id)
-        .single();
-
-      if (story && story.user_id) {
-        // Get scene count to calculate refund amount
-        const { data: storyScenes } = await supabaseAdmin
-          .from("scenes")
-          .select("id")
-          .eq("story_id", story_id);
-
-        const refundAmount = (storyScenes?.length || 0) * CREDIT_COSTS.IMAGE_PER_SCENE;
-
-        logger?.info(`[${story_id}] 💸 Refunding ${refundAmount} credits due to generation failure...`);
-        const refundResult = await refundCredits(
-          story.user_id,
-          refundAmount,
-          `Refund: Image generation failed for story ${story.title || story_id}`,
-          story_id
-        );
-
-        if (refundResult.success) {
-          logger?.info(`[${story_id}] ✅ Refunded ${refundAmount} credits. New balance: ${refundResult.newBalance}`);
-        } else {
-          logger?.error(`[${story_id}] ❌ Failed to refund credits`);
-        }
-      }
-    } catch (refundErr: any) {
-      logger?.error(`[${story_id}] ❌ Error during refund process: ${refundErr.message}`);
-    }
-
+    // No refund needed since credits are only deducted after success
     res.status(500).json({ error: err.message || "Image generation failed" });
   }
 }

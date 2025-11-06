@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Plus, Loader2, PlayCircle, Clock, Film, Image as ImageIcon, Video, User, LogOut, Trash2, MoreHorizontal, Smartphone, Square, Monitor, Coins, List, ArrowLeft, Menu, X, Sparkles, Volume2, Info, Play, StopCircle } from "lucide-react";
+import { Plus, Loader2, PlayCircle, Clock, Film, Image as ImageIcon, Video, User, LogOut, Trash2, MoreHorizontal, Smartphone, Square, Monitor, Coins, List, ArrowLeft, Menu, X, Sparkles, Volume2, Info, Play, StopCircle, HelpCircle, Search, ChevronRight, MessageCircle } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   DropdownMenu,
@@ -22,6 +22,7 @@ import { CREDIT_COSTS } from "@/lib/creditConstants";
 import { toast } from "@/hooks/use-toast";
 import { Slider } from "@/components/ui/slider";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { knowledgeBase, categories, type KnowledgeArticle } from "@/lib/knowledgeBase";
 
 type Story = {
   id: string;
@@ -81,6 +82,10 @@ export default function Dashboard() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false); // Track mobile sidebar state
   const [showCreditsPage, setShowCreditsPage] = useState(false); // Track credits page view
   const [showCreateStoryForm, setShowCreateStoryForm] = useState(false); // Track inline create story form
+  const [showHelpPage, setShowHelpPage] = useState(false); // Track help page view
+  const [helpSearchQuery, setHelpSearchQuery] = useState('');
+  const [selectedHelpArticle, setSelectedHelpArticle] = useState<KnowledgeArticle | null>(null);
+  const [selectedHelpCategory, setSelectedHelpCategory] = useState<string | null>(null);
   const hasFetchedRef = useRef(false);
 
   // New story creation options
@@ -1080,6 +1085,7 @@ export default function Dashboard() {
                   onClick={() => {
                     setSelectedCategory("faceless-videos");
                     setShowCreditsPage(false);
+                    setShowHelpPage(false);
                     setMobileMenuOpen(false);
                   }}
                   className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors ${
@@ -1097,6 +1103,7 @@ export default function Dashboard() {
                     setSelectedCategory("series");
                     setSelectedSeriesView(null);
                     setShowCreditsPage(false);
+                    setShowHelpPage(false);
                     setMobileMenuOpen(false);
                   }}
                   className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors mt-1 ${
@@ -1113,39 +1120,50 @@ export default function Dashboard() {
 
             {/* Credit Balance Section */}
             <div className="border-t border-gray-800 p-4">
-              <div className="bg-gradient-to-br from-orange-600/20 to-pink-600/20 border border-orange-600/30 rounded-lg p-4">
+              <div className="bg-gradient-to-br from-orange-600/20 to-pink-600/20 border border-orange-600/30 rounded-lg p-3">
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-2">
-                    <div className="w-8 h-8 rounded-full bg-orange-600/30 flex items-center justify-center">
-                      <Coins className="w-4 h-4 text-orange-400" />
-                    </div>
-                    <span className="text-xs font-medium text-gray-400 uppercase tracking-wider">Credits</span>
+                    <Coins className="w-4 h-4 text-orange-400" />
+                    <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Credits</span>
                   </div>
                 </div>
-                <div className="flex items-baseline gap-1">
+                <div className="flex items-baseline gap-1 mb-3">
                   {creditsLoading ? (
                     <Loader2 className="w-5 h-5 animate-spin text-orange-400" />
                   ) : (
                     <>
-                      <span className="text-3xl font-bold text-white">{creditBalance}</span>
-                      <span className="text-sm text-gray-400">available</span>
+                      <span className="text-2xl font-bold text-white">{creditBalance}</span>
+                      <span className="text-xs text-gray-500">available</span>
                     </>
                   )}
                 </div>
-                <p className="text-xs text-gray-500 mt-2">
-                  1 image or audio = 1 credit
-                </p>
                 <Button
                   onClick={() => {
                     setShowCreditsPage(true);
+                    setShowHelpPage(false);
                     setMobileMenuOpen(false);
                   }}
-                  className="w-full mt-3 bg-orange-600 hover:bg-orange-700 text-white text-sm font-semibold"
+                  className="w-full bg-orange-600 hover:bg-orange-700 text-white text-sm font-semibold"
                 >
                   <Coins className="w-4 h-4 mr-2" />
                   Buy Credits
                 </Button>
               </div>
+
+              {/* Help & Support Button */}
+              <Button
+                onClick={() => {
+                  setShowHelpPage(true);
+                  setShowCreditsPage(false);
+                  setSelectedSeriesView(null);
+                  setMobileMenuOpen(false);
+                }}
+                variant="outline"
+                className="w-full mt-3 border-gray-700 text-white hover:bg-gray-800 text-sm font-semibold"
+              >
+                <HelpCircle className="w-4 h-4 mr-2" />
+                Help & Support
+              </Button>
             </div>
 
             {/* User Profile Section */}
@@ -1202,6 +1220,7 @@ export default function Dashboard() {
               onClick={() => {
                 setSelectedCategory("faceless-videos");
                 setShowCreditsPage(false);
+                setShowHelpPage(false);
               }}
               className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all ${
                 selectedCategory === "faceless-videos"
@@ -1218,6 +1237,7 @@ export default function Dashboard() {
                 setSelectedCategory("series");
                 setSelectedSeriesView(null);
                 setShowCreditsPage(false);
+                setShowHelpPage(false);
               }}
               className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all mt-2 ${
                 selectedCategory === "series"
@@ -1233,34 +1253,46 @@ export default function Dashboard() {
 
         {/* Credit Balance Section */}
         <div className="border-t border-gray-800 p-4">
-          <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
-            <div className="flex items-center gap-2 mb-3">
-              <div className="w-8 h-8 rounded-lg bg-orange-600 flex items-center justify-center">
-                <Coins className="w-4 h-4 text-white" />
-              </div>
+          <div className="bg-gray-900 border border-gray-800 rounded-lg p-3">
+            <div className="flex items-center gap-2 mb-2">
+              <Coins className="w-4 h-4 text-orange-400" />
               <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Credits</span>
             </div>
             <div className="flex items-baseline gap-1.5 mb-3">
               {creditsLoading ? (
-                <Loader2 className="w-6 h-6 animate-spin text-orange-400" />
+                <Loader2 className="w-5 h-5 animate-spin text-orange-400" />
               ) : (
                 <>
-                  <span className="text-3xl font-bold text-white">{creditBalance}</span>
-                  <span className="text-sm text-gray-500">available</span>
+                  <span className="text-2xl font-bold text-white">{creditBalance}</span>
+                  <span className="text-xs text-gray-500">available</span>
                 </>
               )}
             </div>
-            <p className="text-xs text-gray-600 mb-4">
-              1 image or audio = 1 credit
-            </p>
             <Button
-              onClick={() => setShowCreditsPage(true)}
+              onClick={() => {
+                setShowCreditsPage(true);
+                setShowHelpPage(false);
+              }}
               className="w-full bg-orange-600 hover:bg-orange-700 text-white text-sm font-semibold"
             >
               <Coins className="w-4 h-4 mr-2" />
               Buy Credits
             </Button>
           </div>
+
+          {/* Help & Support Button */}
+          <Button
+            onClick={() => {
+              setShowHelpPage(true);
+              setShowCreditsPage(false);
+              setSelectedSeriesView(null);
+            }}
+            variant="outline"
+            className="w-full mt-3 border-gray-700 text-white hover:bg-gray-800 text-sm font-semibold"
+          >
+            <HelpCircle className="w-4 h-4 mr-2" />
+            Help & Support
+          </Button>
         </div>
 
         {/* User Profile Section */}
@@ -1302,8 +1334,8 @@ export default function Dashboard() {
               <Menu className="w-6 h-6" />
             </button>
             <h1 className="text-xl font-bold text-white">Kahaani</h1>
-            {/* Show New button only when not viewing a specific series (has + tile) and not on create form/credits page */}
-            {!selectedSeriesView && !showCreateStoryForm && !showCreditsPage && (
+            {/* Show New button only when not viewing a specific series (has + tile) and not on create form/credits/help page */}
+            {!selectedSeriesView && !showCreateStoryForm && !showCreditsPage && !showHelpPage && (
               <Button
                 size="sm"
                 className="bg-orange-600 hover:bg-orange-700 text-white font-semibold"
@@ -1406,11 +1438,11 @@ export default function Dashboard() {
               </div>
             ) : (
               <h1 className="text-3xl font-bold text-white">
-                {selectedCategory === "series" ? "Series" : "Stories"}
+                {showHelpPage ? "Help & Support" : selectedCategory === "series" ? "Series" : "Stories"}
               </h1>
             )}
-            {/* Desktop Create Buttons - Hidden on mobile, credits page, and create form */}
-            {!showCreditsPage && !showCreateStoryForm && (
+            {/* Desktop Create Buttons - Hidden on mobile, credits page, help page, and create form */}
+            {!showCreditsPage && !showHelpPage && !showCreateStoryForm && (
             <div className="hidden md:flex gap-3">
               {selectedCategory === "series" && !selectedSeriesView && (
               <Dialog open={seriesDialogOpen} onOpenChange={setSeriesDialogOpen}>
@@ -1518,7 +1550,143 @@ export default function Dashboard() {
             )}
           </div>
 
-        {showCreditsPage ? (
+        {showHelpPage ? (
+          // Help & Support Page
+          <div className="max-w-5xl mx-auto pb-20">
+            {/* Breadcrumb Navigation */}
+            <div className="mb-6 flex items-center gap-2 text-sm">
+              <button
+                onClick={() => {
+                  setSelectedHelpArticle(null);
+                  setSelectedHelpCategory(null);
+                  setHelpSearchQuery('');
+                }}
+                className="text-gray-400 hover:text-orange-500 transition-colors font-medium"
+              >
+                Help & Support
+              </button>
+              {selectedHelpCategory && (
+                <>
+                  <ChevronRight className="w-4 h-4 text-gray-600" />
+                  <button
+                    onClick={() => {
+                      setSelectedHelpArticle(null);
+                    }}
+                    className="text-gray-400 hover:text-orange-500 transition-colors font-medium"
+                  >
+                    {categories.find(c => c.id === selectedHelpCategory)?.name}
+                  </button>
+                </>
+              )}
+              {selectedHelpArticle && (
+                <>
+                  <ChevronRight className="w-4 h-4 text-gray-600" />
+                  <span className="text-white font-medium">{selectedHelpArticle.title}</span>
+                </>
+              )}
+            </div>
+
+            {selectedHelpArticle ? (
+              // Article View
+              <div>
+
+                <article className="prose prose-lg dark:prose-invert max-w-none bg-gray-900/50 rounded-xl p-8">
+                  {selectedHelpArticle.content.split('\n').map((line, idx) => {
+                    if (line.trim() === '') return <div key={idx} className="h-4" />;
+                    if (line.startsWith('# ')) return <h1 key={idx} className="text-3xl font-bold text-white mt-8 mb-4 first:mt-0">{line.substring(2)}</h1>;
+                    if (line.startsWith('## ')) return <h2 key={idx} className="text-2xl font-semibold text-white mt-8 mb-4 first:mt-0 pb-2 border-b border-gray-800">{line.substring(3)}</h2>;
+                    if (line.startsWith('### ')) return <h3 key={idx} className="text-xl font-semibold text-orange-400 mt-6 mb-3 first:mt-0">{line.substring(4)}</h3>;
+                    if (line.match(/^\d+\.\s/)) {
+                      const text = line.replace(/^\d+\.\s/, '');
+                      const number = line.match(/^(\d+)\./)?.[1];
+                      return <div key={idx} className="flex gap-3 mb-3 items-start"><span className="flex-shrink-0 w-6 h-6 rounded-full bg-orange-500 text-white text-sm font-semibold flex items-center justify-center">{number}</span><span className="flex-1 text-gray-300 pt-0.5">{text}</span></div>;
+                    }
+                    if (line.startsWith('- ')) return <div key={idx} className="flex gap-3 mb-2 items-start"><span className="text-orange-500 text-lg leading-6 font-bold">•</span><span className="flex-1 text-gray-300">{line.substring(2)}</span></div>;
+                    if (line.match(/^(✅|❌|⚠️|💡|⭐|🎯|📝|🔧) /)) {
+                      return <div key={idx} className="flex gap-3 mb-2 items-start"><span className="text-xl leading-6">{line[0]}</span><span className="flex-1 text-gray-300">{line.substring(2)}</span></div>;
+                    }
+                    return <p key={idx} className="text-gray-300 leading-relaxed mb-4 text-base" dangerouslySetInnerHTML={{ __html: line.replace(/\*\*(.*?)\*\*/g, '<strong class="text-white font-semibold">$1</strong>') }} />;
+                  })}
+                </article>
+              </div>
+            ) : (
+              // Browse View
+              <div>
+                {/* Search Bar */}
+                <div className="mb-8">
+                  <div className="relative">
+                    <Search className="absolute left-4 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-500" />
+                    <Input
+                      type="text"
+                      placeholder="Search for help articles..."
+                      value={helpSearchQuery}
+                      onChange={(e) => setHelpSearchQuery(e.target.value)}
+                      className="pl-12 pr-4 py-6 bg-gray-900 border-gray-800 text-white placeholder:text-gray-500 focus:border-orange-500 focus:ring-orange-500 rounded-xl text-base"
+                    />
+                  </div>
+                  {(helpSearchQuery || selectedHelpCategory) && (
+                    <button onClick={() => { setHelpSearchQuery(''); setSelectedHelpCategory(null); }} className="text-sm text-gray-500 hover:text-white mt-3 font-medium">
+                      Clear filters
+                    </button>
+                  )}
+                </div>
+
+                {/* Category Grid */}
+                {!helpSearchQuery && !selectedHelpCategory && (
+                  <div className="mb-8">
+                    <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-4">Browse by Category</h3>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                      {categories.map(cat => (
+                        <button key={cat.id} onClick={() => setSelectedHelpCategory(cat.id)} className="flex items-center justify-between p-4 bg-gray-900 hover:bg-gray-800 border border-gray-800 hover:border-orange-500 rounded-xl transition-all text-left group">
+                          <span className="text-white font-medium">{cat.name}</span>
+                          <ChevronRight className="w-5 h-5 text-gray-500 group-hover:text-orange-500 group-hover:translate-x-1 transition-all" />
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Articles List */}
+                {(helpSearchQuery || selectedHelpCategory) && (
+                  <div>
+                    {selectedHelpCategory && <div className="mb-4"><h3 className="text-lg font-semibold text-white">{categories.find(c => c.id === selectedHelpCategory)?.name}</h3></div>}
+                    <div className="grid grid-cols-1 gap-3">
+                      {knowledgeBase.filter(article => {
+                        if (selectedHelpCategory && article.category !== selectedHelpCategory) return false;
+                        if (helpSearchQuery) {
+                          const q = helpSearchQuery.toLowerCase();
+                          return article.title.toLowerCase().includes(q) || article.keywords.some(k => k.toLowerCase().includes(q)) || article.content.toLowerCase().includes(q);
+                        }
+                        return true;
+                      }).map(article => (
+                        <button key={article.id} onClick={() => setSelectedHelpArticle(article)} className="flex items-start justify-between p-4 bg-gray-900 hover:bg-gray-800 border border-gray-800 hover:border-gray-700 rounded-xl transition-all text-left group">
+                          <div className="flex-1">
+                            <h5 className="text-white font-medium mb-1 group-hover:text-orange-400 transition-colors">{article.title}</h5>
+                            <p className="text-xs text-gray-500 line-clamp-2">{article.content.substring(0, 120)}...</p>
+                          </div>
+                          <ChevronRight className="w-5 h-5 text-gray-500 group-hover:text-orange-400 transition-colors flex-shrink-0 ml-3 mt-1" />
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Chat with Support Button */}
+                <div className="mt-8 p-6 bg-gradient-to-br from-orange-900/20 to-orange-800/10 border border-orange-900/30 rounded-xl">
+                  <h3 className="text-lg font-semibold text-white mb-2 flex items-center gap-2">
+                    <MessageCircle className="w-5 h-5 text-orange-400" />
+                    Can't find what you need?
+                  </h3>
+                  <p className="text-gray-400 text-sm mb-4">Chat with our support team for personalized help</p>
+                  <Button onClick={() => { if (typeof window !== 'undefined' && window.Tawk_API) window.Tawk_API.maximize(); }} className="bg-orange-600 hover:bg-orange-700 text-white">
+                    <MessageCircle className="w-4 h-4 mr-2" />
+                    Chat with Support
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
+        ) : showCreditsPage ? (
           // Credits page iframe
           <div className="w-full h-[calc(100vh-200px)]">
             <iframe

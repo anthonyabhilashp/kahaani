@@ -47,10 +47,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const { scene_id, voice_id } = req.body;
   if (!scene_id) return res.status(400).json({ error: "scene_id is required" });
 
-  let creditsDeducted = false; // Track if credits were deducted for refund
-  let storyIdForRefund: string | null = null;
-  let userIdForRefund: string | null = null;
-
   try {
     // 1️⃣ Fetch scene data
     const { data: scene, error: sceneErr } = await supabaseAdmin
@@ -99,9 +95,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       throw new Error("Story not found");
     }
 
-    // 💳 Charge 1 credit per audio scene
+    // 💳 Check credit balance (will deduct AFTER successful generation)
     const creditsNeeded = CREDIT_COSTS.AUDIO_PER_SCENE;
-    logger.info(`[${scene.story_id}] 💳 Credits needed: ${creditsNeeded} (1 credit per audio)`);
+    logger.info(`[${scene.story_id}] 💳 Credits needed: ${creditsNeeded} (1 credit per audio - will charge after success)`);
 
     // Check credit balance
     const currentBalance = await getUserCredits(userId);
@@ -116,30 +112,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    // Deduct credits for this audio scene
-    const deductResult = await deductCredits(
-      userId,
-      creditsNeeded,
-      'deduction_audio',
-      `Audio generation for scene in story: ${story.title || scene.story_id}`,
-      scene.story_id
-    );
-
-    if (!deductResult.success) {
-      logger.error(`[${scene.story_id}] ❌ Failed to deduct credits: ${deductResult.error}`);
-      return res.status(500).json({ error: deductResult.error });
-    }
-
-    logger.info(`[${scene.story_id}] ✅ Deducted ${creditsNeeded} credit. New balance: ${deductResult.newBalance}`);
-
     // Map voice ID to OpenAI voice name
     const openaiVoice = VOICE_MAPPING[voiceId] || VOICE_MAPPING["default"];
     logger.info(`[${scene.story_id}] 🎤 Mapped voice to OpenAI: ${openaiVoice}`);
-
-    // Track for potential refund if generation fails
-    creditsDeducted = true;
-    storyIdForRefund = scene.story_id;
-    userIdForRefund = userId;
 
     // 2️⃣ Generate audio with OpenAI TTS
     const audioModel = process.env.AUDIO_MODEL || "tts-1-hd";
@@ -261,6 +236,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await updateStoryMetadata(scene.story_id);
     logger.info(`[${scene.story_id}] ✅ Story metadata updated`);
 
+    // 💳 Deduct credits AFTER successful audio generation
+    logger.info(`[${scene.story_id}] 💳 Deducting ${creditsNeeded} credit after successful generation...`);
+    const deductResult = await deductCredits(
+      userId,
+      creditsNeeded,
+      'deduction_audio',
+      `Audio generation for scene in story: ${story.title || scene.story_id}`,
+      scene.story_id
+    );
+
+    if (!deductResult.success) {
+      logger.error(`[${scene.story_id}] ⚠️ Failed to deduct credits after generation: ${deductResult.error}`);
+      // Audio was generated successfully, so we don't fail the request
+      // Admin can manually adjust credits if needed
+    } else {
+      logger.info(`[${scene.story_id}] ✅ Deducted ${creditsNeeded} credit. New balance: ${deductResult.newBalance}`);
+    }
+
     logger.info(`[${scene.story_id}] ✅ Audio saved to Supabase for scene: ${audioUrl}`);
     res.status(200).json({
       scene_id,
@@ -271,42 +264,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       word_timestamps: wordTimestamps
     });
   } catch (err: any) {
-    // 💳 Auto-refund credits if generation failed and credits were deducted
-    if (creditsDeducted && userIdForRefund && storyIdForRefund) {
-      try {
-        const logger = getUserLogger(userIdForRefund);
-        logger.error(`[${storyIdForRefund}] ❌ Error during audio generation: ${err.message}`);
-
-        const refundAmount = CREDIT_COSTS.AUDIO_PER_SCENE;
-        logger.info(`[${storyIdForRefund}] 💸 Refunding ${refundAmount} credit due to generation failure...`);
-
-        const { data: story } = await supabaseAdmin
-          .from("stories")
-          .select("title")
-          .eq("id", storyIdForRefund)
-          .single();
-
-        const refundResult = await refundCredits(
-          userIdForRefund,
-          refundAmount,
-          `Refund: Audio generation failed for story ${story?.title || storyIdForRefund}`,
-          storyIdForRefund
-        );
-
-        if (refundResult.success) {
-          logger.info(`[${storyIdForRefund}] ✅ Refunded ${refundAmount} credit. New balance: ${refundResult.newBalance}`);
-        } else {
-          logger.error(`[${storyIdForRefund}] ❌ Failed to refund credits`);
-        }
-      } catch (refundErr: any) {
-        const logger = getUserLogger(userIdForRefund!);
-        logger.error(`[${storyIdForRefund}] ❌ Error during refund process: ${refundErr.message}`);
-      }
-    } else {
-      // If we don't have user/story info for refund, just log to console
-      console.error("Audio generation error:", err);
-    }
-
+    // No refund needed since credits are only deducted after success
+    logger.error(`[${scene.story_id}] ❌ Error during audio generation: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 }

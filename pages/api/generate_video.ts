@@ -231,9 +231,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
     logger.info(`[${story_id}] 👤 User ID: ${story.user_id}`);
 
-    // 💳 Check credit balance
+    // 💳 Check credit balance (will deduct AFTER successful generation)
     const currentBalance = await getUserCredits(userId);
     logger.info(`[${story_id}] 💰 Current balance: ${currentBalance} credits`);
+    logger.info(`[${story_id}] 💳 Credits needed: ${CREDIT_COSTS.VIDEO_GENERATION} (will charge after success)`);
 
     if (currentBalance < CREDIT_COSTS.VIDEO_GENERATION) {
       logger.warn(`[${story_id}] ❌ Insufficient credits: need ${CREDIT_COSTS.VIDEO_GENERATION}, have ${currentBalance}`);
@@ -254,33 +255,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         current_balance: currentBalance
       });
     }
-
-    // 💳 Deduct credits before starting generation
-    const deductResult = await deductCredits(
-      userId,
-      CREDIT_COSTS.VIDEO_GENERATION,
-      'deduction_video',
-      `Video generation for story: ${story.title || story_id}`,
-      story_id
-    );
-
-    if (!deductResult.success) {
-      logger.error(`[${story_id}] ❌ Failed to deduct credits: ${deductResult.error}`);
-
-      // Mark job as failed before returning
-      await supabaseAdmin
-        .from('video_generation_jobs')
-        .update({
-          status: 'failed',
-          completed_at: new Date().toISOString(),
-          error: 'Failed to deduct credits'
-        })
-        .eq('id', jobId);
-
-      return res.status(500).json({ error: deductResult.error });
-    }
-
-    logger.info(`[${story_id}] ✅ Deducted ${CREDIT_COSTS.VIDEO_GENERATION} credit. New balance: ${deductResult.newBalance}`);
 
     const tmpDir = path.join(process.cwd(), "tmp", story_id);
     fs.mkdirSync(tmpDir, { recursive: true });
@@ -998,6 +972,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await updateStoryMetadata(story_id);
     logger.info(`[${story_id}] ✅ Story metadata updated`);
 
+    // 💳 Deduct credits AFTER successful video generation
+    if (CREDIT_COSTS.VIDEO_GENERATION > 0) {
+      logger.info(`[${story_id}] 💳 Deducting ${CREDIT_COSTS.VIDEO_GENERATION} credit after successful generation...`);
+      const deductResult = await deductCredits(
+        userId,
+        CREDIT_COSTS.VIDEO_GENERATION,
+        'deduction_video',
+        `Video generation for story: ${story.title || story_id}`,
+        story_id
+      );
+
+      if (!deductResult.success) {
+        logger.error(`[${story_id}] ⚠️ Failed to deduct credits after generation: ${deductResult.error}`);
+        // Video was generated successfully, so we don't fail the request
+        // Admin can manually adjust credits if needed
+      } else {
+        logger.info(`[${story_id}] ✅ Deducted ${CREDIT_COSTS.VIDEO_GENERATION} credit. New balance: ${deductResult.newBalance}`);
+      }
+    } else {
+      logger.info(`[${story_id}] ✅ Video generation is currently free (0 credits)`);
+    }
+
     // ✅ MARK JOB AS COMPLETED
     if (jobId) {
       await supabaseAdmin
@@ -1032,35 +1028,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    // 💳 Auto-refund credits if generation failed
-    try {
-      // Get user ID from story for refund
-      const { data: story } = await supabaseAdmin
-        .from("stories")
-        .select("user_id, title")
-        .eq("id", story_id)
-        .single();
-
-      if (story && story.user_id) {
-        const logger = getUserLogger(story.user_id);
-        logger.info(`[${story_id}] 💸 Refunding ${CREDIT_COSTS.VIDEO_GENERATION} credit due to generation failure...`);
-        const refundResult = await refundCredits(
-          story.user_id,
-          CREDIT_COSTS.VIDEO_GENERATION,
-          `Refund: Video generation failed for story ${story.title || story_id}`,
-          story_id
-        );
-
-        if (refundResult.success) {
-          logger.info(`[${story_id}] ✅ Refunded ${CREDIT_COSTS.VIDEO_GENERATION} credit. New balance: ${refundResult.newBalance}`);
-        } else {
-          logger.error(`[${story_id}] ❌ Failed to refund credits`);
-        }
-      }
-    } catch (refundErr: any) {
-      console.error(`[${story_id}] Error during refund process:`, refundErr);
-    }
-
+    // No refund needed since credits are only deducted after success
     res.status(500).json({ error: err.message });
   }
 }

@@ -49,7 +49,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!story_id) return res.status(400).json({ error: "story_id is required" });
 
   let logger: JobLogger | null = null;
-  let creditsDeducted = false;
   let userId: string | null = null;
 
   try {
@@ -92,9 +91,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     logger.log(`📚 Found ${scenes.length} scenes to generate audio for`);
 
-    // 💰 Check and deduct credits (1 credit per scene)
+    // 💰 Check credits (will deduct AFTER successful generation)
     const creditsNeeded = scenes.length * CREDIT_COSTS.AUDIO_PER_SCENE;
-    logger.log(`💰 Credits needed: ${creditsNeeded} (${scenes.length} scenes × ${CREDIT_COSTS.AUDIO_PER_SCENE})`);
+    logger.log(`💰 Credits needed: ${creditsNeeded} (${scenes.length} scenes × ${CREDIT_COSTS.AUDIO_PER_SCENE} - will charge after success)`);
 
     const currentBalance = await getUserCredits(userId);
     logger.log(`💳 Current balance: ${currentBalance} credits`);
@@ -107,23 +106,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         currentBalance
       });
     }
-
-    // Deduct credits upfront
-    const deductResult = await deductCredits(
-      userId,
-      creditsNeeded,
-      'deduction_audio',
-      `Bulk audio generation for ${scenes.length} scenes`,
-      story_id
-    );
-
-    if (!deductResult.success) {
-      logger.error(`❌ Failed to deduct credits: ${deductResult.error}`);
-      return res.status(500).json({ error: deductResult.error });
-    }
-
-    creditsDeducted = true;
-    logger.log(`✅ Deducted ${creditsNeeded} credits. New balance: ${deductResult.newBalance}`);
 
     const updatedScenes = [];
 
@@ -263,23 +245,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     logger.log(`\n✅ Bulk audio generation completed. ${updatedScenes.filter(s => !('error' in s)).length}/${scenes.length} scenes successful`);
 
-    // 💰 Refund credits for failed scenes
-    const failedCount = updatedScenes.filter(s => 'error' in s).length;
-    if (failedCount > 0 && userId) {
-      const refundAmount = failedCount * CREDIT_COSTS.AUDIO_PER_SCENE;
-      logger.log(`💰 Refunding ${refundAmount} credits for ${failedCount} failed scenes...`);
+    // 💳 Deduct credits ONLY for successful scenes
+    const successfulCount = updatedScenes.filter(s => !('error' in s)).length;
+    if (successfulCount > 0 && userId) {
+      const chargeAmount = successfulCount * CREDIT_COSTS.AUDIO_PER_SCENE;
+      logger.log(`💳 Deducting ${chargeAmount} credits for ${successfulCount} successful scenes...`);
 
-      const refundResult = await refundCredits(
+      const deductResult = await deductCredits(
         userId,
-        refundAmount,
-        `Refund for ${failedCount} failed audio generations`,
+        chargeAmount,
+        'deduction_audio',
+        `Bulk audio generation for ${successfulCount} successful scenes`,
         story_id
       );
 
-      if (refundResult.success) {
-        logger.log(`✅ Refunded ${refundAmount} credits. New balance: ${refundResult.newBalance}`);
+      if (deductResult.success) {
+        logger.log(`✅ Deducted ${chargeAmount} credits. New balance: ${deductResult.newBalance}`);
       } else {
-        logger.error(`❌ Failed to refund credits`);
+        logger.error(`⚠️ Failed to deduct credits: ${deductResult.error}`);
+        // Audio was generated successfully, so we don't fail the request
+        // Admin can manually adjust credits if needed
       }
     }
 
@@ -297,30 +282,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   } catch (err: any) {
     if (logger) logger.error(`❌ Error during bulk audio generation: ${err instanceof Error ? err.message : String(err)}`);
-
-    // Refund credits if they were deducted but operation failed
-    if (creditsDeducted && userId) {
-      const { data: scenes } = await supabaseAdmin
-        .from("scenes")
-        .select("id")
-        .eq("story_id", story_id);
-
-      const totalScenes = scenes?.length || 0;
-      if (totalScenes > 0) {
-        const refundAmount = totalScenes * CREDIT_COSTS.AUDIO_PER_SCENE;
-        if (logger) logger.log(`💰 Refunding ${refundAmount} credits due to error...`);
-
-        await refundCredits(
-          userId,
-          refundAmount,
-          `Refund due to bulk audio generation error: ${err.message}`,
-          story_id
-        );
-
-        if (logger) logger.log(`✅ Refunded ${refundAmount} credits`);
-      }
-    }
-
+    // No refund needed since credits are only deducted after success
     res.status(500).json({ error: err.message });
   }
 }
