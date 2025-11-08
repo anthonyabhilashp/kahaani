@@ -227,3 +227,78 @@ The story detail page uses a professional 3-panel layout:
 1. Update `ASPECT_RATIO`, `VIDEO_WIDTH`, `VIDEO_HEIGHT` in `.env.local`
 2. Both `generate_images.ts` and `generate_video.ts` use these values
 3. Restart dev server for changes to take effect
+
+## Debugging UI Issues - CRITICAL LESSONS
+
+### BEFORE Making Any Changes
+
+1. **Identify the EXACT location of the issue first**
+   - Is it in a Dialog component or inline page content?
+   - Which file contains the problematic code?
+   - Use browser DevTools to inspect the actual DOM element
+   - Don't assume - verify the component path
+
+2. **Understand the root cause BEFORE touching code**
+   - Why is the flickering/animation happening?
+   - Is it React re-rendering? CSS transitions? Dialog animations?
+   - Check if it's a state change issue or animation conflict
+   - Read the existing code to understand current behavior
+
+3. **Apply the simplest fix first**
+   - Don't modify multiple files claiming each will fix it
+   - Start with targeted changes in the exact problem location
+   - Test after each change
+   - Don't touch unrelated files
+
+### React Key Props for Content Transitions
+
+When content morphs/flickers during state changes (e.g., switching between steps in a form):
+
+**Problem**: React tries to update existing DOM elements in place, causing visual artifacts
+
+**Solution**: Add unique `key` props to force clean unmount/mount
+
+```tsx
+// BAD - Content morphs when step changes
+{step === 'choice' ? (
+  <div>Choice content</div>
+) : (
+  <div>Form content</div>
+)}
+
+// GOOD - Clean transition with keys
+{step === 'choice' ? (
+  <div key="choice">Choice content</div>
+) : (
+  <div key="form">Form content</div>
+)}
+```
+
+**Real Example from pages/index.tsx:**
+- Lines 998, 1070: Added `key="choice-content"` and `key="ai-form-content"` to fix flickering when clicking "Generate with AI"
+- This forces React to completely replace elements instead of morphing them
+
+### What NOT to Do (Learned the Hard Way)
+
+❌ **Don't modify dialog.tsx animations** when the issue is on an inline page
+❌ **Don't restructure components** (splitting dialogs, changing state management) as first attempt
+❌ **Don't add/remove animations randomly** claiming each will fix it
+❌ **Don't make changes in multiple files** without understanding which file has the issue
+❌ **Don't claim a fix works** without verifying it addresses the root cause
+
+### Correct Debugging Workflow
+
+1. User reports: "Box is growing/morphing when I click Generate with AI"
+2. **Identify location**: Check if it's Dialog or inline page (use Grep to find "Generate with AI")
+3. **Find the component**: Located in `pages/index.tsx` renderDialogContent() function
+4. **Understand issue**: React morphing content during step transition (choice → ai-form)
+5. **Apply targeted fix**: Add unique keys to both content divs
+6. **Test**: Verify the flicker is gone
+7. **Done**: One file changed, problem solved
+
+### Summary
+
+- **Measure twice, cut once**: Identify location → Understand cause → Apply fix
+- **Keep it simple**: The fix is usually a small targeted change, not a major refactor
+- **One file at a time**: Don't modify multiple files claiming each will fix the issue
+- **Keys are powerful**: Use React keys to force clean transitions between different content states

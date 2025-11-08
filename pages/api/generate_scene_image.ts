@@ -3,7 +3,7 @@ import { supabaseAdmin } from "../../lib/supabaseAdmin";
 import fetch from "node-fetch";
 import fs from "fs";
 import path from "path";
-import { JobLogger } from "../../lib/logger";
+import { getUserLogger } from "../../lib/userLogger";
 
 export const config = { api: { bodyParser: { sizeLimit: "4mb" } } };
 
@@ -13,9 +13,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const { scene_id, style, instructions } = req.body;
   if (!scene_id) return res.status(400).json({ error: "scene_id required" });
 
-  let logger: JobLogger | null = null;
+  let logger: any = null;
 
   try {
+    // 🔐 Get authenticated user from session
+    const authHeader = req.headers.authorization;
+    if (!authHeader) {
+      return res.status(401).json({ error: "Unauthorized - Please log in" });
+    }
+
+    const token = authHeader.replace('Bearer ', '');
+    const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(token);
+
+    if (authError || !user) {
+      return res.status(401).json({ error: "Unauthorized - Invalid session" });
+    }
+
+    const userId = user.id;
+    logger = getUserLogger(userId);
+
     // 1️⃣ Fetch the specific scene
     const { data: scene, error: sceneErr } = await supabaseAdmin
       .from("scenes")
@@ -25,8 +41,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (sceneErr || !scene) throw new Error("Scene not found");
 
-    logger = new JobLogger(scene.story_id, "generate_scene_image");
-    logger?.log(`🎨 Generating image for scene ${scene.order + 1}: ${scene_id}`);
+    logger.info(`[${scene.story_id}] 🎨 Generating image for scene ${scene.order + 1}: ${scene_id}`);
 
     // 1.5️⃣ Check if story belongs to a series and get aspect ratio + story reference
     const { data: story, error: storyErr } = await supabaseAdmin
@@ -44,7 +59,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let hasCharacterConsistency = false;
 
     if (isSeriesStory) {
-      logger?.log(`📺 Story belongs to series: ${story.series_id}`);
+      logger.info(`[${scene.story_id}] 📺 Story belongs to series: ${story.series_id}`);
 
       // Load series settings
       const { data: series, error: seriesErr } = await supabaseAdmin
@@ -61,12 +76,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           if (storyReference && storyLibrary) {
             seriesReference = storyReference;
             characterLibrary = storyLibrary;
-            logger?.log(`📚 Using story's own reference and library (series consistency enabled):`);
-            logger?.log(`   🖼️ Reference image: ${seriesReference ? 'exists' : 'none'}`);
-            logger?.log(`   👥 Character library: ${characterLibrary?.characters?.length || 0} characters`);
+            logger.info(`[${scene.story_id}] 📚 Using story's own reference and library (series consistency enabled):`);
+            logger.info(`[${scene.story_id}]    🖼️ Reference image: ${seriesReference ? 'exists' : 'none'}`);
+            logger.info(`[${scene.story_id}]    👥 Character library: ${characterLibrary?.characters?.length || 0} characters`);
           } else {
             // Fallback: load from latest story in series (for new stories)
-            logger?.log(`🔍 Story has no reference yet, loading from latest story in series...`);
+            logger.info(`[${scene.story_id}] 🔍 Story has no reference yet, loading from latest story in series...`);
             const { data: latestStory, error: latestErr } = await supabaseAdmin
               .from("stories")
               .select("character_library, reference_image_url")
@@ -80,13 +95,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             if (!latestErr && latestStory) {
               seriesReference = latestStory.reference_image_url;
               characterLibrary = latestStory.character_library;
-              logger?.log(`📚 Loaded from latest story:`);
-              logger?.log(`   🖼️ Reference image: ${seriesReference ? 'exists' : 'none'}`);
-              logger?.log(`   👥 Character library: ${characterLibrary?.characters?.length || 0} characters`);
+              logger.info(`[${scene.story_id}] 📚 Loaded from latest story:`);
+              logger.info(`[${scene.story_id}]    🖼️ Reference image: ${seriesReference ? 'exists' : 'none'}`);
+              logger.info(`[${scene.story_id}]    👥 Character library: ${characterLibrary?.characters?.length || 0} characters`);
             }
           }
         } else {
-          logger?.log(`⚠️ Character consistency disabled for this series - treating stories independently`);
+          logger.info(`[${scene.story_id}] ⚠️ Character consistency disabled for this series - treating stories independently`);
         }
       }
     }
@@ -95,7 +110,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let referenceScenes: any[] = [];
     if (!seriesReference) {
       if (storyReference) {
-        logger?.log(`🖼️ Using story reference image for consistency`);
+        logger.info(`[${scene.story_id}] 🖼️ Using story reference image for consistency`);
       } else {
         // Last resort: use other scene images from current story
         const { data: allScenes } = await supabaseAdmin
@@ -107,13 +122,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           .order("order", { ascending: true });
 
         referenceScenes = allScenes || [];
-        logger?.log(`📸 No reference image - using ${referenceScenes.length} scene images for consistency`);
+        logger.info(`[${scene.story_id}] 📸 No reference image - using ${referenceScenes.length} scene images for consistency`);
       }
     }
 
     // 2️⃣ Clean up old image if exists
     if (scene.image_url) {
-      logger?.log(`🧹 Removing old image from storage...`);
+      logger.info(`[${scene.story_id}] 🧹 Removing old image from storage...`);
       const oldPath = scene.image_url.split("/images/")[1];
       if (oldPath) {
         await supabaseAdmin.storage.from("images").remove([oldPath]);
@@ -146,8 +161,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const imageSize = `${videoWidth}x${videoHeight}`;
-    logger?.log(`📐 Story aspect ratio: ${aspect}, using ${imageSize}`);
-    logger?.log(`🧠 Using ${provider} model: ${model}`);
+    logger.info(`[${scene.story_id}] 📐 Story aspect ratio: ${aspect}, using ${imageSize}`);
+    logger.info(`[${scene.story_id}] 🧠 Using ${provider} model: ${model}`);
 
     const finalStyle = style || "cinematic illustration";
 
@@ -254,7 +269,7 @@ Do NOT generate multiple scenes, panels, or images in one. Just one standalone i
     // Priority 3: Fallback to scene images if no reference exists
     else if (referenceScenes.length > 0) {
       const limitedReferences = referenceScenes.slice(0, 3); // Limit to 3 most recent for API efficiency
-      logger?.log(`🖼️ Including ${limitedReferences.length} scene reference images for consistency`);
+      logger.info(`[${scene.story_id}] 🖼️ Including ${limitedReferences.length} scene reference images for consistency`);
 
       for (const refScene of limitedReferences) {
         messageContent.push({
@@ -275,7 +290,7 @@ Do NOT generate multiple scenes, panels, or images in one. Just one standalone i
     });
 
     // 5️⃣ Generate via model
-    logger?.log(`🚀 Requesting ${provider} API for scene ${scene.order + 1}...`);
+    logger.info(`[${scene.story_id}] 🚀 Requesting ${provider} API for scene ${scene.order + 1}...`);
     const resp = await fetch(OPENROUTER_URL, {
       method: "POST",
       headers: {
@@ -292,7 +307,7 @@ Do NOT generate multiple scenes, panels, or images in one. Just one standalone i
 
     const data: any = await resp.json();
     if (!resp.ok) {
-      logger?.error("❌ API error response", data);
+      logger.error(`[${scene.story_id}] ❌ API error response: ${JSON.stringify(data)}`);
       throw new Error(`Image generation failed: ${JSON.stringify(data)}`);
     }
 
@@ -312,7 +327,7 @@ Do NOT generate multiple scenes, panels, or images in one. Just one standalone i
 
     if (!imageUrl) throw new Error("No image returned by model");
 
-    logger?.log(`🖼️ Received image from model`);
+    logger.info(`[${scene.story_id}] 🖼️ Received image from model`);
 
     // 7️⃣ Save image
     const tmpDir = path.join(process.cwd(), "tmp", scene.story_id);
@@ -346,11 +361,15 @@ Do NOT generate multiple scenes, panels, or images in one. Just one standalone i
 
     if (updateErr) throw updateErr;
 
-    logger?.log(`✅ Updated scene ${scene.order + 1} with image → ${publicUrl}`);
+    logger.info(`[${scene.story_id}] ✅ Updated scene ${scene.order + 1} with image → ${publicUrl}`);
     res.status(200).json({ scene_id, image_url: publicUrl, order: scene.order });
 
   } catch (err: any) {
-    logger?.error("❌ Error generating scene image", err);
+    if (logger) {
+      logger.error(`❌ Error generating scene image: ${err.message}`);
+    } else {
+      console.error(`❌ Error generating scene image: ${err.message}`);
+    }
     res.status(500).json({ error: err.message || "Image generation failed" });
   }
 }

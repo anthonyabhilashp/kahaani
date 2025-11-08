@@ -3,7 +3,8 @@ import { useRouter } from "next/router";
 import { supabase } from "../lib/supabaseClient";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Loader2, Plus, Smartphone, Square, Monitor } from "lucide-react";
+import { Slider } from "@/components/ui/slider";
+import { Loader2, Plus, Smartphone, Square, Monitor, Sparkles, FileText, ArrowRight, Info } from "lucide-react";
 import { useCredits } from "../hooks/useCredits";
 
 interface CreateStoryDialogProps {
@@ -16,9 +17,15 @@ interface CreateStoryDialogProps {
 export function CreateStoryDialog({ open, onOpenChange, seriesId = null, onStoryCreated }: CreateStoryDialogProps) {
   const router = useRouter();
   const { balance: creditBalance } = useCredits();
+
+  // Step management
+  const [step, setStep] = useState<'choice' | 'ai-form'>('choice');
+
+  // Form state
   const [newPrompt, setNewPrompt] = useState("");
   const [creating, setCreating] = useState(false);
   const [sceneCount, setSceneCount] = useState(5);
+  const [showCreditWarning, setShowCreditWarning] = useState(false);
   const [targetDuration, setTargetDuration] = useState<30 | 60 | 120 | 180>(
     creditBalance <= 15 ? 30 : 60
   );
@@ -28,9 +35,17 @@ export function CreateStoryDialog({ open, onOpenChange, seriesId = null, onStory
   const [loadingVoices, setLoadingVoices] = useState(false);
   const [playingPreviewId, setPlayingPreviewId] = useState<string | null>(null);
   const voicePreviewAudioRef = useRef<HTMLAudioElement | null>(null);
-  const [isBlankStory, setIsBlankStory] = useState(false);
 
-  // Fetch ElevenLabs voices
+  // Reset to step 1 when dialog closes
+  useEffect(() => {
+    if (!open) {
+      setStep('choice');
+      setNewPrompt("");
+      setCreating(false);
+    }
+  }, [open]);
+
+  // Fetch voices
   async function fetchVoices() {
     setLoadingVoices(true);
     try {
@@ -50,12 +65,12 @@ export function CreateStoryDialog({ open, onOpenChange, seriesId = null, onStory
     setSceneCount(estimatedScenes);
   }, [targetDuration]);
 
-  // Load voices when dialog opens
+  // Load voices when moving to AI form
   useEffect(() => {
-    if (open && voices.length === 0) {
+    if (step === 'ai-form' && voices.length === 0) {
       fetchVoices();
     }
-  }, [open]);
+  }, [step]);
 
   // Play voice preview
   const playVoicePreview = (voiceId: string, previewUrl?: string) => {
@@ -78,8 +93,9 @@ export function CreateStoryDialog({ open, onOpenChange, seriesId = null, onStory
     setPlayingPreviewId(voiceId);
   };
 
-  async function createStory() {
-    if (!isBlankStory && !newPrompt.trim()) return;
+  // Create story with AI
+  async function createStoryWithAI() {
+    if (!newPrompt.trim()) return;
 
     setCreating(true);
 
@@ -98,12 +114,11 @@ export function CreateStoryDialog({ open, onOpenChange, seriesId = null, onStory
           "Authorization": `Bearer ${session.access_token}`
         },
         body: JSON.stringify({
-          prompt: isBlankStory ? "MyAwesomeStory" : newPrompt,
-          title: isBlankStory ? "MyAwesomeStory" : null,
-          sceneCount: isBlankStory ? 1 : sceneCount,
+          prompt: newPrompt,
+          sceneCount: sceneCount,
           voice_id: selectedVoiceId,
           aspect_ratio: aspectRatio,
-          isBlank: isBlankStory
+          isBlank: false
         }),
       });
 
@@ -113,8 +128,7 @@ export function CreateStoryDialog({ open, onOpenChange, seriesId = null, onStory
 
         // If creating for a series, add it to the series
         if (seriesId && storyId) {
-          console.log(`Adding story ${storyId} to series ${seriesId}`);
-          const addToSeriesRes = await fetch("/api/series/add_story", {
+          await fetch("/api/series/add_story", {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
@@ -125,25 +139,78 @@ export function CreateStoryDialog({ open, onOpenChange, seriesId = null, onStory
               series_id: seriesId,
             }),
           });
-
-          if (!addToSeriesRes.ok) {
-            const error = await addToSeriesRes.json();
-            console.error("Failed to add story to series:", error);
-            alert(`Warning: Story created but failed to add to series: ${error.error || 'Unknown error'}`);
-          } else {
-            const result = await addToSeriesRes.json();
-            console.log("Successfully added story to series:", result);
-          }
-        } else {
-          console.log(`Not adding to series. seriesId: ${seriesId}, storyId: ${storyId}`);
         }
 
-        // Reset form
-        setNewPrompt("");
-        setTargetDuration(60);
-        setSelectedVoiceId("alloy");
-        setAspectRatio("9:16");
-        setIsBlankStory(false);
+        // Close dialog
+        onOpenChange(false);
+
+        // Call callback if provided
+        if (onStoryCreated) {
+          onStoryCreated();
+        }
+
+        // Navigate to story page
+        if (storyId) {
+          router.push(`/story/${storyId}`);
+        }
+      } else {
+        const error = await res.json();
+        alert(`Failed to create story: ${error.error || 'Unknown error'}`);
+      }
+    } catch (error) {
+      console.error("Error creating story:", error);
+      alert(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  // Create blank story
+  async function createBlankStory() {
+    setCreating(true);
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        alert("Please log in to create stories");
+        router.push('/login');
+        return;
+      }
+
+      const res = await fetch("/api/generate_scenes", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${session.access_token}`
+        },
+        body: JSON.stringify({
+          prompt: "MyAwesomeStory",
+          title: "MyAwesomeStory",
+          sceneCount: 1,
+          voice_id: "alloy",
+          aspect_ratio: "9:16",
+          isBlank: true
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        const storyId = data.story_id;
+
+        // If creating for a series, add it to the series
+        if (seriesId && storyId) {
+          await fetch("/api/series/add_story", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${session.access_token}`
+            },
+            body: JSON.stringify({
+              story_id: storyId,
+              series_id: seriesId,
+            }),
+          });
+        }
 
         // Close dialog
         onOpenChange(false);
@@ -189,45 +256,100 @@ export function CreateStoryDialog({ open, onOpenChange, seriesId = null, onStory
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl bg-gray-900 text-white border-gray-800 max-h-[90vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle className="text-2xl font-bold">Create a New Story</DialogTitle>
-        </DialogHeader>
-        <div className="space-y-4 mt-4">
-          {/* Story Input with inline Story Type toggle */}
-          {!isBlankStory && (
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <label className="text-sm font-medium text-gray-200">
-                  Add your story or an idea
-                </label>
+      <DialogContent className="sm:max-w-5xl bg-gray-900 text-white border-gray-800 max-h-[90vh] overflow-y-auto">
+        {step === 'choice' ? (
+          <>
+            <DialogHeader>
+              <DialogTitle className="text-2xl font-bold text-center">Create New Video</DialogTitle>
+            </DialogHeader>
 
-                <div className="inline-flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setIsBlankStory(false)}
-                    className={`px-3 py-1 text-xs font-medium rounded-lg border transition-all ${
-                      !isBlankStory
-                        ? 'border-orange-500 bg-orange-500/20 text-orange-400'
-                        : 'border-gray-700 bg-gray-800 text-gray-400 hover:border-gray-600'
-                    }`}
-                  >
-                    AI Generated
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setIsBlankStory(true)}
-                    className={`px-3 py-1 text-xs font-medium rounded-lg border transition-all ${
-                      isBlankStory
-                        ? 'border-orange-500 bg-orange-500/20 text-orange-400'
-                        : 'border-gray-700 bg-gray-800 text-gray-400 hover:border-gray-600'
-                    }`}
-                  >
-                    Blank
-                  </button>
+            <div className="grid md:grid-cols-2 gap-6 mt-6">
+              {/* AI Generated Option */}
+              <div className="flex flex-col bg-gray-800/50 border border-gray-700 rounded-xl p-6 hover:border-orange-500/50 transition-all group focus:outline-none focus-visible:outline-none">
+                {/* Icon */}
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="w-12 h-12 rounded-full bg-orange-600/20 flex items-center justify-center flex-shrink-0">
+                    <Sparkles className="w-6 h-6 text-orange-500" />
+                  </div>
+                  <div>
+                    <h3 className="text-xl font-bold">Generate with AI</h3>
+                    <p className="text-sm text-gray-400">Let AI generate everything for you</p>
+                  </div>
                 </div>
+
+                {/* Description */}
+                <p className="text-sm text-gray-400 mb-6">
+                  Generate a script with AI or use your own, then generate a video in seconds.
+                </p>
+
+                {/* Button */}
+                <Button
+                  onClick={() => setStep('ai-form')}
+                  className="w-full bg-orange-600 hover:bg-orange-700 text-white font-semibold focus:outline-none focus-visible:ring-0"
+                  size="lg"
+                >
+                  Create with AI <ArrowRight className="w-4 h-4 ml-2" />
+                </Button>
               </div>
 
+              {/* Blank Story Option */}
+              <div className="flex flex-col bg-gray-800/50 border border-gray-700 rounded-xl p-6 hover:border-orange-500/50 transition-all group focus:outline-none focus-visible:outline-none">
+                {/* Icon */}
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="w-12 h-12 rounded-full bg-gray-700 flex items-center justify-center flex-shrink-0">
+                    <FileText className="w-6 h-6 text-gray-300" />
+                  </div>
+                  <div>
+                    <h3 className="text-xl font-bold">Create Blank Video</h3>
+                    <p className="text-sm text-gray-400">Alternatively start from scratch</p>
+                  </div>
+                </div>
+
+                {/* Description */}
+                <p className="text-sm text-gray-400 mb-6">
+                  Create a blank video and create scenes one by one.
+                </p>
+
+                {/* Button */}
+                <Button
+                  onClick={createBlankStory}
+                  disabled={creating}
+                  className="w-full bg-gray-700 hover:bg-gray-600 text-white font-semibold focus:outline-none focus-visible:ring-0"
+                  size="lg"
+                >
+                  {creating ? (
+                    <>
+                      <Loader2 className="animate-spin h-4 w-4 mr-2" /> Creating...
+                    </>
+                  ) : (
+                    <>
+                      Create Blank Video <ArrowRight className="w-4 h-4 ml-2" />
+                    </>
+                  )}
+                </Button>
+              </div>
+            </div>
+          </>
+        ) : (
+          <>
+            <DialogHeader>
+              <div className="flex items-center justify-between">
+                <DialogTitle className="text-2xl font-bold">Generate with AI</DialogTitle>
+                <button
+                  onClick={() => setStep('choice')}
+                  className="text-sm text-gray-400 hover:text-white flex items-center gap-1"
+                >
+                  ← Back
+                </button>
+              </div>
+            </DialogHeader>
+
+          <div className="space-y-4 mt-4">
+            {/* Story Input */}
+            <div>
+              <label className="block text-sm font-medium text-gray-200 mb-2">
+                Add your story or an idea
+              </label>
               <textarea
                 placeholder="A young blacksmith forges a sword from fallen stars, awakening an ancient power that will either save the kingdom or doom it forever."
                 value={newPrompt}
@@ -236,198 +358,112 @@ export function CreateStoryDialog({ open, onOpenChange, seriesId = null, onStory
                 className="w-full p-3 bg-gray-800 border border-gray-700 rounded-lg resize-none focus:ring-2 focus:ring-orange-500 focus:border-transparent text-white placeholder:text-gray-500 text-sm"
               />
             </div>
-          )}
 
-          {/* Show toggle for Blank story mode */}
-          {isBlankStory && (
-            <div className="flex items-center justify-between">
-              <label className="text-sm font-medium text-gray-200">
-                Story Type
-              </label>
-
-              <div className="inline-flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => setIsBlankStory(false)}
-                  className={`px-3 py-1 text-xs font-medium rounded-lg border transition-all ${
-                    !isBlankStory
-                      ? 'border-orange-500 bg-orange-500/20 text-orange-400'
-                      : 'border-gray-700 bg-gray-800 text-gray-400 hover:border-gray-600'
-                  }`}
-                >
-                  AI Generated
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setIsBlankStory(true)}
-                  className={`px-3 py-1 text-xs font-medium rounded-lg border transition-all ${
-                    isBlankStory
-                      ? 'border-orange-500 bg-orange-500/20 text-orange-400'
-                      : 'border-gray-700 bg-gray-800 text-gray-400 hover:border-gray-600'
-                  }`}
-                >
-                  Blank
-                </button>
+            {/* Number of Scenes */}
+            <div className="space-y-3">
+              <div className="flex justify-between items-center">
+                <label className="block text-sm font-medium text-gray-200">
+                  Number of scenes for your story
+                  {creditBalance <= 10 && (
+                    <span className="text-xs text-yellow-400 font-normal ml-2">(Max 5 scenes with low credits)</span>
+                  )}
+                </label>
               </div>
-            </div>
-          )}
 
-          {/* Duration - Only show for AI-generated stories */}
-          {!isBlankStory && (
-            <div>
-              <label className="block text-sm font-medium text-gray-200 mb-2">
-                Duration
-              </label>
-              <div className="grid grid-cols-4 gap-2">
-                {[30, 60, 120, 180].map((duration) => {
-                  const sceneEstimate = Math.max(3, Math.round(duration / 6));
-                  const isDisabled = creditBalance <= 15 && duration > 30;
-                  return (
-                    <button
-                      key={duration}
-                      type="button"
-                      onClick={() => !isDisabled && setTargetDuration(duration as 30 | 60 | 120 | 180)}
-                      disabled={isDisabled}
-                      className={`p-2 pt-5 rounded-lg border transition-all relative ${
-                        targetDuration === duration
-                          ? 'border-orange-500 bg-orange-500/20 text-orange-400'
-                          : isDisabled
-                          ? 'border-gray-800 bg-gray-900 text-gray-600 cursor-not-allowed opacity-50'
-                          : 'border-gray-700 bg-gray-800 text-gray-400 hover:border-gray-600'
-                      }`}
-                    >
-                      {isDisabled && (
-                        <div className="absolute top-0 left-0 right-0 bg-orange-900/30 text-orange-400 text-[9px] font-medium py-0.5 rounded-t-lg text-center">
-                          Low credits
-                        </div>
-                      )}
-                      <div className="text-sm font-medium">{formatTargetDuration(duration)}</div>
-                      <div className="text-xs opacity-75">({sceneEstimate} scenes)</div>
-                    </button>
-                  );
-                })}
-              </div>
-              {creditBalance <= 15 && (
-                <p className="text-xs text-orange-400 mt-2">
-                  You have {creditBalance} credits. Get more credits to create longer stories.
-                </p>
-              )}
-            </div>
-          )}
+              {/* Slider with progress bar and milestones */}
+              <div className="relative" style={{ paddingTop: '4px', paddingBottom: '8px' }}>
+                {/* Progress line */}
+                <div className="absolute left-0 right-0 h-2 bg-gray-700 rounded-full" style={{ top: '24px' }}>
+                  <div
+                    className="h-full bg-gradient-to-r from-orange-500 to-orange-600 rounded-full transition-all duration-200"
+                    style={{ width: `${((sceneCount - 1) / 29) * 100}%` }}
+                  />
+                </div>
 
-          {/* Format */}
-          <div>
-            <label className="block text-sm font-medium text-gray-200 mb-2">
-              Format
-            </label>
-            <div className="grid grid-cols-3 gap-2">
-              {[
-                { value: "9:16", icon: Smartphone, label: "9:16" },
-                { value: "16:9", icon: Monitor, label: "16:9" },
-                { value: "1:1", icon: Square, label: "1:1" }
-              ].map(({ value, icon: Icon, label }) => (
-                <button
-                  key={value}
-                  type="button"
-                  onClick={() => setAspectRatio(value as any)}
-                  className={`p-2 rounded-lg border transition-all ${
-                    aspectRatio === value
-                      ? 'border-orange-500 bg-orange-500/20'
-                      : 'border-gray-700 bg-gray-800 hover:border-gray-600'
-                  }`}
-                >
-                  <Icon className={`w-4 h-4 mx-auto mb-1 ${aspectRatio === value ? 'text-orange-400' : 'text-gray-400'}`} />
-                  <div className={`text-xs font-medium ${aspectRatio === value ? 'text-orange-400' : 'text-gray-300'}`}>
-                    {label}
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Voice Selection */}
-          <div>
-            <label className="block text-sm font-medium text-gray-200 mb-2">
-              Narrator Voice
-            </label>
-            {loadingVoices ? (
-              <div className="flex items-center justify-center py-8 bg-gray-800 border border-gray-700 rounded-lg">
-                <Loader2 className="w-5 h-5 animate-spin text-orange-500" />
-                <span className="ml-2 text-sm text-gray-400">Loading voices...</span>
-              </div>
-            ) : voices.length > 0 ? (
-              <div className="grid grid-cols-4 gap-2 max-h-[280px] overflow-y-auto">
-                {voices.slice(0, 8).map((voice) => (
-                  <button
-                    key={voice.id}
-                    type="button"
-                    onClick={() => setSelectedVoiceId(voice.id)}
-                    className={`p-2.5 rounded-lg border transition-all text-left ${
-                      selectedVoiceId === voice.id
-                        ? 'border-orange-500 bg-orange-500/20'
-                        : 'border-gray-700 bg-gray-800 hover:border-gray-600'
-                    }`}
-                  >
-                    <div className={`text-sm font-medium mb-1 ${
-                      selectedVoiceId === voice.id ? 'text-orange-400' : 'text-white'
-                    }`}>
-                      {voice.name}
-                    </div>
-
-                    {voice.labels && formatVoiceLabels(voice.labels) && (
-                      <div className="text-xs text-gray-500 mb-2 line-clamp-2 min-h-[2rem]">
-                        {formatVoiceLabels(voice.labels)}
-                      </div>
-                    )}
-
-                    {voice.preview_url && (
+                {/* Milestone markers */}
+                <div className="absolute left-0 right-0 flex justify-between pointer-events-none" style={{ top: '24px' }}>
+                  {[1, 5, 10, 15, 20, 25, 30].map((milestone) => {
+                    const isActive = sceneCount >= milestone;
+                    const position = ((milestone - 1) / 29) * 100;
+                    return (
                       <div
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          playVoicePreview(voice.id, voice.preview_url);
-                        }}
-                        className={`w-full px-2 py-1 rounded text-xs font-medium transition-colors text-center ${
-                          playingPreviewId === voice.id
-                            ? 'bg-orange-600 text-white'
-                            : 'bg-gray-700/80 hover:bg-gray-600 text-gray-300'
-                        }`}
+                        key={milestone}
+                        className="absolute flex flex-col items-center"
+                        style={{ left: `${position}%`, transform: 'translateX(-50%)', top: '-2px' }}
                       >
-                        {playingPreviewId === voice.id ? 'Stop' : 'Preview'}
+                        {/* Milestone dot */}
+                        <div className={`w-2 h-2 rounded-full transition-all ${
+                          isActive
+                            ? 'bg-orange-500'
+                            : 'bg-gray-600'
+                        }`} />
+                        {/* Milestone label below */}
+                        <span className="text-[10px] text-gray-500 mt-1">{milestone}</span>
                       </div>
-                    )}
-                  </button>
-                ))}
+                    );
+                  })}
+                </div>
+
+                {/* Slider with value bubble */}
+                <div className="relative">
+                  <Slider
+                    value={[sceneCount]}
+                    onValueChange={(value) => {
+                      const newValue = value[0];
+                      if (creditBalance <= 10 && newValue > 5) {
+                        setSceneCount(5);
+                        setShowCreditWarning(true);
+                      } else {
+                        setSceneCount(newValue);
+                        setShowCreditWarning(false);
+                      }
+                    }}
+                    min={1}
+                    max={30}
+                    step={1}
+                    showValue={true}
+                    className="w-full"
+                  />
+                </div>
+
+                {/* Floating duration and credits below handler */}
+                <div
+                  className="absolute transition-all duration-200"
+                  style={{
+                    left: `${((sceneCount - 1) / 29) * 100}%`,
+                    transform: 'translateX(-50%)',
+                    top: '46px'
+                  }}
+                >
+                  <div className="flex items-center gap-1.5 whitespace-nowrap px-2 py-1">
+                    <span className="text-[10px] text-gray-400">~{Math.round(sceneCount * 12 / 60)}min</span>
+                    <span className="text-[10px] text-gray-600">•</span>
+                    <span className="text-[10px] text-orange-400">~{sceneCount * 2} credits</span>
+                  </div>
+                </div>
               </div>
-            ) : (
-              <div className="p-3 bg-gray-800 border border-gray-700 rounded-lg text-sm text-gray-400 text-center">
-                Click to load voices
-              </div>
-            )}
+            </div>
+
+            {/* Create Button */}
+            <Button
+              disabled={creating || !newPrompt.trim()}
+              onClick={createStoryWithAI}
+              className="w-full bg-orange-600 hover:bg-orange-700 text-white font-semibold"
+              size="lg"
+            >
+              {creating ? (
+                <>
+                  <Loader2 className="animate-spin h-5 w-5 mr-2" /> Creating Story...
+                </>
+              ) : (
+                <>
+                  <Plus className="w-5 h-5 mr-2" /> Create Story
+                </>
+              )}
+            </Button>
           </div>
-
-          {/* Info note */}
-          <p className="text-xs text-gray-500 text-center">
-            All settings adjustable after creation
-          </p>
-
-          {/* Create Button */}
-          <Button
-            disabled={creating || (!isBlankStory && !newPrompt.trim())}
-            onClick={createStory}
-            className="w-full bg-orange-600 hover:bg-orange-700 text-white font-semibold"
-            size="lg"
-          >
-            {creating ? (
-              <>
-                <Loader2 className="animate-spin h-5 w-5 mr-2" /> Creating Story...
-              </>
-            ) : (
-              <>
-                <Plus className="w-5 h-5 mr-2" /> Create Story
-              </>
-            )}
-          </Button>
-        </div>
+          </>
+        )}
       </DialogContent>
     </Dialog>
   );

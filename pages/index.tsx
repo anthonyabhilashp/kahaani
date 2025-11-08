@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Plus, Loader2, PlayCircle, Clock, Film, Image as ImageIcon, Video, User, LogOut, Trash2, MoreHorizontal, Smartphone, Square, Monitor, Coins, List, ArrowLeft, Menu, X, Sparkles, Volume2, Info, Play, StopCircle, HelpCircle, Search, ChevronRight, MessageCircle } from "lucide-react";
+import { Plus, Loader2, PlayCircle, Clock, Film, Image as ImageIcon, Video, User, LogOut, Trash2, MoreHorizontal, Smartphone, Square, Monitor, Coins, List, ArrowLeft, ArrowRight, FileText, Menu, X, Sparkles, Volume2, Info, Play, StopCircle, HelpCircle, Search, ChevronRight, MessageCircle } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   DropdownMenu,
@@ -230,6 +230,7 @@ export default function Dashboard() {
   const [creating, setCreating] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState("faceless-videos");
   const [sceneCount, setSceneCount] = useState(5);
+  const [showCreditWarning, setShowCreditWarning] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [seriesDialogOpen, setSeriesDialogOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
@@ -251,6 +252,7 @@ export default function Dashboard() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false); // Track mobile sidebar state
   const [showCreditsPage, setShowCreditsPage] = useState(false); // Track credits page view
   const [showCreateStoryForm, setShowCreateStoryForm] = useState(false); // Track inline create story form
+  const [createStoryStep, setCreateStoryStep] = useState<'choice' | 'ai-form'>('choice'); // Track create story step
   const [showHelpPage, setShowHelpPage] = useState(false); // Track help page view
   const [helpSearchQuery, setHelpSearchQuery] = useState('');
   const [selectedHelpArticle, setSelectedHelpArticle] = useState<KnowledgeArticle | null>(null);
@@ -342,7 +344,7 @@ export default function Dashboard() {
   useEffect(() => {
     if (deleteDialogOpen) {
       // Reset countdown when dialog opens
-      setDeleteCountdown(5);
+      setDeleteCountdown(2);
 
       // Start countdown
       const interval = setInterval(() => {
@@ -496,9 +498,15 @@ export default function Dashboard() {
     setPlayingPreviewId(voiceId);
   };
 
-  async function createStory() {
+  // Wrapper function for creating blank stories
+  async function createBlankStory() {
+    setIsBlankStory(true);
+    await createStory(true);
+  }
+
+  async function createStory(isBlank: boolean = false) {
     // Validate: blank story doesn't need prompt, AI-generated does
-    if (!isBlankStory && !newPrompt.trim()) return;
+    if (!isBlank && !newPrompt.trim()) return;
 
     setCreating(true);
 
@@ -518,12 +526,12 @@ export default function Dashboard() {
           "Authorization": `Bearer ${session.access_token}`
         },
         body: JSON.stringify({
-          prompt: isBlankStory ? "MyAwesomeStory" : newPrompt,
-          title: isBlankStory ? "MyAwesomeStory" : null,
-          sceneCount: isBlankStory ? 1 : sceneCount,
+          prompt: isBlank ? "MyAwesomeStory" : newPrompt,
+          title: isBlank ? "MyAwesomeStory" : null,
+          sceneCount: isBlank ? 1 : sceneCount,
           voice_id: selectedVoiceId,
           aspect_ratio: aspectRatio,
-          isBlank: isBlankStory  // Flag to indicate blank story creation
+          isBlank: isBlank  // Flag to indicate blank story creation
         }),
       });
 
@@ -819,6 +827,9 @@ export default function Dashboard() {
   function openCreateStoryDialog(seriesId: string | null = null) {
     setSelectedSeriesForCreate(seriesId);
     setShowCreateStoryForm(true);
+    setCreateStoryStep('choice'); // Reset to step 1
+    setIsBlankStory(false); // Reset to AI mode
+    setNewPrompt(""); // Clear prompt
     // Load voices automatically when opening the form
     if (voices.length === 0 && !loadingVoices) {
       fetchVoices();
@@ -977,51 +988,96 @@ export default function Dashboard() {
   }
 
   // Render the create story dialog content
-  const renderDialogContent = () => (
-    <div className="space-y-4">
-      {/* Info Notice - Show when creating standalone story */}
-      {!selectedSeriesForCreate && (
-        <div className="bg-yellow-900/20 border border-yellow-700/50 rounded-lg p-3 flex items-start gap-2">
-          <Info className="w-4 h-4 text-yellow-400 flex-shrink-0 mt-0.5" />
-          <p className="text-xs text-yellow-300">
-            This story will be created independently and won't be part of any series.
-          </p>
-        </div>
-      )}
-
-      {/* Story Input Section */}
-      {!isBlankStory && (
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <label className="text-base font-semibold text-white">Add your story or provide an idea</label>
-
-            {/* Toggle Buttons */}
-            <div className="inline-flex gap-1 p-1 bg-gray-800/50 rounded-lg border border-gray-700">
-              <button
-                type="button"
-                onClick={() => setIsBlankStory(false)}
-                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
-                  !isBlankStory
-                    ? 'bg-orange-600 text-white'
-                    : 'text-gray-400 hover:text-white hover:bg-gray-700'
-                }`}
-              >
-                AI Generated
-              </button>
-              <button
-                type="button"
-                onClick={() => setIsBlankStory(true)}
-                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
-                  isBlankStory
-                    ? 'bg-orange-600 text-white'
-                    : 'text-gray-400 hover:text-white hover:bg-gray-700'
-                }`}
-              >
-                Blank
-              </button>
+  const renderDialogContent = () => {
+    if (createStoryStep === 'choice') {
+      // STEP 1: Choice between AI and Blank
+      return (
+        <div key="choice-content" className="grid md:grid-cols-2 gap-6">
+          {/* AI Generated Option */}
+          <div className="flex flex-col bg-gray-800/50 border-2 border-gray-700 rounded-xl p-6 hover:border-orange-500/50 transition-all group">
+            {/* Icon */}
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-14 h-14 rounded-full bg-orange-600/20 flex items-center justify-center flex-shrink-0">
+                <Sparkles className="w-7 h-7 text-orange-500" />
+              </div>
+              <div>
+                <h3 className="text-xl font-bold text-white">Generate with AI</h3>
+                <p className="text-sm text-gray-400">Let AI generate everything for you</p>
+              </div>
             </div>
+
+            {/* Description */}
+            <p className="text-sm text-gray-400 mb-6">
+              Generate a script with AI or use your own, then generate a video in seconds.
+            </p>
+
+            {/* Button */}
+            <Button
+              onClick={() => {
+                setIsBlankStory(false);
+                setCreateStoryStep('ai-form');
+              }}
+              className="w-full bg-orange-600 hover:bg-orange-700 text-white font-semibold text-base py-6"
+            >
+              Create with AI <ArrowRight className="w-5 h-5 ml-2" />
+            </Button>
           </div>
 
+          {/* Blank Story Option */}
+          <div className="flex flex-col bg-gray-800/50 border-2 border-gray-700 rounded-xl p-6 hover:border-orange-500/50 transition-all group">
+            {/* Icon */}
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-14 h-14 rounded-full bg-gray-700 flex items-center justify-center flex-shrink-0">
+                <FileText className="w-7 h-7 text-gray-300" />
+              </div>
+              <div>
+                <h3 className="text-xl font-bold text-white">Create Blank Video</h3>
+                <p className="text-sm text-gray-400">Start from scratch</p>
+              </div>
+            </div>
+
+            {/* Description */}
+            <p className="text-sm text-gray-400 mb-6">
+              Create a blank video and create scenes one by one.
+            </p>
+
+            {/* Button */}
+            <Button
+              onClick={createBlankStory}
+              disabled={creating}
+              className="w-full bg-gray-700 hover:bg-gray-600 text-white font-semibold text-base py-6"
+            >
+              {creating ? (
+                <>
+                  <Loader2 className="animate-spin h-5 w-5 mr-2" /> Creating...
+                </>
+              ) : (
+                <>
+                  Create Blank Video <ArrowRight className="w-5 h-5 ml-2" />
+                </>
+              )}
+            </Button>
+          </div>
+        </div>
+      );
+    }
+
+    // STEP 2: AI Form
+    return (
+      <div key="ai-form-content" className="space-y-6">
+        {/* Info Notice - Show when creating standalone story */}
+        {!selectedSeriesForCreate && (
+          <div className="bg-yellow-900/20 border border-yellow-700/50 rounded-lg p-3 flex items-start gap-2">
+            <Info className="w-4 h-4 text-yellow-400 flex-shrink-0 mt-0.5" />
+            <p className="text-xs text-yellow-300">
+              This story will be created independently and won't be part of any series.
+            </p>
+          </div>
+        )}
+
+        {/* Story Input Section */}
+        <div className="space-y-2">
+          <label className="text-base font-semibold text-white">Add your story or an idea</label>
           <textarea
             data-tour="story-prompt-input"
             placeholder="A young blacksmith forges a sword from fallen stars, awakening an ancient power that will either save the kingdom or doom it forever."
@@ -1031,236 +1087,96 @@ export default function Dashboard() {
             className="w-full p-4 bg-gray-800/50 border border-gray-700 rounded-lg resize-none focus:ring-2 focus:ring-orange-500 focus:border-orange-500 text-white placeholder:text-gray-500 text-base transition-all"
           />
         </div>
-      )}
 
-      {/* Show toggle for Blank story mode */}
-      {isBlankStory && (
-        <div className="flex items-center justify-between p-4 bg-gray-800/50 rounded-lg border border-gray-700">
-          <div>
-            <label className="text-sm font-semibold text-white">
-              Story Type
-            </label>
-            <p className="text-xs text-gray-500 mt-0.5">Choose how to create your story</p>
-          </div>
-
-          {/* Compact Toggle Buttons */}
-          <div className="inline-flex gap-1.5 p-1 bg-gray-800 rounded-lg border border-gray-700">
-            <button
-              type="button"
-              onClick={() => setIsBlankStory(false)}
-              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
-                !isBlankStory
-                  ? 'bg-orange-500 text-white shadow-sm'
-                  : 'text-gray-400 hover:text-gray-300'
-              }`}
-            >
-              AI Generated
-            </button>
-            <button
-              type="button"
-              onClick={() => setIsBlankStory(true)}
-              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
-                isBlankStory
-                  ? 'bg-orange-500 text-white shadow-sm'
-                  : 'text-gray-400 hover:text-gray-300'
-              }`}
-            >
-              Blank
-            </button>
-          </div>
+      {/* Number of Scenes */}
+      <div className="space-y-3">
+        <div className="flex justify-between items-center">
+          <label className="text-sm font-semibold text-white">
+            Number of scenes for your story
+            {creditBalance <= 10 && (
+              <span className="text-xs text-yellow-400 font-normal ml-2">(Max 5 scenes with low credits)</span>
+            )}
+          </label>
         </div>
-      )}
 
-      {/* Scenes - Only show for AI-generated stories */}
-      {!isBlankStory && (
-        <div className="space-y-2">
-          <label className="text-sm font-semibold text-white">Number of scenes for your story</label>
-          <div data-tour="scene-count-selector" className="grid grid-cols-3 gap-1.5">
-            {[5, 10, 15].map((scenes) => {
-            const estimatedSeconds = scenes * 8;
-            const estimatedMinutes = Math.floor(estimatedSeconds / 60);
-            const remainingSeconds = estimatedSeconds % 60;
-            const timeDisplay = estimatedMinutes > 0
-              ? `~${estimatedMinutes}m ${remainingSeconds}s`
-              : `~${estimatedSeconds}s`;
-            const estimatedCredits = scenes * (CREDIT_COSTS.IMAGE_PER_SCENE + CREDIT_COSTS.AUDIO_PER_SCENE);
-            const isDisabled = creditBalance <= 15 && scenes > 5;
-            return (
-              <button
-                key={scenes}
-                type="button"
-                onClick={() => {
-                  if (!isDisabled) {
-                    setSceneCount(scenes);
-                    setShowCustomScenes(false);
-                  }
-                }}
-                disabled={isDisabled}
-                className={`p-2.5 rounded-lg border-2 transition-all relative ${
-                  sceneCount === scenes && !showCustomScenes
-                    ? 'border-orange-500 bg-orange-500/10 text-orange-400'
-                    : isDisabled
-                    ? 'border-gray-800 bg-gray-900 text-gray-600 cursor-not-allowed opacity-50'
-                    : 'border-gray-700 bg-gray-800/50 text-gray-300 hover:border-orange-500/50 hover:bg-gray-800'
-                }`}
-              >
-                {isDisabled && (
-                  <div className="absolute top-0 left-0 right-0 bg-orange-900/30 text-orange-400 text-[8px] font-semibold py-0.5 rounded-t-md text-center">
-                    Low credits
-                  </div>
-                )}
-                <div className="text-xs font-bold mb-0.5">{scenes} scenes</div>
-                <div className="flex items-center justify-center gap-1 text-[9px] text-gray-500">
-                  <span>{timeDisplay}</span>
-                  <span>•</span>
-                  <span>{estimatedCredits} credits</span>
-                </div>
-              </button>
-            );
-          })}
+        {/* Slider with progress bar and milestones */}
+        <div className="relative" style={{ paddingTop: '4px', paddingBottom: '8px' }}>
+          {/* Progress line */}
+          <div className="absolute left-0 right-0 h-2 bg-gray-700 rounded-full" style={{ top: '24px' }}>
+            <div
+              className="h-full bg-gradient-to-r from-orange-500 to-orange-600 rounded-full transition-all duration-200"
+              style={{ width: `${((sceneCount - 1) / 29) * 100}%` }}
+            />
           </div>
 
-          {/* Custom scenes toggle */}
-          {!showCustomScenes && (
-            <button
-              type="button"
-              onClick={() => setShowCustomScenes(true)}
-              className="text-xs text-orange-400 hover:text-orange-300 underline"
-            >
-              Custom scene count
-            </button>
-          )}
-
-          {/* Custom scene slider - full width below buttons */}
-          {showCustomScenes && (
-            <div className="mt-2 p-2.5 bg-gray-800 rounded-lg border border-gray-700">
-              <div className="flex justify-between items-center mb-2">
-                <label className="text-xs font-medium text-gray-300">
-                  Scenes: <span className="text-orange-400 font-bold">{sceneCount}</span>
-                </label>
-                <div className="flex items-center gap-1 text-[9px] text-gray-400">
-                  <span>~{(() => {
-                    const estimatedSeconds = sceneCount * 8;
-                    const mins = Math.floor(estimatedSeconds / 60);
-                    const secs = estimatedSeconds % 60;
-                    return mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
-                  })()}</span>
-                  <span>•</span>
-                  <Coins className="w-2.5 h-2.5" />
-                  <span>~{sceneCount * (CREDIT_COSTS.IMAGE_PER_SCENE + CREDIT_COSTS.AUDIO_PER_SCENE)} credits</span>
+          {/* Milestone markers */}
+          <div className="absolute left-0 right-0 flex justify-between pointer-events-none" style={{ top: '24px' }}>
+            {[1, 5, 10, 15, 20, 25, 30].map((milestone) => {
+              const isActive = sceneCount >= milestone;
+              const position = ((milestone - 1) / 29) * 100;
+              return (
+                <div
+                  key={milestone}
+                  className="absolute flex flex-col items-center"
+                  style={{ left: `${position}%`, transform: 'translateX(-50%)', top: '-2px' }}
+                >
+                  {/* Milestone dot */}
+                  <div className={`w-2 h-2 rounded-full transition-all ${
+                    isActive
+                      ? 'bg-orange-500'
+                      : 'bg-gray-600'
+                  }`} />
+                  {/* Milestone label below */}
+                  <span className="text-[10px] text-gray-500 mt-1">{milestone}</span>
                 </div>
-              </div>
-              <Slider
-                value={[sceneCount]}
-                onValueChange={(value) => setSceneCount(value[0])}
-                min={3}
-                max={50}
-                step={1}
-                className="w-full"
-              />
+              );
+            })}
+          </div>
+
+          {/* Slider with value bubble */}
+          <div className="relative">
+            <Slider
+              value={[sceneCount]}
+              onValueChange={(value) => {
+                const newValue = value[0];
+                if (creditBalance <= 10 && newValue > 5) {
+                  setSceneCount(5);
+                  setShowCreditWarning(true);
+                } else {
+                  setSceneCount(newValue);
+                  setShowCreditWarning(false);
+                }
+              }}
+              min={1}
+              max={30}
+              step={1}
+              showValue={true}
+              className="w-full"
+            />
+          </div>
+
+          {/* Floating duration and credits below handler */}
+          <div
+            className="absolute transition-all duration-200"
+            style={{
+              left: `${((sceneCount - 1) / 29) * 100}%`,
+              transform: 'translateX(-50%)',
+              top: '46px'
+            }}
+          >
+            <div className="flex items-center gap-1.5 whitespace-nowrap px-2 py-1">
+              <span className="text-[10px] text-gray-400">~{Math.round(sceneCount * 12 / 60)}min</span>
+              <span className="text-[10px] text-gray-600">•</span>
+              <span className="text-[10px] text-orange-400">~{sceneCount * (CREDIT_COSTS.IMAGE_PER_SCENE + CREDIT_COSTS.AUDIO_PER_SCENE)} credits</span>
             </div>
-          )}
-
-          {creditBalance <= 15 && (
-            <p className="text-[10px] text-orange-400 mt-2">
-              You have {creditBalance} credits. Get more to create longer stories.
-            </p>
-          )}
-        </div>
-      )}
-
-      {/* Format */}
-      <div className="space-y-2">
-        <label className="text-sm font-semibold text-white">Format</label>
-        <div data-tour="format-selector" className="grid grid-cols-3 gap-1.5">
-          {[
-            { value: "9:16", icon: Smartphone, label: "9:16" },
-            { value: "16:9", icon: Monitor, label: "16:9" },
-            { value: "1:1", icon: Square, label: "1:1" }
-          ].map(({ value, icon: Icon, label }) => (
-            <button
-              key={value}
-              type="button"
-              onClick={() => setAspectRatio(value as any)}
-              className={`p-2.5 rounded-lg border-2 transition-all ${
-                aspectRatio === value
-                  ? 'border-orange-500 bg-orange-500/10'
-                  : 'border-gray-700 bg-gray-800/50 hover:border-orange-500/50 hover:bg-gray-800'
-              }`}
-            >
-              <Icon className={`w-4 h-4 mx-auto mb-0.5 ${aspectRatio === value ? 'text-orange-400' : 'text-gray-400'}`} />
-              <div className={`text-xs font-bold ${aspectRatio === value ? 'text-orange-400' : 'text-gray-300'}`}>
-                {label}
-              </div>
-            </button>
-          ))}
+          </div>
         </div>
       </div>
-
-      {/* Voice Selection */}
-      <div className="space-y-2">
-        <label className="text-sm font-semibold text-white">Voice</label>
-        {loadingVoices ? (
-          <div className="flex items-center justify-center py-8 bg-gray-800/50 border border-gray-700 rounded-lg">
-            <Loader2 className="w-4 h-4 animate-spin text-orange-500" />
-            <span className="ml-2 text-xs text-gray-400">Loading...</span>
-          </div>
-        ) : voices.length > 0 ? (
-          <div data-tour="voice-selector" className="grid grid-cols-4 gap-1.5">
-            {voices.slice(0, 8).map((voice) => (
-              <button
-                key={voice.id}
-                type="button"
-                onClick={() => setSelectedVoiceId(voice.id)}
-                className={`p-2.5 rounded-lg border-2 transition-all text-left relative group ${
-                  selectedVoiceId === voice.id
-                    ? 'border-orange-500 bg-orange-500/10'
-                    : 'border-gray-700 bg-gray-800/50 hover:border-orange-500/50 hover:bg-gray-800'
-                }`}
-              >
-                <div className={`text-xs font-bold mb-1 ${selectedVoiceId === voice.id ? 'text-orange-400' : 'text-white'}`}>
-                  {voice.name}
-                </div>
-                {voice.labels && formatVoiceLabels(voice.labels) && (
-                  <div className="text-[9px] text-gray-500 line-clamp-1 mb-1">
-                    {formatVoiceLabels(voice.labels)}
-                  </div>
-                )}
-                {/* Preview button */}
-                {voice.preview_url && (
-                  <div
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      playVoicePreview(voice.id, voice.preview_url);
-                    }}
-                    className={`w-full mt-1 px-2 py-1 rounded text-[9px] font-medium transition-colors text-center ${
-                      playingPreviewId === voice.id
-                        ? 'bg-orange-600 text-white'
-                        : 'bg-gray-700/80 hover:bg-gray-600 text-gray-300'
-                    }`}
-                  >
-                    {playingPreviewId === voice.id ? 'Stop' : 'Preview'}
-                  </div>
-                )}
-              </button>
-            ))}
-          </div>
-        ) : (
-          <div className="flex items-center justify-center py-8 bg-gray-800/50 border border-gray-700 rounded-lg">
-            <Loader2 className="w-4 h-4 animate-spin text-orange-500" />
-          </div>
-        )}
-      </div>
-
-      {/* Info note */}
-      <p className="text-[10px] text-gray-500 text-center -mt-1">
-        All settings adjustable after creation
-      </p>
 
       {/* Create Button */}
       <Button
         data-tour="create-button"
-        disabled={creating || (!isBlankStory && !newPrompt.trim())}
+        disabled={creating || !newPrompt.trim()}
         onClick={createStory}
         className="w-full bg-orange-600 hover:bg-orange-700 text-white font-bold text-base py-4 rounded-lg"
       >
@@ -1270,12 +1186,13 @@ export default function Dashboard() {
           </>
         ) : (
           <>
-            <Sparkles className="w-5 h-5 mr-2" /> {isBlankStory ? 'Create Blank Story' : 'Create Story'}
+            <Sparkles className="w-5 h-5 mr-2" /> Create Story
           </>
         )}
       </Button>
     </div>
-  );
+    );
+  };
 
   return (
     <TooltipProvider>
@@ -1616,22 +1533,30 @@ export default function Dashboard() {
                 <div className="flex items-center gap-2">
                   <Sparkles className="w-6 h-6 text-orange-500" />
                   <h1 className="text-3xl font-bold text-white">
-                    {selectedSeriesForCreate && selectedSeriesView
+                    {createStoryStep === 'ai-form'
+                      ? 'Generate with AI'
+                      : selectedSeriesForCreate && selectedSeriesView
                       ? `Create New Story in ${selectedSeriesView.title} series`
-                      : 'Create New Story'}
+                      : 'Create New Video'}
                   </h1>
                 </div>
                 <button
                   onClick={() => {
-                    setShowCreateStoryForm(false);
-                    setSelectedSeriesForCreate(null);
-                    setNewPrompt("");
-                    setIsBlankStory(false);
+                    if (createStoryStep === 'ai-form') {
+                      // Go back to choice screen
+                      setCreateStoryStep('choice');
+                    } else {
+                      // Close form completely
+                      setShowCreateStoryForm(false);
+                      setSelectedSeriesForCreate(null);
+                      setNewPrompt("");
+                      setIsBlankStory(false);
+                    }
                   }}
                   className="text-sm text-gray-400 hover:text-orange-400 transition-colors flex items-center gap-1 w-fit"
                 >
                   <ArrowLeft className="w-3 h-3" />
-                  <span>Back to {selectedSeriesView ? selectedSeriesView.title : 'Stories'}</span>
+                  <span>{createStoryStep === 'ai-form' ? 'Back to options' : `Back to ${selectedSeriesView ? selectedSeriesView.title : 'Stories'}`}</span>
                 </button>
               </div>
             ) : selectedCategory === "series" && selectedSeriesView ? (
