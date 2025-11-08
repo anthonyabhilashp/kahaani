@@ -1529,7 +1529,43 @@ export default function Dashboard() {
                 </button>
               </div>
             ) : showCreateStoryForm ? (
-              <div className="flex flex-col gap-1">
+              <div className="flex flex-col gap-3">
+                {/* Breadcrumb Navigation */}
+                <div className="flex items-center gap-2 text-sm">
+                  <button
+                    onClick={() => {
+                      setShowCreateStoryForm(false);
+                      setSelectedSeriesForCreate(null);
+                      setNewPrompt("");
+                      setIsBlankStory(false);
+                      setCreateStoryStep('choice');
+                    }}
+                    className="text-gray-400 hover:text-orange-400 transition-colors"
+                  >
+                    Dashboard
+                  </button>
+                  <ChevronRight className="w-4 h-4 text-gray-600" />
+                  {createStoryStep === 'ai-form' ? (
+                    <>
+                      <button
+                        onClick={() => setCreateStoryStep('choice')}
+                        className="text-gray-400 hover:text-orange-400 transition-colors"
+                      >
+                        Create New Video
+                      </button>
+                      <ChevronRight className="w-4 h-4 text-gray-600" />
+                      <span className="text-orange-400 font-medium">Generate with AI</span>
+                    </>
+                  ) : (
+                    <span className="text-orange-400 font-medium">
+                      {selectedSeriesForCreate && selectedSeriesView
+                        ? `Create Story in ${selectedSeriesView.title}`
+                        : 'Create New Video'}
+                    </span>
+                  )}
+                </div>
+
+                {/* Title */}
                 <div className="flex items-center gap-2">
                   <Sparkles className="w-6 h-6 text-orange-500" />
                   <h1 className="text-3xl font-bold text-white">
@@ -1540,24 +1576,6 @@ export default function Dashboard() {
                       : 'Create New Video'}
                   </h1>
                 </div>
-                <button
-                  onClick={() => {
-                    if (createStoryStep === 'ai-form') {
-                      // Go back to choice screen
-                      setCreateStoryStep('choice');
-                    } else {
-                      // Close form completely
-                      setShowCreateStoryForm(false);
-                      setSelectedSeriesForCreate(null);
-                      setNewPrompt("");
-                      setIsBlankStory(false);
-                    }
-                  }}
-                  className="text-sm text-gray-400 hover:text-orange-400 transition-colors flex items-center gap-1 w-fit"
-                >
-                  <ArrowLeft className="w-3 h-3" />
-                  <span>{createStoryStep === 'ai-form' ? 'Back to options' : `Back to ${selectedSeriesView ? selectedSeriesView.title : 'Stories'}`}</span>
-                </button>
               </div>
             ) : selectedCategory === "series" && selectedSeriesView ? (
               <div className="flex flex-col gap-1">
