@@ -3344,80 +3344,11 @@ export default function StoryDetailsPage() {
 
         {/* Main Content - Toggle on mobile, Side by Side on tablets/desktop */}
         <main className="flex-1 flex bg-black overflow-hidden relative">
-          {/* Left Timeline Section - Toggleable on mobile, 45% on tablets/desktop */}
-          <div className={`${mobileView === 'timeline' ? 'flex' : 'hidden'} md:flex md:w-[45%] border-r border-gray-800 bg-black overflow-y-auto flex-col w-full`}>
+          {/* Left Timeline Section - Toggleable on mobile, 50% on tablets/desktop */}
+          <div className={`${mobileView === 'timeline' ? 'flex' : 'hidden'} md:flex md:w-[50%] border-r border-gray-800 bg-black overflow-y-auto flex-col w-full`}>
             {leftPanelView === "scenes" ? (
               /* Scenes Timeline View */
                 <div className="relative">
-                  {/* Sticky Header with Bulk Actions */}
-                  <div className="sticky top-0 z-10 bg-black border-b border-gray-800 px-3 md:px-10 py-3">
-                    <div className="flex items-center gap-2 md:gap-3">
-                      {/* Generate All Images Button */}
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            data-tour="generate-images-button"
-                            onClick={() => setBulkImageDrawerOpen(true)}
-                            disabled={generatingImages}
-                            size="sm"
-                            className="flex-1 bg-orange-600 hover:bg-orange-700 text-white text-xs"
-                          >
-                            {generatingImages ? (
-                              <>
-                                <Loader2 className="w-3 h-3 animate-spin" />
-                                <span className="ml-1.5">Generating...</span>
-                              </>
-                            ) : (
-                              <>
-                                <Image className="w-3 h-3 mr-1.5" />
-                                <span>Images</span>
-                                <span className="ml-1.5 px-1.5 py-0.5 bg-orange-800/50 rounded text-[10px] font-semibold flex items-center gap-0.5">
-                                  <Coins className="w-2.5 h-2.5" />
-                                  {scenes.length * CREDIT_COSTS.IMAGE_PER_SCENE}
-                                </span>
-                              </>
-                            )}
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          <p>Generate images for all {scenes.length} scenes at once</p>
-                        </TooltipContent>
-                      </Tooltip>
-
-                      {/* Generate All Audio Button */}
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            data-tour="generate-audio-button"
-                            onClick={() => setBulkAudioDrawerOpen(true)}
-                            disabled={generatingAudios}
-                            size="sm"
-                            className="flex-1 bg-orange-600 hover:bg-orange-700 text-white text-xs"
-                          >
-                            {generatingAudios ? (
-                              <>
-                                <Loader2 className="w-3 h-3 animate-spin" />
-                                <span className="ml-1.5">Generating...</span>
-                              </>
-                            ) : (
-                              <>
-                                <Volume2 className="w-3 h-3 mr-1.5" />
-                                <span>Audio</span>
-                                <span className="ml-1.5 px-1.5 py-0.5 bg-orange-800/50 rounded text-[10px] font-semibold flex items-center gap-0.5">
-                                  <Coins className="w-2.5 h-2.5" />
-                                  {scenes.length * CREDIT_COSTS.AUDIO_PER_SCENE}
-                                </span>
-                              </>
-                            )}
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          <p>Generate audio for all {scenes.length} scenes at once</p>
-                        </TooltipContent>
-                      </Tooltip>
-                    </div>
-                  </div>
-
                   {/* Scenes List */}
                   <div className="px-3 md:px-10 py-3 space-y-3">
                     {scenes.map((scene, index) => (
@@ -3516,13 +3447,12 @@ export default function StoryDetailsPage() {
                         {editingScene === index ? (
                           <div className="flex flex-col gap-2 mb-2">
                             <div>
-                              <label className="text-[10px] text-gray-500 mb-1 block">Narration (Audio)</label>
                               <textarea
                                 value={editText}
                                 onChange={(e) => setEditText(e.target.value)}
                                 onClick={(e) => e.stopPropagation()}
                                 className="w-full px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-gray-300 text-xs focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent resize-none"
-                                rows={3}
+                                rows={5}
                                 autoFocus
                               />
                             </div>
@@ -3555,7 +3485,7 @@ export default function StoryDetailsPage() {
                         ) : (
                           <div className="flex flex-col gap-2 mb-2">
                             {/* Narration Text */}
-                            <div className="text-gray-400 text-xs line-clamp-3">
+                            <div className="text-gray-400 text-xs line-clamp-5">
                               {scene.text}
                             </div>
 
@@ -3725,46 +3655,48 @@ export default function StoryDetailsPage() {
                           </Tooltip>
                         )}
                       </div>
-                      {/* More Actions Menu */}
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <button
-                            onClick={(e) => e.stopPropagation()}
-                            className="p-1.5 bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white rounded transition-colors"
-                          >
-                            <MoreHorizontal className="w-3.5 h-3.5" />
-                          </button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end" className="w-40 bg-gray-900 border-gray-700">
-                          <DropdownMenuItem
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setEditingScene(index);
-                              setEditText(scene.text);
-                              setEditSceneDescription(""); // Scene descriptions no longer stored in DB
-                              // On mobile, open dialog instead of inline editing
-                              if (window.innerWidth < 768) {
-                                setMobileEditDialogOpen(true);
-                              }
-                            }}
-                            className="flex items-center gap-2 text-gray-300 hover:text-white hover:bg-gray-800 cursor-pointer"
-                          >
-                            <Pencil className="w-4 h-4" />
-                            <span>Edit Scene</span>
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setSceneToDelete(index);
-                              setDeleteDialogOpen(true);
-                            }}
-                            className="flex items-center gap-2 text-red-400 hover:text-red-300 hover:bg-gray-800 cursor-pointer"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                            <span>Delete Scene</span>
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
+                      <div className="flex gap-1.5">
+                        {/* Edit Button */}
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setEditingScene(index);
+                                setEditText(scene.text);
+                                setEditSceneDescription("");
+                                if (window.innerWidth < 768) {
+                                  setMobileEditDialogOpen(true);
+                                }
+                              }}
+                              className="p-1.5 bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white rounded transition-colors"
+                            >
+                              <Pencil className="w-3.5 h-3.5" />
+                            </button>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <p>Edit scene</p>
+                          </TooltipContent>
+                        </Tooltip>
+                        {/* Delete Button */}
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSceneToDelete(index);
+                                setDeleteDialogOpen(true);
+                              }}
+                              className="p-1.5 bg-gray-800 hover:bg-red-900 text-gray-400 hover:text-red-400 rounded transition-colors"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <p>Delete scene</p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -3789,6 +3721,57 @@ export default function StoryDetailsPage() {
                     <p>Add a new scene at the end</p>
                   </TooltipContent>
                 </Tooltip>
+              </div>
+
+              {/* Bulk Actions */}
+              <div className="sticky bottom-0 bg-black border-t-2 border-gray-500 pt-4 pb-3">
+                <div className="px-3 md:px-6 flex gap-3">
+                  <button
+                    data-tour="generate-images-button"
+                    onClick={() => setBulkImageDrawerOpen(true)}
+                    disabled={generatingImages}
+                    className="flex-1 flex items-center justify-center gap-2 h-9 bg-orange-600 hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded transition-colors"
+                  >
+                    {generatingImages ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Generating...
+                      </>
+                    ) : (
+                      <>
+                        <Image className="w-4 h-4" />
+                        Images
+                        <span className="ml-2 px-2 py-0.5 bg-white/10 rounded-full text-xs font-semibold flex items-center gap-1">
+                          <Coins className="w-3 h-3" />
+                          {scenes.length * CREDIT_COSTS.IMAGE_PER_SCENE}
+                        </span>
+                      </>
+                    )}
+                  </button>
+
+                  <button
+                    data-tour="generate-audio-button"
+                    onClick={() => setBulkAudioDrawerOpen(true)}
+                    disabled={generatingAudios}
+                    className="flex-1 flex items-center justify-center gap-2 h-9 bg-orange-600 hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded transition-colors"
+                  >
+                    {generatingAudios ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Generating...
+                      </>
+                    ) : (
+                      <>
+                        <Volume2 className="w-4 h-4" />
+                        Audio
+                        <span className="ml-2 px-2 py-0.5 bg-white/10 rounded-full text-xs font-semibold flex items-center gap-1">
+                          <Coins className="w-3 h-3" />
+                          {scenes.length * CREDIT_COSTS.AUDIO_PER_SCENE}
+                        </span>
+                      </>
+                    )}
+                  </button>
+                </div>
               </div>
                   </div>
                 </div>
@@ -4375,8 +4358,8 @@ export default function StoryDetailsPage() {
             )}
           </div>
 
-          {/* Right Preview Section - Toggleable on mobile, 55% on tablets/desktop */}
-          <div className={`${mobileView === 'preview' ? 'flex' : 'hidden'} md:flex flex-1 md:w-[55%] items-center justify-center p-3 bg-black w-full`}>
+          {/* Right Preview Section - Toggleable on mobile, 50% on tablets/desktop */}
+          <div className={`${mobileView === 'preview' ? 'flex' : 'hidden'} md:flex flex-1 md:w-[50%] items-center justify-center p-3 bg-black w-full`}>
             <div className="video-preview-container" data-tour="video-preview">
               {scenes[selectedScene]?.image_url ? (
                 <div className="relative">
