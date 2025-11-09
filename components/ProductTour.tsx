@@ -39,6 +39,7 @@ export function ProductTour({ run, onFinish, onStepChange, initialStepIndex = 0,
         </div>
       ),
       placement: 'bottom',
+      disableBeacon: true,
     },
     {
       target: '[data-tour="story-prompt-input"]',
@@ -49,6 +50,7 @@ export function ProductTour({ run, onFinish, onStepChange, initialStepIndex = 0,
         </div>
       ),
       placement: 'top',
+      disableBeacon: true,
     },
     {
       target: '[data-tour="scene-count-selector"]',
@@ -59,6 +61,7 @@ export function ProductTour({ run, onFinish, onStepChange, initialStepIndex = 0,
         </div>
       ),
       placement: 'top',
+      disableBeacon: true,
     },
     {
       target: '[data-tour="format-selector"]',
@@ -69,6 +72,7 @@ export function ProductTour({ run, onFinish, onStepChange, initialStepIndex = 0,
         </div>
       ),
       placement: 'top',
+      disableBeacon: true,
     },
     {
       target: '[data-tour="voice-selector"]',
@@ -79,6 +83,7 @@ export function ProductTour({ run, onFinish, onStepChange, initialStepIndex = 0,
         </div>
       ),
       placement: 'top',
+      disableBeacon: true,
     },
     {
       target: '[data-tour="create-button"]',
@@ -91,6 +96,7 @@ export function ProductTour({ run, onFinish, onStepChange, initialStepIndex = 0,
         </div>
       ),
       placement: 'top',
+      disableBeacon: true,
     },
   ];
 
@@ -115,6 +121,7 @@ export function ProductTour({ run, onFinish, onStepChange, initialStepIndex = 0,
         </div>
       ),
       placement: 'right',
+      disableBeacon: true,
     },
     {
       target: '[data-tour="scene-tile"]',
@@ -125,6 +132,7 @@ export function ProductTour({ run, onFinish, onStepChange, initialStepIndex = 0,
         </div>
       ),
       placement: 'right',
+      disableBeacon: true,
     },
     {
       target: '[data-tour="generate-images-button"]',
@@ -135,6 +143,7 @@ export function ProductTour({ run, onFinish, onStepChange, initialStepIndex = 0,
         </div>
       ),
       placement: 'bottom',
+      disableBeacon: true,
     },
     {
       target: '[data-tour="generate-audio-button"]',
@@ -145,6 +154,7 @@ export function ProductTour({ run, onFinish, onStepChange, initialStepIndex = 0,
         </div>
       ),
       placement: 'bottom',
+      disableBeacon: true,
     },
     {
       target: '[data-tour="captions-tab"]',
@@ -155,6 +165,7 @@ export function ProductTour({ run, onFinish, onStepChange, initialStepIndex = 0,
         </div>
       ),
       placement: 'right',
+      disableBeacon: true,
     },
     {
       target: '[data-tour="music-tab"]',
@@ -165,18 +176,20 @@ export function ProductTour({ run, onFinish, onStepChange, initialStepIndex = 0,
         </div>
       ),
       placement: 'right',
+      disableBeacon: true,
     },
     {
-      target: '[data-tour="video-preview"]',
+      target: '[data-tour="preview-button-mobile"], [data-tour="video-preview"]',
       content: (
         <div>
           <p className="text-gray-900 font-semibold mb-2">Video Preview</p>
           <p className="text-gray-600 text-sm">
-            The right panel shows your video preview. Play it to see your story come to life with all effects applied!
+            Click here to preview your video (on mobile). On desktop, the preview shows on the right. Play it to see your story come to life with all effects applied!
           </p>
         </div>
       ),
-      placement: 'left',
+      placement: 'right',
+      disableBeacon: true,
     },
     {
       target: '[data-tour="export-button"]',
@@ -192,6 +205,7 @@ export function ProductTour({ run, onFinish, onStepChange, initialStepIndex = 0,
         </div>
       ),
       placement: 'bottom',
+      disableBeacon: true,
     },
   ];
 
@@ -201,8 +215,8 @@ export function ProductTour({ run, onFinish, onStepChange, initialStepIndex = 0,
   const handleJoyrideCallback = (data: CallBackProps) => {
     const { status, index, action, type } = data;
 
-    if ([STATUS.FINISHED, STATUS.SKIPPED].includes(status as any)) {
-      // Tour completed or skipped
+    if ([STATUS.FINISHED, STATUS.SKIPPED].includes(status as any) || action === 'close') {
+      // Tour completed, skipped, or closed
       setStepIndex(0);
       onFinish();
     } else if (type === 'step:after') {

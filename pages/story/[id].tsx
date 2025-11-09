@@ -275,7 +275,7 @@ export default function StoryDetailsPage() {
   const [captionInactiveColor, setCaptionInactiveColor] = useState("#FFFFFF"); // White
   const [captionWordsPerBatch, setCaptionWordsPerBatch] = useState(3); // Default 3 words at a time
   const [captionTextTransform, setCaptionTextTransform] = useState<"none" | "uppercase" | "lowercase" | "capitalize">("none");
-  const [leftPanelView, setLeftPanelView] = useState<"scenes" | "captions" | "background_music" | "help">("scenes");
+  const [leftPanelView, setLeftPanelView] = useState<"scenes" | "captions" | "background_music" | "preview" | "help">("scenes");
   const [mobileView, setMobileView] = useState<"timeline" | "preview">("timeline"); // Mobile: show timeline or preview
   const [runTour, setRunTour] = useState(false); // Product tour state
 
@@ -3290,7 +3290,10 @@ export default function StoryDetailsPage() {
           {/* Scenes/Frames Icon */}
           <button
             data-tour="scenes-tab"
-            onClick={() => setLeftPanelView("scenes")}
+            onClick={() => {
+              setLeftPanelView("scenes");
+              setMobileView("timeline");
+            }}
             className={`w-10 h-10 flex flex-col items-center justify-center transition-colors ${
               leftPanelView === "scenes" ? "text-orange-400 bg-orange-900/20" : "text-gray-400 hover:text-white"
             }`}
@@ -3303,7 +3306,10 @@ export default function StoryDetailsPage() {
           {/* Captions Icon */}
           <button
             data-tour="captions-tab"
-            onClick={() => setLeftPanelView("captions")}
+            onClick={() => {
+              setLeftPanelView("captions");
+              setMobileView("timeline");
+            }}
             className={`w-10 h-10 flex flex-col items-center justify-center transition-colors ${
               leftPanelView === "captions" ? "text-orange-400 bg-orange-900/20" : "text-gray-400 hover:text-white"
             }`}
@@ -3316,7 +3322,10 @@ export default function StoryDetailsPage() {
           {/* Background Music Icon */}
           <button
             data-tour="music-tab"
-            onClick={() => setLeftPanelView("background_music")}
+            onClick={() => {
+              setLeftPanelView("background_music");
+              setMobileView("timeline");
+            }}
             className={`w-10 h-10 flex flex-col items-center justify-center transition-colors ${
               leftPanelView === "background_music" ? "text-orange-400 bg-orange-900/20" : "text-gray-400 hover:text-white"
             }`}
@@ -3329,9 +3338,28 @@ export default function StoryDetailsPage() {
             )}
           </button>
 
+          {/* Preview Icon - Mobile only */}
+          <button
+            data-tour="preview-button-mobile"
+            className={`md:hidden w-10 h-10 flex flex-col items-center justify-center transition-colors ${
+              leftPanelView === "preview" ? "text-orange-400 bg-orange-900/20" : "text-gray-400 hover:text-white"
+            }`}
+            onClick={() => {
+              setLeftPanelView("preview");
+              setMobileView("preview");
+            }}
+            title="Preview"
+          >
+            <Play className="w-5 h-5" />
+            <span className="text-[10px] mt-1">Preview</span>
+          </button>
+
           {/* Help Icon */}
           <button
-            onClick={() => setLeftPanelView("help")}
+            onClick={() => {
+              setLeftPanelView("help");
+              setMobileView("timeline");
+            }}
             className={`w-10 h-10 flex flex-col items-center justify-center transition-colors ${
               leftPanelView === "help" ? "text-orange-400 bg-orange-900/20" : "text-gray-400 hover:text-white"
             }`}
@@ -4195,7 +4223,7 @@ export default function StoryDetailsPage() {
                   )}
                 </div>
               </div>
-            ) : (
+            ) : leftPanelView === "help" ? (
               /* Help & Support View */
               <div className="p-3 md:p-6 pb-20">
                 {/* Breadcrumb Navigation */}
@@ -4355,7 +4383,7 @@ export default function StoryDetailsPage() {
                   </div>
                 )}
               </div>
-            )}
+            ) : null}
           </div>
 
           {/* Right Preview Section - Toggleable on mobile, 50% on tablets/desktop */}
@@ -4374,7 +4402,7 @@ export default function StoryDetailsPage() {
                     {/* Render all scene images but only show the selected one */}
                     {/* This prevents animation restart issues by mounting each image once */}
                     {scenes.map((scene, index) => (
-                      scene.image_url && (
+                      scene.image_url ? (
                         <img
                           key={`scene-${index}-${scene.image_url}`}
                           src={scene.image_url}
@@ -4389,7 +4417,7 @@ export default function StoryDetailsPage() {
                           loading="eager"
                           decoding="async"
                         />
-                      )
+                      ) : null
                     ))}
 
                     {/* Overlay Effects */}
@@ -4602,26 +4630,6 @@ export default function StoryDetailsPage() {
                 </div>
               )}
             </div>
-          </div>
-
-          {/* Mobile View Toggle Button - Only visible on mobile */}
-          <div className="md:hidden fixed bottom-20 right-4 z-30 flex gap-2">
-            <button
-              onClick={() => setMobileView(mobileView === 'timeline' ? 'preview' : 'timeline')}
-              className="bg-orange-600 hover:bg-orange-700 text-white px-4 py-3 rounded-full shadow-lg flex items-center gap-2 font-semibold"
-            >
-              {mobileView === 'timeline' ? (
-                <>
-                  <PlayCircle className="w-5 h-5" />
-                  <span>Preview</span>
-                </>
-              ) : (
-                <>
-                  <ImageIcon className="w-5 h-5" />
-                  <span>Timeline</span>
-                </>
-              )}
-            </button>
           </div>
         </main>
       </div>
