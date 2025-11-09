@@ -875,6 +875,8 @@ export default function Dashboard() {
     return (
       <div
         onClick={() => {
+          // Add series ID to URL as source of truth
+          router.push(`/?category=series&seriesId=${s.id}`);
           setSelectedSeriesView(s);
           // Load stories for this series with pagination
           fetchStories(true, s.id);
@@ -1177,7 +1179,7 @@ export default function Dashboard() {
       <Button
         data-tour="create-button"
         disabled={creating || !newPrompt.trim()}
-        onClick={createStory}
+        onClick={() => createStory(false)}
         className="w-full bg-orange-600 hover:bg-orange-700 text-white font-bold text-base py-4 rounded-lg"
       >
         {creating ? (
@@ -1226,14 +1228,19 @@ export default function Dashboard() {
                 </p>
                 <button
                   onClick={() => {
+                    console.log('🔵 Stories button clicked - clearing all and showing stories dashboard');
                     setSelectedCategory("faceless-videos");
+                    setSelectedSeriesView(null);
                     setShowCreditsPage(false);
                     setShowHelpPage(false);
+                    setShowCreateStoryForm(false); // Close create story dialog
                     setMobileMenuOpen(false);
-                    // Clear series filter when switching to Stories tab
-                    if (currentSeriesFilter !== null) {
-                      fetchStories(true, null);
-                    }
+                    // Always fetch all stories (clear series filter)
+                    console.log('📡 Fetching all stories (no series filter)');
+                    fetchStories(true, null);
+                    // Clear URL parameters AFTER state updates
+                    console.log('🔗 Clearing URL parameters');
+                    router.push('/', undefined, { shallow: true });
                   }}
                   className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors ${
                     selectedCategory === "faceless-videos"
@@ -1293,6 +1300,8 @@ export default function Dashboard() {
                   onClick={() => {
                     setShowCreditsPage(true);
                     setShowHelpPage(false);
+                    setShowCreateStoryForm(false); // Close create story dialog
+                    setSelectedSeriesView(null); // Clear series context
                     setMobileMenuOpen(false);
                   }}
                   className="w-full bg-orange-600 hover:bg-orange-700 text-white text-sm font-semibold"
@@ -1308,6 +1317,7 @@ export default function Dashboard() {
                 onClick={() => {
                   setShowHelpPage(true);
                   setShowCreditsPage(false);
+                  setShowCreateStoryForm(false); // Close create story dialog
                   setSelectedSeriesView(null);
                   setMobileMenuOpen(false);
                 }}
@@ -1371,9 +1381,19 @@ export default function Dashboard() {
             </p>
             <button
               onClick={() => {
+                console.log('🔵 Stories button (mobile) clicked - clearing all and showing stories dashboard');
                 setSelectedCategory("faceless-videos");
+                setSelectedSeriesView(null);
                 setShowCreditsPage(false);
                 setShowHelpPage(false);
+                setShowCreateStoryForm(false); // Close create story dialog
+                setMobileMenuOpen(false);
+                // Always fetch all stories (clear series filter)
+                console.log('📡 Fetching all stories (no series filter)');
+                fetchStories(true, null);
+                // Clear URL parameters AFTER state updates
+                console.log('🔗 Clearing URL parameters');
+                router.push('/', undefined, { shallow: true });
               }}
               className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all ${
                 selectedCategory === "faceless-videos"
@@ -1425,6 +1445,9 @@ export default function Dashboard() {
               onClick={() => {
                 setShowCreditsPage(true);
                 setShowHelpPage(false);
+                setShowCreateStoryForm(false); // Close create story dialog
+                setSelectedSeriesView(null); // Clear series context
+                setMobileMenuOpen(false);
               }}
               className="w-full bg-orange-600 hover:bg-orange-700 text-white text-sm font-semibold"
             >
@@ -1438,7 +1461,9 @@ export default function Dashboard() {
             onClick={() => {
               setShowHelpPage(true);
               setShowCreditsPage(false);
+              setShowCreateStoryForm(false); // Close create story dialog
               setSelectedSeriesView(null);
+              setMobileMenuOpen(false);
             }}
             variant="outline"
             className="w-full mt-3 border-gray-700 text-white hover:bg-gray-800 text-sm font-semibold"
@@ -1913,7 +1938,11 @@ export default function Dashboard() {
             <p className="text-gray-400 mb-8 max-w-md mx-auto">
               Ready to create your first story?
             </p>
-            <Button onClick={() => openCreateStoryDialog()} className="bg-orange-600 hover:bg-orange-700">
+            <Button onClick={() => {
+              const seriesId = (router.query.seriesId as string) || null;
+              console.log('✅ Create First Story clicked - seriesId from URL:', seriesId);
+              openCreateStoryDialog(seriesId);
+            }} className="bg-orange-600 hover:bg-orange-700">
               <Plus className="w-4 h-4 mr-2" /> Create First Story
             </Button>
           </div>
