@@ -86,7 +86,8 @@ const StoryCard = React.memo(({
             alt={story.title || "Story"}
             fill
             className="object-cover group-hover:scale-105 transition-transform duration-300"
-            loading="lazy"
+            priority
+            unoptimized
           />
         ) : (
           <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-gray-800 to-gray-900">
