@@ -292,11 +292,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       // Download image
       if (scene.image_url) {
-        const imgRes = await fetch(scene.image_url);
-        const buf = Buffer.from(await imgRes.arrayBuffer());
-        const imgPath = path.join(tmpDir, `scene-${index}.png`);
-        fs.writeFileSync(imgPath, buf);
-        sceneFiles.imagePath = imgPath;
+        try {
+          const imgRes = await fetch(scene.image_url);
+          if (!imgRes.ok) {
+            throw new Error(`HTTP ${imgRes.status}: ${imgRes.statusText}`);
+          }
+          const buf = Buffer.from(await imgRes.arrayBuffer());
+          const imgPath = path.join(tmpDir, `scene-${index}.png`);
+          fs.writeFileSync(imgPath, buf);
+          sceneFiles.imagePath = imgPath;
+          logger.info(`[${story_id}] 🖼️ Scene ${index + 1} image downloaded successfully`);
+        } catch (err: any) {
+          logger.error(`[${story_id}] ❌ Failed to download image for scene ${index + 1}: ${err.message}`);
+          logger.warn(`[${story_id}] ⚠️ Scene ${index + 1} will be skipped in video generation`);
+          // Don't set imagePath - scene will be skipped
+        }
+      } else {
+        logger.info(`[${story_id}] 📝 Scene ${index + 1} has no image URL - will be text-only`);
       }
 
       // Download audio if exists and get its duration
@@ -414,7 +426,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       logger.info(`[${story_id}] 🎬 Scene ${scene.sceneIndex + 1}: Applying "${effect.name}" effect`);
 
       // Use frame-by-frame rendering for smooth effects
-      if (effectId !== "none") {
+      if (effectId !== "none" && scene.imagePath) {
         const framesDir = path.join(tmpDir, `frames-${scene.sceneIndex}`);
         frameDirsToCleanup.push(framesDir);
 
@@ -536,6 +548,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       } else {
         // No motion effect - use static image with simple scaling
+
+        // Skip scene if no image exists
+        if (!scene.imagePath) {
+          logger.warn(`[${story_id}] ⚠️ Scene ${scene.sceneIndex + 1} has no image - skipping video generation for this scene`);
+          continue;
+        }
+
         const videoFilter = `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black`;
 
         // Check if scene has overlay
