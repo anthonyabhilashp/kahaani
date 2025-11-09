@@ -566,6 +566,15 @@ export default function StoryDetailsPage() {
         audio_url: scene.audio_url ? `${scene.audio_url}?t=${timestamp}&r=${random}` : scene.audio_url
       }));
 
+      if (forceMediaReload) {
+        console.log("📸 Force reload - updating scenes with new cache-busted URLs");
+        console.log("📸 Sample image URLs:", scenesWithTimestamp.slice(0, 2).map((s: any, i: number) => ({
+          index: i,
+          has_image: !!s.image_url,
+          url_preview: s.image_url ? s.image_url.substring(0, 120) : 'null'
+        })));
+      }
+
       setStory(data.story);
       setScenes(scenesWithTimestamp);
       setVideo(data.video);
@@ -1286,9 +1295,16 @@ export default function StoryDetailsPage() {
       // Set progress to complete
       setImageProgress({ current: scenes.length, total: scenes.length });
 
+      console.log("🔄 Image generation complete, refetching story data...");
+
+      // CRITICAL: Clear spinners BEFORE fetching to prevent UI state conflicts
+      setGeneratingSceneImage(new Set());
+
       // Refetch entire story details to get fresh data with all fields (without showing loading screen)
       // Force media reload to load new images
       await fetchStory(false, true);
+
+      console.log("✅ Story data refetched with new image URLs");
 
       // Refetch credit balance
       await refetchCredits();
@@ -1308,7 +1324,7 @@ export default function StoryDetailsPage() {
     } finally {
       setGeneratingImages(false);
       setImageProgress({ current: 0, total: 0 });
-      // Clear all scene spinners
+      // Ensure spinners are cleared (in case of error path)
       setGeneratingSceneImage(new Set());
     }
   };
@@ -3405,7 +3421,7 @@ export default function StoryDetailsPage() {
                   {/* Scenes List */}
                   <div className="px-3 md:px-10 py-3 space-y-3">
                     {scenes.map((scene, index) => (
-                <div key={`scene-wrapper-${scene.id}`}>
+                <div key={`scene-wrapper-${scene.id}-${scene.image_url || 'no-image'}`}>
                   {/* Add Scene Button - appears before each scene */}
                   <div className="flex justify-center my-2">
                     <Tooltip>

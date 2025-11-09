@@ -1624,17 +1624,20 @@ export default function Dashboard() {
                     </Tooltip>
                   )}
                 </div>
-                <button
-                  onClick={() => {
-                    setSelectedSeriesView(null);
-                    // Clear series filter and reload all stories
-                    fetchStories(true, null);
-                  }}
-                  className="text-sm text-gray-400 hover:text-orange-400 transition-colors flex items-center gap-1 w-fit"
-                >
-                  <ArrowLeft className="w-3 h-3" />
-                  <span>Back to Series Dashboard</span>
-                </button>
+                <div className="flex items-center gap-2 text-sm">
+                  <button
+                    onClick={() => {
+                      setSelectedSeriesView(null);
+                      // Clear series filter and reload all stories
+                      fetchStories(true, null);
+                    }}
+                    className="text-gray-400 hover:text-orange-400 transition-colors"
+                  >
+                    Series
+                  </button>
+                  <ChevronRight className="w-4 h-4 text-gray-600" />
+                  <span className="text-white font-medium">{selectedSeriesView.title}</span>
+                </div>
               </div>
             ) : (
               <h1 className="text-3xl font-bold text-white">
@@ -1950,32 +1953,6 @@ export default function Dashboard() {
           selectedSeriesView ? (
             // Viewing stories from a specific series
             <>
-              {/* Series Filter Banner - Mobile Responsive */}
-              <div className="mb-6 bg-gradient-to-r from-orange-900/20 to-orange-800/10 border border-orange-600/30 rounded-lg p-3 sm:p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-                <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
-                  <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-orange-600/20 flex items-center justify-center flex-shrink-0">
-                    <Film className="w-4 h-4 sm:w-5 sm:h-5 text-orange-400" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-[10px] sm:text-xs text-orange-300/70 font-medium uppercase tracking-wider">Viewing Series</p>
-                    <h2 className="text-base sm:text-lg font-semibold text-white truncate">{selectedSeriesView.title}</h2>
-                  </div>
-                </div>
-                <Button
-                  onClick={() => {
-                    setSelectedSeriesView(null);
-                    setCurrentSeriesFilter(null);
-                    fetchStories(true, null);
-                  }}
-                  variant="outline"
-                  size="sm"
-                  className="bg-gray-800/50 border-gray-700 text-gray-300 hover:bg-gray-700 hover:text-white hover:border-orange-500 w-full sm:w-auto flex-shrink-0"
-                >
-                  <span className="hidden sm:inline">View All Stories</span>
-                  <span className="sm:hidden">View All</span>
-                </Button>
-              </div>
-
               {stories.length === 0 && !loading ? (
                 <div className="text-center py-20">
                   <div className="mb-6 flex justify-center">
@@ -2080,15 +2057,6 @@ export default function Dashboard() {
           )
         ) : (
           <>
-            {/* Page Header for All Stories */}
-            <div className="mb-6 flex items-center justify-between">
-              <div>
-                <h2 className="text-2xl font-bold text-white">All Stories</h2>
-                <p className="text-sm text-gray-400 mt-1">
-                  {totalStories > 0 ? `${totalStories} ${totalStories === 1 ? 'story' : 'stories'} total` : 'No stories yet'}
-                </p>
-              </div>
-            </div>
 
             {/* Use memoized StoryGrid to prevent flickering on load more */}
             <StoryGrid
