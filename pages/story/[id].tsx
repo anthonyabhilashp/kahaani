@@ -2904,9 +2904,9 @@ export default function StoryDetailsPage() {
                   >
                     <ArrowLeft className="w-3 h-3" />
                     <span className="hidden sm:inline">
-                      {story?.series_id ? "← Back to Series" : "← Back to All Stories"}
+                      {story?.series_id ? "Back to Series" : "Back to All Stories"}
                     </span>
-                    <span className="sm:hidden">← Back</span>
+                    <span className="sm:hidden">Back</span>
                   </button>
                 </>
               )}
@@ -3209,76 +3209,6 @@ export default function StoryDetailsPage() {
                 </div>
               </PopoverContent>
             </Popover>
-            </div>
-
-            {/* Export Button with Video Link - Compact on mobile */}
-            <div className="flex items-center gap-1 md:gap-2">
-              <div className="flex items-center">
-                <Button
-                  data-tour="export-button"
-                  onClick={generateVideo}
-                  disabled={generatingVideo}
-                  size="sm"
-                  className={`bg-orange-600 hover:bg-orange-700 text-white font-medium min-w-0 md:min-w-[150px] px-2 md:px-4 ${generatingVideo ? 'rounded-r-none' : ''}`}
-                >
-                  {generatingVideo ? (
-                    <>
-                      <Loader2 className="w-3 h-3 md:w-4 md:h-4 mr-1 md:mr-2 animate-spin" />
-                      <span className="text-xs md:text-sm">{videoProgress > 0 ? `${videoProgress}%` : 'Starting...'}</span>
-                    </>
-                  ) : (
-                    <>
-                      <span className="hidden md:inline">Generate Video</span>
-                      <span className="md:hidden text-xs">Generate</span>
-                    </>
-                  )}
-                </Button>
-
-                {/* Dropdown menu when video is generating */}
-                {generatingVideo && (
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button
-                        size="sm"
-                        className="bg-orange-600 hover:bg-orange-700 text-white border-l border-orange-700 rounded-l-none px-2"
-                      >
-                        <ChevronDown className="w-3 h-3 md:w-4 md:h-4" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end" className="bg-gray-900 border-gray-700">
-                      <DropdownMenuItem
-                        onClick={() => setStuckJobDialogOpen(true)}
-                        className="text-white hover:bg-gray-800 cursor-pointer"
-                      >
-                        <X className="w-3 h-3 mr-2" />
-                        Stop Video Generation
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                )}
-              </div>
-
-              {/* Video link - Show if video exists */}
-              {video?.video_url && (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button
-                        onClick={() => {
-                          // Add timestamp to prevent caching and ensure latest video is shown
-                          const urlWithTimestamp = `${video.video_url}${video.video_url.includes('?') ? '&' : '?'}t=${Date.now()}`;
-                          window.open(urlWithTimestamp, '_blank');
-                        }}
-                        className="p-1 md:p-1.5 text-gray-400 hover:text-white transition-colors rounded hover:bg-gray-800"
-                        aria-label="View generated video"
-                      >
-                        <ExternalLink className="w-3 h-3 md:w-4 md:h-4" />
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      <p>View generated video</p>
-                    </TooltipContent>
-                  </Tooltip>
-              )}
             </div>
           </div>
         </div>
@@ -4387,16 +4317,16 @@ export default function StoryDetailsPage() {
           </div>
 
           {/* Right Preview Section - Toggleable on mobile, 50% on tablets/desktop */}
-          <div className={`${mobileView === 'preview' ? 'flex' : 'hidden'} md:flex flex-1 md:w-[50%] items-center justify-center p-3 bg-black w-full`}>
-            <div className="video-preview-container" data-tour="video-preview">
+          <div className={`${mobileView === 'preview' ? 'flex' : 'hidden'} md:flex flex-1 md:w-[50%] bg-black w-full flex-col relative overflow-hidden`}>
+            <div className="video-preview-container flex-1 flex items-center justify-center p-3 overflow-y-auto" data-tour="video-preview">
               {scenes[selectedScene]?.image_url ? (
                 <div className="relative">
                   {/* Main Preview Container */}
                   <div
-                    className="rounded-lg shadow-2xl overflow-hidden bg-black relative"
+                    className="rounded-lg shadow-2xl overflow-hidden bg-black relative max-w-[90vw] md:max-w-none"
                     style={{
                       width: `${getPreviewDimensions().width}px`,
-                      height: `${getPreviewDimensions().height}px`
+                      height: `${getPreviewDimensions().height}px`,
                     }}
                   >
                     {/* Render all scene images but only show the selected one */}
@@ -4629,6 +4559,83 @@ export default function StoryDetailsPage() {
                   <p className="text-sm text-gray-500">Generate images to see preview</p>
                 </div>
               )}
+            </div>
+
+            {/* Video Action Buttons - Fixed at bottom */}
+            <div className="sticky bottom-0 bg-black border-t-2 border-gray-500 pt-4 pb-3">
+              <div className="px-3 md:px-6 flex gap-3 flex-wrap">
+                {/* Generate Video Button - Always visible */}
+                <div className="flex items-center flex-1 min-w-[140px]">
+                  <button
+                    data-tour="export-button"
+                    onClick={generateVideo}
+                    disabled={generatingVideo}
+                    className={`flex-1 flex items-center justify-center gap-2 h-9 bg-orange-600 hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded transition-colors ${generatingVideo ? 'rounded-r-none' : ''}`}
+                  >
+                    {generatingVideo ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        {videoProgress > 0 ? `${videoProgress}%` : 'Starting...'}
+                      </>
+                    ) : (
+                      <>
+                        <PlayCircle className="w-4 h-4" />
+                        Generate Video
+                      </>
+                    )}
+                  </button>
+
+                  {/* Dropdown menu when video is generating */}
+                  {generatingVideo && (
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <button className="h-9 bg-orange-600 hover:bg-orange-700 text-white border-l border-orange-700 rounded-l-none px-2 flex items-center justify-center">
+                          <ChevronDown className="w-4 h-4" />
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="bg-gray-900 border-gray-700">
+                        <DropdownMenuItem
+                          onClick={() => setStuckJobDialogOpen(true)}
+                          className="text-white hover:bg-gray-800 cursor-pointer"
+                        >
+                          <X className="w-3 h-3 mr-2" />
+                          Stop Video Generation
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  )}
+                </div>
+
+                {/* Copy URL and Open in New Tab buttons - Only show when video exists */}
+                {video?.video_url && (
+                  <>
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(video.video_url);
+                        toast({
+                          title: "Copied!",
+                          description: "Video URL copied to clipboard",
+                        });
+                      }}
+                      className="flex-1 flex items-center justify-center gap-2 h-9 bg-orange-600 hover:bg-orange-700 text-white text-sm font-medium rounded transition-colors min-w-[120px]"
+                    >
+                      <Copy className="w-4 h-4" />
+                      Copy URL
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        const urlWithTimestamp = `${video.video_url}${video.video_url.includes('?') ? '&' : '?'}t=${Date.now()}`;
+                        window.open(urlWithTimestamp, '_blank');
+                      }}
+                      className="flex-1 flex items-center justify-center gap-2 h-9 bg-orange-600 hover:bg-orange-700 text-white text-sm font-medium rounded transition-colors min-w-[120px]"
+                    >
+                      <ExternalLink className="w-4 h-4" />
+                      Open
+                    </button>
+                  </>
+                )}
+              </div>
             </div>
           </div>
         </main>
