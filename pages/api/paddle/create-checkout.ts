@@ -46,10 +46,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Validate package is one of the allowed options
     const validPackages = [
-      { credits: 25, price: 20 },
-      { credits: 100, price: 70 },
-      { credits: 300, price: 180 },
-      { credits: 1000, price: 500 }
+      { credits: 250, price: 20 },
+      { credits: 1000, price: 70 },
+      { credits: 3000, price: 180 }
     ];
 
     const isValidPackage = validPackages.some(
