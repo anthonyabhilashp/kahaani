@@ -245,19 +245,24 @@ export function LandingPage() {
               </div>
             </div>
 
-            {/* Right: 3 Video Tiles - Stacked with 3D effect (desktop), Simple on mobile */}
-            <div className="relative flex justify-center lg:justify-end items-center h-[400px] lg:h-[500px]">
+            {/* Right: 3 Video Tiles - Stacked with 3D effect (desktop only) */}
+            <div className="relative hidden lg:flex justify-end items-center h-[500px]">
               {showcaseVideos.slice(0, 3).map((video, index) => {
                 const isPlaying = playingVideoId === video.id;
-                const rotations = ['rotate-[-8deg]', 'rotate-[4deg]', 'rotate-[-6deg]'];
-                const positions = ['z-30 translate-x-0', 'z-20 translate-x-[-40px]', 'z-10 translate-x-[-80px]'];
                 const volume = getVolume(video.id);
+
+                // Desktop positioning and rotation classes
+                const desktopClasses = index === 0
+                  ? 'lg:z-30 lg:translate-x-0 lg:rotate-[-8deg]'
+                  : index === 1
+                  ? 'lg:z-20 lg:translate-x-[-40px] lg:rotate-[4deg]'
+                  : 'lg:z-10 lg:translate-x-[-80px] lg:rotate-[-6deg]';
 
                 return (
                   <div
                     key={video.id}
-                    className={`group absolute w-[240px] ${positions[index]} ${isPlaying ? '' : rotations[index]} transition-all duration-300 hover:scale-105 hover:z-40 hover:rotate-0`}
-                    style={{ right: `${index * 140}px` }}
+                    className={`group flex-shrink-0 relative lg:absolute w-[200px] sm:w-[240px] ${desktopClasses} ${isPlaying ? 'lg:rotate-0' : ''} transition-all duration-300 hover:scale-105 hover:z-40 lg:hover:rotate-0`}
+                    style={{ right: index === 0 ? undefined : `${index * 140}px` }}
                   >
                     <div className="relative aspect-[9/16] rounded-xl overflow-hidden bg-gray-900 border-2 border-gray-800 hover:border-orange-500 shadow-2xl">
                       <video
