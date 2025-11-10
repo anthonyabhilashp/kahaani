@@ -231,6 +231,7 @@ export default function Dashboard() {
   const [creating, setCreating] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState("faceless-videos");
   const [sceneCount, setSceneCount] = useState(5);
+  const [aspectRatio, setAspectRatio] = useState<'9:16' | '16:9' | '1:1'>('9:16');
   const [showCreditWarning, setShowCreditWarning] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [seriesDialogOpen, setSeriesDialogOpen] = useState(false);
@@ -273,7 +274,6 @@ export default function Dashboard() {
 
   // New story creation options
   const [selectedVoiceId, setSelectedVoiceId] = useState<string>("ash"); // ElevenLabs Ash - default
-  const [aspectRatio, setAspectRatio] = useState<"9:16" | "1:1" | "16:9">("9:16");
   const [showCustomScenes, setShowCustomScenes] = useState(false);
   const [voices, setVoices] = useState<any[]>([]);
   const [loadingVoices, setLoadingVoices] = useState(false);
@@ -1092,87 +1092,108 @@ export default function Dashboard() {
           />
         </div>
 
-      {/* Number of Scenes */}
-      <div className="space-y-3">
-        <div className="flex justify-between items-center">
-          <label className="text-sm font-semibold text-white">
-            Number of scenes for your story
-            {creditBalance <= 10 && (
-              <span className="text-xs text-yellow-400 font-normal ml-2">(Max 5 scenes with low credits)</span>
-            )}
-          </label>
+      {/* Number of Scenes and Aspect Ratio */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+        {/* Number of Scenes */}
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <label className="text-sm font-semibold text-white">
+              Number of scenes for your story
+              {creditBalance <= 10 && (
+                <span className="text-xs text-yellow-400 font-normal ml-2">(Max 5 scenes with low credits)</span>
+              )}
+            </label>
+
+            {/* Duration and credits info - next to label */}
+            <div className="flex items-center gap-2 text-xs flex-shrink-0">
+              <span className="font-bold text-orange-400">{sceneCount} scenes</span>
+              <span className="text-gray-600">•</span>
+              <span className="text-gray-400 whitespace-nowrap">
+                ~{(() => {
+                  const totalSeconds = sceneCount * 10;
+                  const minutes = Math.floor(totalSeconds / 60);
+                  const seconds = totalSeconds % 60;
+                  if (minutes > 0 && seconds > 0) return `${minutes} min ${seconds} sec`;
+                  if (minutes > 0) return `${minutes} min`;
+                  return `${seconds} sec`;
+                })()}
+              </span>
+              <span className="text-gray-600">•</span>
+              <span className="text-gray-400 whitespace-nowrap">~{sceneCount * (CREDIT_COSTS.IMAGE_PER_SCENE + CREDIT_COSTS.AUDIO_PER_SCENE)} credits</span>
+            </div>
+          </div>
+
+          <Slider
+            value={[sceneCount]}
+            onValueChange={(value) => {
+              const newValue = value[0];
+              if (creditBalance <= 10 && newValue > 5) {
+                setSceneCount(5);
+                setShowCreditWarning(true);
+              } else {
+                setSceneCount(newValue);
+                setShowCreditWarning(false);
+              }
+            }}
+            min={1}
+            max={30}
+            step={1}
+            showValue={true}
+            className="w-full"
+          />
         </div>
 
-        {/* Slider with progress bar and milestones */}
-        <div className="relative" style={{ paddingTop: '4px', paddingBottom: '8px' }}>
-          {/* Progress line */}
-          <div className="absolute left-0 right-0 h-2 bg-gray-700 rounded-full" style={{ top: '24px' }}>
-            <div
-              className="h-full bg-gradient-to-r from-orange-500 to-orange-600 rounded-full transition-all duration-200"
-              style={{ width: `${((sceneCount - 1) / 29) * 100}%` }}
-            />
-          </div>
+        {/* Aspect Ratio */}
+        <div className="space-y-2">
+          <label className="text-sm font-semibold text-white block">
+            Video aspect ratio
+          </label>
 
-          {/* Milestone markers */}
-          <div className="absolute left-0 right-0 flex justify-between pointer-events-none" style={{ top: '24px' }}>
-            {[1, 5, 10, 15, 20, 25, 30].map((milestone) => {
-              const isActive = sceneCount >= milestone;
-              const position = ((milestone - 1) / 29) * 100;
-              return (
-                <div
-                  key={milestone}
-                  className="absolute flex flex-col items-center"
-                  style={{ left: `${position}%`, transform: 'translateX(-50%)', top: '-2px' }}
-                >
-                  {/* Milestone dot */}
-                  <div className={`w-2 h-2 rounded-full transition-all ${
-                    isActive
-                      ? 'bg-orange-500'
-                      : 'bg-gray-600'
-                  }`} />
-                  {/* Milestone label below */}
-                  <span className="text-[10px] text-gray-500 mt-1">{milestone}</span>
-                </div>
-              );
-            })}
-          </div>
+          <div className="flex gap-3">
+            <button
+              onClick={() => setAspectRatio('9:16')}
+              className={`flex-1 flex flex-col items-center justify-center gap-0.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all border-2 ${
+                aspectRatio === '9:16'
+                  ? 'bg-gray-800 border-orange-500 text-white'
+                  : 'bg-gray-800 border-gray-700 text-gray-400 hover:border-gray-600'
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                <div className={`w-2.5 h-4 rounded-sm ${aspectRatio === '9:16' ? 'bg-orange-500' : 'bg-gray-600'}`}></div>
+                <span className="font-semibold">9:16</span>
+              </div>
+              <span className="text-[10px] text-gray-500 whitespace-nowrap">TikTok, Reels</span>
+            </button>
 
-          {/* Slider with value bubble */}
-          <div className="relative">
-            <Slider
-              value={[sceneCount]}
-              onValueChange={(value) => {
-                const newValue = value[0];
-                if (creditBalance <= 10 && newValue > 5) {
-                  setSceneCount(5);
-                  setShowCreditWarning(true);
-                } else {
-                  setSceneCount(newValue);
-                  setShowCreditWarning(false);
-                }
-              }}
-              min={1}
-              max={30}
-              step={1}
-              showValue={true}
-              className="w-full"
-            />
-          </div>
+            <button
+              onClick={() => setAspectRatio('16:9')}
+              className={`flex-1 flex flex-col items-center justify-center gap-0.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all border-2 ${
+                aspectRatio === '16:9'
+                  ? 'bg-gray-800 border-orange-500 text-white'
+                  : 'bg-gray-800 border-gray-700 text-gray-400 hover:border-gray-600'
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                <div className={`w-4 h-2.5 rounded-sm ${aspectRatio === '16:9' ? 'bg-orange-500' : 'bg-gray-600'}`}></div>
+                <span className="font-semibold">16:9</span>
+              </div>
+              <span className="text-[10px] text-gray-500 whitespace-nowrap">YouTube</span>
+            </button>
 
-          {/* Floating duration and credits below handler */}
-          <div
-            className="absolute transition-all duration-200"
-            style={{
-              left: `${((sceneCount - 1) / 29) * 100}%`,
-              transform: 'translateX(-50%)',
-              top: '46px'
-            }}
-          >
-            <div className="flex items-center gap-1.5 whitespace-nowrap px-2 py-1">
-              <span className="text-[10px] text-gray-400">~{Math.round(sceneCount * 12 / 60)}min</span>
-              <span className="text-[10px] text-gray-600">•</span>
-              <span className="text-[10px] text-orange-400">~{sceneCount * (CREDIT_COSTS.IMAGE_PER_SCENE + CREDIT_COSTS.AUDIO_PER_SCENE)} credits</span>
-            </div>
+            <button
+              onClick={() => setAspectRatio('1:1')}
+              className={`flex-1 flex flex-col items-center justify-center gap-0.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all border-2 ${
+                aspectRatio === '1:1'
+                  ? 'bg-gray-800 border-orange-500 text-white'
+                  : 'bg-gray-800 border-gray-700 text-gray-400 hover:border-gray-600'
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                <div className={`w-3 h-3 rounded-sm ${aspectRatio === '1:1' ? 'bg-orange-500' : 'bg-gray-600'}`}></div>
+                <span className="font-semibold">1:1</span>
+              </div>
+              <span className="text-[10px] text-gray-500 whitespace-nowrap">Square</span>
+            </button>
           </div>
         </div>
       </div>
