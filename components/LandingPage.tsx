@@ -7,6 +7,7 @@ type ShowcaseVideo = {
   id: string;
   title: string;
   videoUrl: string;
+  thumbnailUrl: string;
   duration: string;
   category: string;
 };
@@ -41,6 +42,7 @@ export function LandingPage() {
       id: "1",
       title: "Cleopatra: Queen of the Nile",
       videoUrl: "https://lumyilzpjiwxuwkbgsia.supabase.co/storage/v1/object/public/showcase/cleopatra_queen_of_nile.mp4",
+      thumbnailUrl: "https://lumyilzpjiwxuwkbgsia.supabase.co/storage/v1/object/public/showcase/cleopatra_queen_of_nile.png",
       duration: "1:30",
       category: "History"
     },
@@ -48,6 +50,7 @@ export function LandingPage() {
       id: "2",
       title: "Motivational Wisdom",
       videoUrl: "https://lumyilzpjiwxuwkbgsia.supabase.co/storage/v1/object/public/showcase/motivation.mp4",
+      thumbnailUrl: "https://lumyilzpjiwxuwkbgsia.supabase.co/storage/v1/object/public/showcase/motivation.png",
       duration: "1:45",
       category: "Inspiration"
     },
@@ -55,6 +58,7 @@ export function LandingPage() {
       id: "3",
       title: "The Magical Paint Brush",
       videoUrl: "https://lumyilzpjiwxuwkbgsia.supabase.co/storage/v1/object/public/showcase/magical_paint_brush.mp4",
+      thumbnailUrl: "https://lumyilzpjiwxuwkbgsia.supabase.co/storage/v1/object/public/showcase/magical_paint_brush.png",
       duration: "2:00",
       category: "Fantasy"
     },
@@ -62,6 +66,7 @@ export function LandingPage() {
       id: "4",
       title: "Kids Moral Story",
       videoUrl: "https://lumyilzpjiwxuwkbgsia.supabase.co/storage/v1/object/public/showcase/kids_moral_story.mp4",
+      thumbnailUrl: "https://lumyilzpjiwxuwkbgsia.supabase.co/storage/v1/object/public/showcase/kids_moral_story.png",
       duration: "1:50",
       category: "Education"
     },
@@ -69,6 +74,7 @@ export function LandingPage() {
       id: "5",
       title: "Stoic Wisdom",
       videoUrl: "https://lumyilzpjiwxuwkbgsia.supabase.co/storage/v1/object/public/showcase/stoic_wisdom.mp4",
+      thumbnailUrl: "https://lumyilzpjiwxuwkbgsia.supabase.co/storage/v1/object/public/showcase/stoic_wisdom.png",
       duration: "1:35",
       category: "Philosophy"
     },
@@ -76,15 +82,17 @@ export function LandingPage() {
       id: "6",
       title: "Interesting Facts",
       videoUrl: "https://lumyilzpjiwxuwkbgsia.supabase.co/storage/v1/object/public/showcase/interesting_facts.mp4",
+      thumbnailUrl: "https://lumyilzpjiwxuwkbgsia.supabase.co/storage/v1/object/public/showcase/interesting_facts.png",
       duration: "1:55",
       category: "Knowledge"
     },
     {
       id: "7",
-      title: "Life of a Honeybee",
-      videoUrl: "https://lumyilzpjiwxuwkbgsia.supabase.co/storage/v1/object/public/showcase/life_of_honeybee.mp4",
+      title: "Fanny the Fox",
+      videoUrl: "https://lumyilzpjiwxuwkbgsia.supabase.co/storage/v1/object/public/showcase/fanny-the-fox.mp4",
+      thumbnailUrl: "https://lumyilzpjiwxuwkbgsia.supabase.co/storage/v1/object/public/showcase/fanny-the-fox.png",
       duration: "1:40",
-      category: "Nature"
+      category: "Story"
     }
   ];
 
@@ -267,6 +275,7 @@ export function LandingPage() {
                     <div className="relative aspect-[9/16] rounded-xl overflow-hidden bg-gray-900 border-2 border-gray-800 hover:border-orange-500 shadow-2xl">
                       <video
                         src={video.videoUrl}
+                        poster={video.thumbnailUrl}
                         preload="auto"
                         loop
                         playsInline
@@ -338,6 +347,7 @@ export function LandingPage() {
                     <div className="relative aspect-[9/16] rounded-lg overflow-hidden bg-gray-900 border border-gray-800 shadow-lg">
                       <video
                         src={video.videoUrl}
+                        poster={video.thumbnailUrl}
                         preload="metadata"
                         loop
                         playsInline
@@ -419,6 +429,7 @@ export function LandingPage() {
                   <div className="relative aspect-[9/16] rounded-xl overflow-hidden bg-gray-900 border-2 border-gray-800 hover:border-orange-500 transition-all shadow-xl hover:shadow-orange-500/40 hover:scale-105">
                     <video
                       src={video.videoUrl}
+                      poster={video.thumbnailUrl}
                       preload="auto"
                       loop
                       playsInline
