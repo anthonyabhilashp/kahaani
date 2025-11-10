@@ -19,12 +19,12 @@ export const knowledgeBase: KnowledgeArticle[] = [
   // GETTING STARTED
   {
     id: 'welcome-quick-start',
-    title: 'Welcome to Kahaani - Quick Start Guide',
+    title: 'Welcome to AI Video Gen - Quick Start Guide',
     category: 'getting-started',
     keywords: ['welcome', 'quick start', 'begin', 'introduction', 'getting started', 'first time', 'new user'],
-    content: `# Welcome to Kahaani!
+    content: `# Welcome to AI Video Gen!
 
-Kahaani is an AI-powered story creation platform that transforms your ideas into complete multimedia videos.
+AI Video Gen is an AI-powered story creation platform that transforms your ideas into complete multimedia videos.
 
 ## Quick Start (3 Steps):
 
@@ -108,7 +108,7 @@ That's it! Now you're ready to generate images and audio.`,
     keywords: ['credits', 'cost', 'pricing', 'how much', 'payment'],
     content: `# Understanding Credits
 
-Credits are Kahaani's currency for generating content.
+Credits are AI Video Gen's currency for generating content.
 
 ## How Credits Work:
 - 1 Credit = 1 Image OR 1 Audio generation
@@ -194,7 +194,7 @@ You'll need to regenerate images in the new format. Choose wisely at the start!`
     keywords: ['ai', 'scenes', 'generate', 'automatic', 'story generation'],
     content: `# How AI Generates Your Scenes
 
-Kahaani uses advanced AI to break your story into visual scenes.
+AI Video Gen uses advanced AI to break your story into visual scenes.
 
 ## The Process:
 
@@ -1408,7 +1408,7 @@ What to do when you run out of credits.
     keywords: ['browser', 'compatibility', 'not working', 'chrome', 'safari', 'firefox'],
     content: `# Browser Compatibility Issues
 
-Ensure your browser works with Kahaani.
+Ensure your browser works with AI Video Gen.
 
 ## Recommended Browsers:
 
@@ -1483,7 +1483,7 @@ Ensure your browser works with Kahaani.
 - Chrome: Settings → Privacy → Cookies
 - Safari: Preferences → Privacy → Cookies
 
-### Pop-ups (Allow for Kahaani):
+### Pop-ups (Allow for AI Video Gen):
 - Some features open new tabs
 - Allow pop-ups from kahaani.com
 
@@ -1504,7 +1504,7 @@ Ensure your browser works with Kahaani.
     keywords: ['credits', 'how credits work', 'credit system', 'usage'],
     content: `# How Credits Work
 
-Understand Kahaani's credit system.
+Understand AI Video Gen's credit system.
 
 ## Credit Basics:
 

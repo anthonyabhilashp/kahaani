@@ -56,7 +56,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           price_data: {
             currency: 'usd',
             product_data: {
-              name: `${credits} Kahaani Credits`,
+              name: `${credits} AI Video Gen Credits`,
               description: `${credits} credits for image and audio generation. 1 credit = 1 image or 1 audio narration.`,
             },
             unit_amount: price * 100, // Convert to cents

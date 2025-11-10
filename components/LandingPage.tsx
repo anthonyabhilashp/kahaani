@@ -168,7 +168,7 @@ export function LandingPage() {
               <div className="w-8 h-8 bg-gradient-to-br from-orange-500 to-pink-500 rounded-lg flex items-center justify-center">
                 <Sparkles className="w-5 h-5 text-white" />
               </div>
-              <h1 className="text-2xl font-bold text-white">Kahaani</h1>
+              <h1 className="text-2xl font-bold text-white">AI Video Gen</h1>
             </button>
             <div className="flex items-center gap-4">
               <Button
@@ -412,7 +412,7 @@ export function LandingPage() {
           <div className="text-center mb-12">
             <h2 className="text-3xl font-bold mb-3">More Examples</h2>
             <p className="text-lg text-gray-400">
-              Real videos created with Kahaani
+              Real videos created with AI Video Gen
             </p>
           </div>
 
@@ -810,10 +810,10 @@ export function LandingPage() {
               <div className="w-8 h-8 bg-gradient-to-br from-orange-500 to-pink-500 rounded-lg flex items-center justify-center">
                 <Sparkles className="w-5 h-5 text-white" />
               </div>
-              <span className="text-xl font-bold">Kahaani</span>
+              <span className="text-xl font-bold">AI Video Gen</span>
             </div>
             <div className="text-gray-500 text-sm">
-              © 2025 Kahaani. AI-powered story video creation.
+              © 2025 AI Video Gen. AI-powered story video creation.
             </div>
           </div>
         </div>

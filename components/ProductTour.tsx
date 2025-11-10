@@ -23,7 +23,7 @@ export function ProductTour({ run, onFinish, onStepChange, initialStepIndex = 0,
       target: 'body',
       content: (
         <div>
-          <h2 className="text-xl font-bold text-gray-900 mb-2">Welcome to Kahaani! 🎬</h2>
+          <h2 className="text-xl font-bold text-gray-900 mb-2">Welcome to AI Video Gen! 🎬</h2>
           <p className="text-gray-600 text-sm">Let's create your first AI-powered story in 60 seconds</p>
         </div>
       ),

@@ -50,7 +50,7 @@ export default function Login() {
           </div>
           <h2 className="text-3xl font-bold text-white">Welcome back</h2>
           <p className="mt-2 text-sm text-gray-400">
-            Sign in to your Kahaani account
+            Sign in to your AI Video Gen account
           </p>
         </div>
 

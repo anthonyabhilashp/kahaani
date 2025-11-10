@@ -331,7 +331,7 @@ export default function Dashboard() {
   // Auto-start product tour for new users
   useEffect(() => {
     if (!authLoading && user) {
-      const hasSeenTour = localStorage.getItem('kahaani_tour_completed');
+      const hasSeenTour = localStorage.getItem('aivideogen_tour_completed');
       if (!hasSeenTour) {
         // Start tour after a short delay to ensure page is loaded
         setTimeout(() => {
@@ -1390,7 +1390,7 @@ export default function Dashboard() {
               <Video className="w-6 h-6 text-white" />
             </div>
             <div>
-              <h1 className="text-2xl font-bold text-white">Kahaani</h1>
+              <h1 className="text-2xl font-bold text-white">AI Video Gen</h1>
               <p className="text-xs text-gray-500 mt-0.5">AI Story Studio</p>
             </div>
           </div>
@@ -1534,7 +1534,7 @@ export default function Dashboard() {
             >
               <Menu className="w-6 h-6" />
             </button>
-            <h1 className="text-xl font-bold text-white">Kahaani</h1>
+            <h1 className="text-xl font-bold text-white">AI Video Gen</h1>
             {/* Show New button only when not viewing a specific series (has + tile) and not on create form/credits/help page */}
             {!selectedSeriesView && !showCreateStoryForm && !showCreditsPage && !showHelpPage && (
               <Button
@@ -1854,7 +1854,7 @@ export default function Dashboard() {
                 {!helpSearchQuery && !selectedHelpCategory && (
                   <div className="mb-8 p-6 bg-gradient-to-br from-orange-900/30 to-orange-800/20 border border-orange-600/30 rounded-xl">
                     <div>
-                      <h3 className="text-lg font-semibold text-white mb-2">New to Kahaani?</h3>
+                      <h3 className="text-lg font-semibold text-white mb-2">New to AI Video Gen?</h3>
                       <p className="text-gray-400 text-sm mb-4">
                         Take a quick guided tour to learn how to create amazing AI-powered stories.
                         It only takes a minute!
@@ -2382,7 +2382,7 @@ export default function Dashboard() {
         onFinish={() => {
           setRunTour(false);
           setShowCreateStoryForm(false); // Close inline form when tour finishes
-          localStorage.setItem('kahaani_tour_completed', 'true');
+          localStorage.setItem('aivideogen_tour_completed', 'true');
         }}
         onStepChange={(stepIndex) => {
           // Open form when entering step 2 (story input field)
