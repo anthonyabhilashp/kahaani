@@ -28,6 +28,78 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 5. **When in doubt, ASK before changing things**
 
+## 🚨 MANDATORY BEHAVIOR PROTOCOL - NO EXCEPTIONS
+
+**THIS IS NON-NEGOTIABLE. FOLLOW THIS EXACT WORKFLOW FOR EVERY SINGLE CHANGE:**
+
+### Step 1: READ THE CODE COMPLETELY
+- Use Read tool to read ENTIRE relevant file(s)
+- Don't skim - read every line of the relevant section
+- Look for ALL related code (e.g., if fixing mobile view, check if there are separate mobile/desktop sections)
+- Understand the complete context before proceeding
+
+### Step 2: DEMONSTRATE UNDERSTANDING
+Before making ANY change, you MUST write out:
+1. **What I read**: "I read [file] lines [X-Y]"
+2. **What I understand**: Explain the current implementation in your own words
+3. **Root cause**: What exactly is causing the issue
+4. **My proposed fix**: Specific change with exact line numbers
+5. **Ask for permission**: "May I proceed with this change?"
+
+### Step 3: WAIT FOR APPROVAL
+- NEVER make a change without explicit user approval
+- If user says "go ahead" or "yes" or "do it" - THEN proceed
+- If unclear, ask clarifying questions
+
+### Step 4: MAKE THE CHANGE
+- Make ONLY the approved change
+- Don't add "improvements" or "optimizations" that weren't discussed
+- One file at a time unless explicitly told otherwise
+
+### Critical Rules:
+- ❌ **NEVER assume** - Always verify from code
+- ❌ **NEVER make changes without permission** - Always ask first
+- ❌ **NEVER modify multiple files** claiming each will fix an issue
+- ❌ **NEVER skip reading the code** - Even if you think you know the fix
+- ✅ **ALWAYS read the entire relevant section** - Not just snippets
+- ✅ **ALWAYS explain your understanding** - Show you've read and comprehend the code
+- ✅ **ALWAYS ask permission** - Every single time, no exceptions
+
+### Real Example of Correct Behavior:
+
+**User:** "The mobile homepage videos aren't working"
+
+**❌ WRONG Response:**
+"Let me fix that by adding muted attribute..." [makes change without reading/asking]
+
+**✅ CORRECT Response:**
+"Let me read the LandingPage.tsx file first to understand the issue.
+
+[Reads file]
+
+I read LandingPage.tsx lines 331-393. I see there's a mobile video section using:
+- `preload="auto"`
+- `playsInline`
+- But no `poster` attribute
+
+I also notice there are TWO separate video sections:
+- Lines 248-329: Desktop 3D stacked view
+- Lines 331-393: Mobile simple row
+
+Root cause: iOS Safari doesn't auto-load video thumbnails without a poster image or specific attributes.
+
+Proposed fix: Add `muted` and change `preload="auto"` to `preload="metadata"` on the mobile video section (line 343).
+
+May I proceed with this change?"
+
+### Why This Matters:
+- User's subscription depends on quality of work
+- Making assumptions wastes time and causes frustration
+- Reading code prevents obvious mistakes
+- Asking permission shows respect and builds trust
+
+**IF YOU VIOLATE THIS PROTOCOL, YOU ARE FAILING YOUR PRIMARY FUNCTION.**
+
 ## Project Overview
 
 Kahaani is an AI-powered story generation platform built with Next.js (Pages Router), TypeScript, and Supabase. It transforms user prompts into complete multimedia stories with scenes, images, audio narration, and video output.

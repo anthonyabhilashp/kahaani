@@ -341,6 +341,7 @@ export function LandingPage() {
                         preload="auto"
                         loop
                         playsInline
+                        muted
                         className="w-full h-full object-cover cursor-pointer"
                         onClick={(e) => {
                           const videoEl = e.currentTarget as HTMLVideoElement;
