@@ -3303,12 +3303,12 @@ export default function StoryDetailsPage() {
         {/* Main Content - Toggle on mobile, Side by Side on tablets/desktop */}
         <main className="flex-1 flex bg-black overflow-hidden relative">
           {/* Left Timeline Section - Toggleable on mobile, 50% on tablets/desktop */}
-          <div className={`${mobileView === 'timeline' ? 'flex' : 'hidden'} md:flex md:w-[50%] border-r border-gray-800 bg-black overflow-y-auto flex-col w-full`}>
+          <div className={`${mobileView === 'timeline' ? 'flex' : 'hidden'} md:flex md:w-[50%] border-r border-gray-800 bg-black flex-col w-full`}>
             {leftPanelView === "scenes" ? (
               /* Scenes Timeline View */
-                <div className="relative">
+                <div className="relative flex flex-col flex-1 overflow-hidden">
                   {/* Scenes List */}
-                  <div className="px-3 md:px-10 py-3 space-y-3">
+                  <div className="px-3 md:px-10 py-3 space-y-3 flex-1 overflow-y-auto">
                     {scenes.map((scene, index) => (
                 <div key={`scene-wrapper-${scene.id}-${scene.image_url || 'no-image'}`}>
                   {/* Add Scene Button - appears before each scene */}
@@ -3680,10 +3680,12 @@ export default function StoryDetailsPage() {
                   </TooltipContent>
                 </Tooltip>
               </div>
+                  </div>
 
               {/* Bulk Actions */}
-              <div className="sticky bottom-0 bg-black border-t-2 border-gray-500 pt-4 pb-3">
-                <div className="px-3 md:px-6 flex gap-3">
+              <div className="sticky bottom-0 bg-black pb-3">
+                <div className="border-t-2 border-gray-500"></div>
+                <div className="px-3 md:px-6 flex gap-3 pt-4">
                   <button
                     data-tour="generate-images-button"
                     onClick={() => setBulkImageDrawerOpen(true)}
@@ -3698,7 +3700,7 @@ export default function StoryDetailsPage() {
                     ) : (
                       <>
                         <Image className="w-4 h-4" />
-                        Images
+                        Generate Images
                         <span className="ml-2 px-2 py-0.5 bg-white/10 rounded-full text-xs font-semibold flex items-center gap-1">
                           <Coins className="w-3 h-3" />
                           {scenes.length * CREDIT_COSTS.IMAGE_PER_SCENE}
@@ -3721,7 +3723,7 @@ export default function StoryDetailsPage() {
                     ) : (
                       <>
                         <Volume2 className="w-4 h-4" />
-                        Audio
+                        Generate Audio
                         <span className="ml-2 px-2 py-0.5 bg-white/10 rounded-full text-xs font-semibold flex items-center gap-1">
                           <Coins className="w-3 h-3" />
                           {scenes.length * CREDIT_COSTS.AUDIO_PER_SCENE}
@@ -3731,7 +3733,6 @@ export default function StoryDetailsPage() {
                   </button>
                 </div>
               </div>
-                  </div>
                 </div>
             ) : leftPanelView === "captions" ? (
               /* Captions Settings View */
@@ -4421,7 +4422,7 @@ export default function StoryDetailsPage() {
                       <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 via-transparent to-transparent pb-3 pt-16">
                         {/* Progress Bar */}
                         {getTotalDuration() > 0 && (
-                          <div className="px-3 pb-2 group/seek">
+                          <div className="px-4 pb-3 group/seek">
                             <Slider
                               value={[totalProgress]}
                               max={getTotalDuration()}
@@ -4436,8 +4437,8 @@ export default function StoryDetailsPage() {
                         )}
 
                         {/* Control Bar */}
-                        <div className="flex items-center justify-between px-3">
-                          <div className="flex items-center gap-1">
+                        <div className="flex items-center justify-between px-4">
+                          <div className="flex items-center gap-3">
                             {/* Play/Pause */}
                             <button
                               onClick={isPlayingPreview ? stopVideoPreview : startVideoPreview}
@@ -4562,10 +4563,11 @@ export default function StoryDetailsPage() {
             </div>
 
             {/* Video Action Buttons - Fixed at bottom */}
-            <div className="sticky bottom-0 bg-black border-t-2 border-gray-500 pt-4 pb-3">
-              <div className="px-3 md:px-6 flex gap-3 flex-wrap">
+            <div className="sticky bottom-0 bg-black pb-3">
+              <div className="border-t-2 border-gray-500"></div>
+              <div className="px-3 md:px-6 flex gap-3 pt-4">
                 {/* Generate Video Button - Always visible */}
-                <div className="flex items-center flex-1 min-w-[140px]">
+                <div className="flex items-center flex-1">
                   <button
                     data-tour="export-button"
                     onClick={generateVideo}
@@ -4617,7 +4619,7 @@ export default function StoryDetailsPage() {
                           description: "Video URL copied to clipboard",
                         });
                       }}
-                      className="flex-1 flex items-center justify-center gap-2 h-9 bg-orange-600 hover:bg-orange-700 text-white text-sm font-medium rounded transition-colors min-w-[120px]"
+                      className="flex-1 flex items-center justify-center gap-2 h-9 bg-orange-600 hover:bg-orange-700 text-white text-sm font-medium rounded transition-colors"
                     >
                       <Copy className="w-4 h-4" />
                       Copy URL
@@ -4628,7 +4630,7 @@ export default function StoryDetailsPage() {
                         const urlWithTimestamp = `${video.video_url}${video.video_url.includes('?') ? '&' : '?'}t=${Date.now()}`;
                         window.open(urlWithTimestamp, '_blank');
                       }}
-                      className="flex-1 flex items-center justify-center gap-2 h-9 bg-orange-600 hover:bg-orange-700 text-white text-sm font-medium rounded transition-colors min-w-[120px]"
+                      className="flex-1 flex items-center justify-center gap-2 h-9 bg-orange-600 hover:bg-orange-700 text-white text-sm font-medium rounded transition-colors"
                     >
                       <ExternalLink className="w-4 h-4" />
                       Open
