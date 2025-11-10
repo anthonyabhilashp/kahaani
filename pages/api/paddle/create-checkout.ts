@@ -61,6 +61,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Create Paddle checkout
     const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3005';
+    console.log('🔍 DEBUG - Using appUrl:', appUrl);
+    console.log('🔍 DEBUG - Checkout URL will be:', `${appUrl}/credits?success=true`);
 
     const checkout = await paddle.transactions.create({
       items: [
