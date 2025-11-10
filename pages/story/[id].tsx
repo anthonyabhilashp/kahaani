@@ -3251,7 +3251,7 @@ export default function StoryDetailsPage() {
 
       <div className="flex flex-1 overflow-hidden flex-col md:flex-row">
         {/* Left Sidebar - Tool Icons (Bottom on mobile, Left on tablets/desktop) */}
-        <aside className="md:w-20 bg-black border-t md:border-t-0 md:border-r border-gray-800 flex md:flex-col items-center py-2 md:py-6 gap-4 md:gap-6 order-last md:order-first justify-around md:justify-start">
+        <aside className="md:w-20 bg-black border-t md:border-t-0 md:border-r border-gray-800 flex md:flex-col items-center py-2 md:py-6 gap-4 md:gap-6 order-last md:order-first justify-around md:justify-start flex-shrink-0">
           {/* Scenes/Frames Icon */}
           <button
             data-tour="scenes-tab"
@@ -3336,9 +3336,9 @@ export default function StoryDetailsPage() {
         </aside>
 
         {/* Main Content - Toggle on mobile, Side by Side on tablets/desktop */}
-        <main className="flex-1 flex bg-black overflow-hidden relative">
+        <main className="flex-1 flex bg-black overflow-hidden relative min-h-0">
           {/* Left Timeline Section - Toggleable on mobile, 50% on tablets/desktop */}
-          <div className={`${mobileView === 'timeline' ? 'flex' : 'hidden'} md:flex md:w-[50%] border-r border-gray-800 bg-black flex-col w-full`}>
+          <div className={`${mobileView === 'timeline' ? 'flex' : 'hidden'} md:flex md:w-[50%] border-r border-gray-800 bg-black flex-col w-full min-h-0`}>
             {leftPanelView === "scenes" ? (
               /* Scenes Timeline View */
                 <div className="relative flex flex-col flex-1 overflow-hidden">
@@ -3735,7 +3735,7 @@ export default function StoryDetailsPage() {
                     ) : (
                       <>
                         <Image className="w-4 h-4" />
-                        Generate Images
+                        Images
                         <span className="ml-2 px-2 py-0.5 bg-white/10 rounded-full text-xs font-semibold flex items-center gap-1">
                           <Coins className="w-3 h-3" />
                           {scenes.length * CREDIT_COSTS.IMAGE_PER_SCENE}
@@ -3758,7 +3758,7 @@ export default function StoryDetailsPage() {
                     ) : (
                       <>
                         <Volume2 className="w-4 h-4" />
-                        Generate Audio
+                        Audio
                         <span className="ml-2 px-2 py-0.5 bg-white/10 rounded-full text-xs font-semibold flex items-center gap-1">
                           <Coins className="w-3 h-3" />
                           {scenes.length * CREDIT_COSTS.AUDIO_PER_SCENE}
