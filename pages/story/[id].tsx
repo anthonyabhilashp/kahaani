@@ -2950,17 +2950,6 @@ export default function StoryDetailsPage() {
 
           {/* Right side: Controls - Compact on mobile */}
           <div className="flex items-center gap-1.5 md:gap-3 flex-shrink-0">
-            {/* Credit Balance Display */}
-            <div className="flex items-center gap-1.5 px-2 md:px-3 py-1 md:py-1.5 bg-gray-800 border border-gray-700 rounded-lg">
-              <Coins className="w-3 h-3 md:w-4 md:h-4 text-orange-400" />
-              <span className="text-xs md:text-sm font-semibold text-white">
-                {creditBalance}
-              </span>
-              <span className="hidden md:inline text-xs text-gray-400">
-                credits
-              </span>
-            </div>
-
             {/* Desktop: Story Default Voice Selector */}
             <div className="hidden md:block">
             <Popover open={storyVoicePopoverOpen} onOpenChange={setStoryVoicePopoverOpen}>
@@ -3244,6 +3233,17 @@ export default function StoryDetailsPage() {
                 </div>
               </PopoverContent>
             </Popover>
+            </div>
+
+            {/* Credit Balance Display */}
+            <div className="flex items-center gap-1.5 px-2 md:px-3 py-1 md:py-1.5 bg-gray-800 border border-gray-700 rounded-lg">
+              <Coins className="w-3 h-3 md:w-4 md:h-4 text-orange-400" />
+              <span className="text-xs md:text-sm font-semibold text-white">
+                {creditBalance}
+              </span>
+              <span className="hidden md:inline text-xs text-gray-400">
+                credits
+              </span>
             </div>
           </div>
         </div>
