@@ -73,6 +73,8 @@ export default function StoryDetailsPage() {
   const [generatingSceneAudio, setGeneratingSceneAudio] = useState<Set<number>>(new Set());
   const [generatingVideo, setGeneratingVideo] = useState(false);
   const [videoProgress, setVideoProgress] = useState(0);
+  const [downloadingVideo, setDownloadingVideo] = useState(false);
+  const [downloadConfirmOpen, setDownloadConfirmOpen] = useState(false);
   const videoProgressIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const [imageStyle, setImageStyle] = useState<string>("cinematic illustration");
   const [editingScene, setEditingScene] = useState<number | null>(null);
@@ -1774,6 +1776,39 @@ export default function StoryDetailsPage() {
         newSet.delete(sceneIndex);
         return newSet;
       });
+    }
+  };
+
+  const handleDownloadVideo = async () => {
+    if (!video?.video_url) return;
+
+    setDownloadConfirmOpen(false);
+    setDownloadingVideo(true);
+
+    try {
+      const response = await fetch(video.video_url);
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${story?.title || 'video'}.mp4`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      toast({
+        title: "Download started!",
+        description: "Your video is being downloaded",
+      });
+    } catch (error) {
+      console.error('Download failed:', error);
+      toast({
+        title: "Download failed",
+        description: "Please try again or use 'Open in New Tab'",
+        variant: "destructive"
+      });
+    } finally {
+      setDownloadingVideo(false);
     }
   };
 
@@ -4608,34 +4643,59 @@ export default function StoryDetailsPage() {
                   )}
                 </div>
 
-                {/* Copy URL and Open in New Tab buttons - Only show when video exists */}
+                {/* Download button with dropdown - Only show when video exists */}
                 {video?.video_url && (
-                  <>
+                  <div className="flex items-center flex-1">
                     <button
-                      onClick={() => {
-                        navigator.clipboard.writeText(video.video_url);
-                        toast({
-                          title: "Copied!",
-                          description: "Video URL copied to clipboard",
-                        });
-                      }}
-                      className="flex-1 flex items-center justify-center gap-2 h-9 bg-orange-600 hover:bg-orange-700 text-white text-sm font-medium rounded transition-colors"
+                      onClick={() => setDownloadConfirmOpen(true)}
+                      disabled={downloadingVideo}
+                      className="flex-1 flex items-center justify-center gap-2 h-9 bg-orange-600 hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded rounded-r-none transition-colors"
                     >
-                      <Copy className="w-4 h-4" />
-                      Copy URL
+                      {downloadingVideo ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          Downloading...
+                        </>
+                      ) : (
+                        <>
+                          <Download className="w-4 h-4" />
+                          Download
+                        </>
+                      )}
                     </button>
-
-                    <button
-                      onClick={() => {
-                        const urlWithTimestamp = `${video.video_url}${video.video_url.includes('?') ? '&' : '?'}t=${Date.now()}`;
-                        window.open(urlWithTimestamp, '_blank');
-                      }}
-                      className="flex-1 flex items-center justify-center gap-2 h-9 bg-orange-600 hover:bg-orange-700 text-white text-sm font-medium rounded transition-colors"
-                    >
-                      <ExternalLink className="w-4 h-4" />
-                      Open
-                    </button>
-                  </>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <button className="h-9 bg-orange-600 hover:bg-orange-700 text-white border-l border-orange-700 rounded-l-none px-2 flex items-center justify-center">
+                          <ChevronDown className="w-4 h-4" />
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="bg-gray-900 border-gray-700">
+                        <DropdownMenuItem
+                          onClick={() => {
+                            navigator.clipboard.writeText(video.video_url);
+                            toast({
+                              title: "Copied!",
+                              description: "Video URL copied to clipboard",
+                            });
+                          }}
+                          className="text-white hover:bg-gray-800 cursor-pointer"
+                        >
+                          <Copy className="w-3 h-3 mr-2" />
+                          Copy URL
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onClick={() => {
+                            const urlWithTimestamp = `${video.video_url}${video.video_url.includes('?') ? '&' : '?'}t=${Date.now()}`;
+                            window.open(urlWithTimestamp, '_blank');
+                          }}
+                          className="text-white hover:bg-gray-800 cursor-pointer"
+                        >
+                          <ExternalLink className="w-3 h-3 mr-2" />
+                          Open in New Tab
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
                 )}
               </div>
             </div>
@@ -6367,6 +6427,29 @@ export default function StoryDetailsPage() {
           }
         }}
       />
+
+      {/* Download Confirmation Dialog */}
+      <AlertDialog open={downloadConfirmOpen} onOpenChange={setDownloadConfirmOpen}>
+        <AlertDialogContent className="bg-gray-900 border-gray-700">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-white">Download Video?</AlertDialogTitle>
+            <AlertDialogDescription className="text-gray-400">
+              Your video will be downloaded to your device. Depending on the video size, this may take a few moments.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="bg-gray-800 text-white hover:bg-gray-700 border-gray-700">
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleDownloadVideo}
+              className="bg-orange-600 hover:bg-orange-700 text-white"
+            >
+              Download
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
     </TooltipProvider>
   );

@@ -245,81 +245,8 @@ export function LandingPage() {
               </div>
             </div>
 
-            {/* Right: Video Tiles - Mobile: Simple Grid, Desktop: 3D Stacked */}
-            {/* Mobile Grid */}
-            <div className="grid grid-cols-2 gap-3 lg:hidden">
-              {showcaseVideos.slice(0, 4).map((video) => {
-                const isPlaying = playingVideoId === video.id;
-                const volume = getVolume(video.id);
-
-                return (
-                  <div key={video.id} className="group relative">
-                    <div className="relative aspect-[9/16] rounded-lg overflow-hidden bg-gray-900 border border-gray-800 hover:border-orange-500">
-                      <video
-                        src={video.videoUrl}
-                        preload="auto"
-                        loop
-                        playsInline
-                        className="w-full h-full object-cover cursor-pointer"
-                        onClick={(e) => {
-                          const videoEl = e.currentTarget as HTMLVideoElement;
-                          if (isPlaying && !videoEl.paused) {
-                            videoEl.pause();
-                            setPlayingVideoId(null);
-                          } else {
-                            handlePlayVideo(video.id);
-                            videoEl.volume = volume;
-                            videoEl.play();
-                          }
-                        }}
-                        onEnded={() => setPlayingVideoId(null)}
-                      />
-                      {!isPlaying && (
-                        <>
-                          <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent pointer-events-none">
-                            <div className="absolute bottom-0 left-0 right-0 p-2">
-                              <h3 className="text-[10px] font-semibold text-white line-clamp-2">{video.title}</h3>
-                            </div>
-                          </div>
-                          <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center pointer-events-none">
-                            <div className="bg-orange-600 p-2 rounded-full">
-                              <Play className="w-4 h-4 text-white" />
-                            </div>
-                          </div>
-                        </>
-                      )}
-                      {isPlaying && (
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            if (volume === 0) {
-                              const newVol = getDefaultVolume();
-                              handleVolumeChange(video.id, newVol);
-                              const videoEl = e.currentTarget.parentElement?.querySelector('video') as HTMLVideoElement;
-                              if (videoEl) videoEl.volume = newVol;
-                            } else {
-                              handleVolumeChange(video.id, 0);
-                              const videoEl = e.currentTarget.parentElement?.querySelector('video') as HTMLVideoElement;
-                              if (videoEl) videoEl.volume = 0;
-                            }
-                          }}
-                          className="absolute bottom-2 left-2 flex items-center justify-center bg-black/50 hover:bg-black/70 backdrop-blur-sm text-white rounded-full p-1.5 transition-colors"
-                        >
-                          {volume === 0 ? (
-                            <VolumeX className="w-3 h-3" />
-                          ) : (
-                            <Volume2 className="w-3 h-3" />
-                          )}
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* Desktop 3D Stacked */}
-            <div className="relative hidden lg:flex justify-end items-center h-[500px]">
+            {/* Right: 3 Video Tiles - Stacked with 3D effect (desktop), Simple on mobile */}
+            <div className="relative flex justify-center lg:justify-end items-center h-[400px] lg:h-[500px]">
               {showcaseVideos.slice(0, 3).map((video, index) => {
                 const isPlaying = playingVideoId === video.id;
                 const rotations = ['rotate-[-8deg]', 'rotate-[4deg]', 'rotate-[-6deg]'];
