@@ -3771,7 +3771,7 @@ export default function StoryDetailsPage() {
                 </div>
             ) : leftPanelView === "captions" ? (
               /* Captions Settings View */
-              <div className="p-3 md:p-6 space-y-4 md:space-y-6">
+              <div className="flex-1 overflow-y-auto p-3 md:p-6 space-y-4 md:space-y-6">
                 <h2 className="text-xl font-semibold text-white mb-4">Caption Settings</h2>
 
                 {/* Enable/Disable Captions */}
@@ -3986,7 +3986,7 @@ export default function StoryDetailsPage() {
               </div>
             ) : leftPanelView === "background_music" ? (
               /* Background Music Settings View */
-              <div className="p-3 md:p-6 space-y-4">
+              <div className="flex-1 overflow-y-auto p-3 md:p-6 space-y-4">
                 <h2 className="text-xl font-semibold text-white">Background music</h2>
 
                 {/* Volume Control */}
@@ -4191,7 +4191,7 @@ export default function StoryDetailsPage() {
               </div>
             ) : leftPanelView === "help" ? (
               /* Help & Support View */
-              <div className="p-3 md:p-6 pb-20">
+              <div className="flex-1 overflow-y-auto p-3 md:p-6 pb-20">
                 {/* Breadcrumb Navigation */}
                 <div className="mb-6 flex items-center gap-2 text-sm">
                   <button
