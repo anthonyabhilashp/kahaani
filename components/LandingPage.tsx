@@ -338,7 +338,7 @@ export function LandingPage() {
                     <div className="relative aspect-[9/16] rounded-lg overflow-hidden bg-gray-900 border border-gray-800 shadow-lg">
                       <video
                         src={video.videoUrl}
-                        preload="auto"
+                        preload="metadata"
                         loop
                         playsInline
                         muted
