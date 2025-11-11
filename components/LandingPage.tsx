@@ -805,16 +805,46 @@ export function LandingPage() {
       {/* Footer */}
       <footer className="border-t border-gray-800 py-12 px-4 sm:px-6 lg:px-8">
         <div className="max-w-7xl mx-auto">
-          <div className="flex flex-col md:flex-row items-center justify-between">
-            <div className="flex items-center gap-2 mb-4 md:mb-0">
-              <div className="w-8 h-8 bg-gradient-to-br from-orange-500 to-pink-500 rounded-lg flex items-center justify-center">
-                <Sparkles className="w-5 h-5 text-white" />
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-8 mb-8">
+            {/* Brand */}
+            <div className="flex flex-col items-center md:items-start">
+              <div className="flex items-center gap-2 mb-4">
+                <div className="w-8 h-8 bg-gradient-to-br from-orange-500 to-pink-500 rounded-lg flex items-center justify-center">
+                  <Sparkles className="w-5 h-5 text-white" />
+                </div>
+                <span className="text-xl font-bold">AI Video Gen</span>
               </div>
-              <span className="text-xl font-bold">AI Video Gen</span>
+              <p className="text-sm text-gray-400 text-center md:text-left">
+                AI-powered story video creation
+              </p>
             </div>
-            <div className="text-gray-500 text-sm">
-              © 2025 AI Video Gen. AI-powered story video creation.
+
+            {/* Legal Links */}
+            <div className="flex flex-col items-center md:items-start">
+              <h3 className="font-semibold mb-4">Legal</h3>
+              <div className="flex flex-col gap-2 text-sm text-gray-400">
+                <a href="/terms" className="hover:text-orange-400 transition-colors">Terms of Service</a>
+                <a href="/privacy" className="hover:text-orange-400 transition-colors">Privacy Policy</a>
+                <a href="/refund" className="hover:text-orange-400 transition-colors">Refund Policy</a>
+              </div>
             </div>
+
+            {/* Contact */}
+            <div className="flex flex-col items-center md:items-start">
+              <h3 className="font-semibold mb-4">Contact</h3>
+              <div className="flex flex-col gap-2 text-sm text-gray-400">
+                <a href="mailto:support@aivideogen.cc" className="hover:text-orange-400 transition-colors">
+                  support@aivideogen.cc
+                </a>
+                <p className="text-gray-500">
+                  We're here to help!
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="pt-8 border-t border-gray-800 text-center text-sm text-gray-500">
+            © 2025 AI Video Gen. All rights reserved.
           </div>
         </div>
       </footer>
