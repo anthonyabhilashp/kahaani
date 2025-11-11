@@ -107,6 +107,8 @@ export default function CreditsPage() {
         return;
       }
 
+      console.log('Creating checkout for:', pkg.credits, 'credits');
+
       const response = await fetch('/api/paddle/create-checkout', {
         method: 'POST',
         headers: {
@@ -119,18 +121,31 @@ export default function CreditsPage() {
         }),
       });
 
+      console.log('Checkout response status:', response.status);
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        console.error('Checkout API error:', errorData);
+        alert(`Error: ${errorData.error || 'Failed to create checkout'}`);
+        setPurchasing(null);
+        return;
+      }
+
       const data = await response.json();
+      console.log('Checkout data:', data);
 
       if (data.checkoutUrl) {
+        console.log('Redirecting to:', data.checkoutUrl);
         // Redirect to Paddle Checkout
         window.location.href = data.checkoutUrl;
       } else {
-        alert('Failed to create checkout session');
+        console.error('No checkoutUrl in response:', data);
+        alert('Failed to create checkout session - no URL returned');
         setPurchasing(null);
       }
     } catch (error) {
       console.error('Purchase error:', error);
-      alert('Failed to initiate purchase');
+      alert(`Failed to initiate purchase: ${error}`);
       setPurchasing(null);
     }
   };
