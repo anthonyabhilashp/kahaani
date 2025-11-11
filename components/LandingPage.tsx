@@ -183,13 +183,6 @@ export function LandingPage() {
               >
                 Pricing
               </Button>
-              <div className="hidden md:flex items-center gap-3 text-sm text-gray-400">
-                <a href="/terms" className="hover:text-orange-400 transition-colors">Terms</a>
-                <span>|</span>
-                <a href="/privacy" className="hover:text-orange-400 transition-colors">Privacy</a>
-                <span>|</span>
-                <a href="/refund" className="hover:text-orange-400 transition-colors">Refund</a>
-              </div>
               <Button
                 variant="ghost"
                 onClick={() => router.push('/login')}
