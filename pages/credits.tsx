@@ -17,8 +17,6 @@ import {
   User,
   LogOut,
   Coins,
-  Menu,
-  X,
   Zap,
   Info
 } from "lucide-react";
@@ -74,8 +72,6 @@ export default function CreditsPage() {
   const [purchasing, setPurchasing] = useState<string | null>(null);
   const [showSuccess, setShowSuccess] = useState(false);
   const [showCanceled, setShowCanceled] = useState(false);
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [selectedCategory, setSelectedCategory] = useState("faceless-videos");
 
   // Check if page is embedded (loaded in iframe)
   const isEmbedded = router.query.embedded === 'true';
@@ -162,121 +158,7 @@ export default function CreditsPage() {
 
   return (
     <div className="min-h-screen bg-black text-white flex">
-      {/* Mobile Sidebar Overlay - Hide when embedded */}
-      {!isEmbedded && mobileMenuOpen && (
-        <>
-          {/* Backdrop */}
-          <div
-            className="md:hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-40"
-            onClick={() => setMobileMenuOpen(false)}
-          />
-          {/* Sidebar Drawer */}
-          <div className="md:hidden fixed inset-y-0 left-0 w-64 bg-gray-950 border-r border-gray-800 flex flex-col z-50">
-            {/* Close button */}
-            <div className="p-4 flex items-center justify-between border-b border-gray-800">
-              <h2 className="text-xl font-bold text-white">Menu</h2>
-              <button
-                onClick={() => setMobileMenuOpen(false)}
-                className="text-gray-400 hover:text-white transition-colors"
-              >
-                <X className="w-6 h-6" />
-              </button>
-            </div>
-
-            {/* Navigation */}
-            <nav className="flex-1 p-4 space-y-1">
-              <div className="mb-4">
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider px-3 mb-2">
-                  Categories
-                </p>
-                <button
-                  onClick={() => {
-                    router.push('/');
-                    setMobileMenuOpen(false);
-                  }}
-                  className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors text-gray-400 hover:bg-gray-900 hover:text-white"
-                >
-                  <Video className="w-5 h-5" />
-                  <span className="font-medium">Stories</span>
-                </button>
-
-                <button
-                  onClick={() => {
-                    router.push('/?category=series');
-                    setMobileMenuOpen(false);
-                  }}
-                  className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors mt-1 text-gray-400 hover:bg-gray-900 hover:text-white"
-                >
-                  <Film className="w-5 h-5" />
-                  <span className="font-medium">Series</span>
-                </button>
-              </div>
-            </nav>
-
-            {/* Credit Balance Section */}
-            <div className="border-t border-gray-800 p-4">
-              <div className="bg-gradient-to-br from-orange-600/20 to-pink-600/20 border border-orange-600/30 rounded-lg p-4">
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-2">
-                    <div className="w-8 h-8 rounded-full bg-orange-600/30 flex items-center justify-center">
-                      <Coins className="w-4 h-4 text-orange-400" />
-                    </div>
-                    <span className="text-xs font-medium text-gray-400 uppercase tracking-wider">Credits</span>
-                  </div>
-                </div>
-                <div className="flex items-baseline gap-1">
-                  {creditsLoading ? (
-                    <Loader2 className="w-5 h-5 animate-spin text-orange-400" />
-                  ) : (
-                    <>
-                      <span className="text-3xl font-bold text-white">{creditBalance}</span>
-                      <span className="text-sm text-gray-400">available</span>
-                    </>
-                  )}
-                </div>
-                <p className="text-xs text-gray-500 mt-2">
-                  1 image or audio = 1 credit
-                </p>
-              </div>
-            </div>
-
-            {/* User Profile Section */}
-            <div className="border-t border-gray-800 p-4">
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <div className="flex items-center gap-3 px-2 py-2 rounded-lg hover:bg-gray-900 cursor-pointer transition-colors">
-                    <div className="w-9 h-9 rounded-full bg-gradient-to-br from-orange-500 to-pink-500 flex items-center justify-center">
-                      <User className="w-5 h-5 text-white" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-white truncate">User Account</p>
-                      <p className="text-xs text-gray-500 truncate">{user?.email || 'user@example.com'}</p>
-                    </div>
-                  </div>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-56 bg-gray-900 border-gray-800">
-                  <DropdownMenuItem
-                    className="flex items-center gap-3 text-gray-400 hover:text-white hover:bg-gray-800 cursor-pointer"
-                    onClick={() => {/* Settings functionality can be added later */}}
-                  >
-                    <Settings className="w-4 h-4" />
-                    <span>Settings</span>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    className="flex items-center gap-3 text-gray-400 hover:text-red-400 hover:bg-gray-800 cursor-pointer"
-                    onClick={signOut}
-                  >
-                    <LogOut className="w-4 h-4" />
-                    <span>Sign Out</span>
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </div>
-          </div>
-        </>
-      )}
-
-      {/* Left Sidebar - Desktop only - Hide when embedded */}
+      {/* Left Sidebar - Hide when embedded */}
       {!isEmbedded && (
       <div className="hidden md:flex w-64 bg-gray-950 border-r border-gray-800 flex-col fixed h-full">
         {/* Logo/Brand */}
@@ -378,10 +260,10 @@ export default function CreditsPage() {
         <div className="md:hidden border-b border-gray-800 bg-gray-950 sticky top-0 z-20 px-4 py-3">
           <div className="flex items-center justify-between">
             <button
-              onClick={() => setMobileMenuOpen(true)}
+              onClick={() => router.push('/')}
               className="text-gray-400 hover:text-white transition-colors"
             >
-              <Menu className="w-6 h-6" />
+              <ArrowLeft className="w-6 h-6" />
             </button>
             <h1 className="text-base font-semibold text-white">Buy Credits</h1>
             <div className="flex items-center gap-1 bg-gray-800/50 rounded-lg px-2 py-1">
