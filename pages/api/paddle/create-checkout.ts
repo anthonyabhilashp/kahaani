@@ -81,7 +81,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
 
     res.status(200).json({
-      checkoutUrl: (checkout as any).checkout?.url || null,
+      checkoutUrl: (checkout as any).url || null,
       transactionId: checkout.id
     });
   } catch (err: any) {
