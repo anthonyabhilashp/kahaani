@@ -281,7 +281,7 @@ export default function CreditsPage() {
       <div className="hidden md:flex w-64 bg-gray-950 border-r border-gray-800 flex-col fixed h-full">
         {/* Logo/Brand */}
         <div className="p-6 border-b border-gray-800">
-          <h1 className="text-2xl font-bold text-white">Kahaani</h1>
+          <h1 className="text-2xl font-bold text-white">AI Video Gen</h1>
           <p className="text-xs text-gray-500 mt-1">AI Story Studio</p>
         </div>
 
