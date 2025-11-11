@@ -80,11 +80,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       },
     });
 
-    // Debug: Log the full checkout response
-    console.log('Paddle checkout response:', JSON.stringify(checkout, null, 2));
+    // Construct the proper Paddle checkout URL based on environment
+    const environment = process.env.PADDLE_ENVIRONMENT || 'sandbox';
+    const checkoutBaseUrl = environment === 'production'
+      ? 'https://checkout.paddle.com'
+      : 'https://sandbox-checkout.paddle.com';
+    const checkoutUrl = `${checkoutBaseUrl}/transaction?id=${checkout.id}`;
+
+    console.log('Paddle checkout URL:', checkoutUrl);
 
     res.status(200).json({
-      checkoutUrl: (checkout as any).checkout_url || (checkout as any).url || null,
+      checkoutUrl: checkoutUrl,
       transactionId: checkout.id
     });
   } catch (err: any) {
