@@ -80,8 +80,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       },
     });
 
+    // Debug: Log the full checkout response
+    console.log('Paddle checkout response:', JSON.stringify(checkout, null, 2));
+
     res.status(200).json({
-      checkoutUrl: (checkout as any).url || null,
+      checkoutUrl: (checkout as any).checkout_url || (checkout as any).url || null,
       transactionId: checkout.id
     });
   } catch (err: any) {
