@@ -24,6 +24,11 @@ export default function Terms() {
         <div className="space-y-8 text-gray-300">
           <section>
             <p className="text-sm text-gray-400 mb-6">Last Updated: January 11, 2025</p>
+            <div className="bg-gray-900 border border-gray-800 rounded-lg p-6 mb-6">
+              <p className="text-white font-semibold mb-2">AI Video Gen</p>
+              <p className="text-gray-300">Operated by Anthony Abhilash Pothula</p>
+              <p className="text-gray-400 text-sm mt-2">Contact: support@aivideogen.cc</p>
+            </div>
             <p className="mb-4">
               Welcome to AI Video Gen. By accessing or using our service, you agree to be bound by these Terms of Service.
             </p>
