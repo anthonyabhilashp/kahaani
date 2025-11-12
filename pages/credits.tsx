@@ -95,12 +95,9 @@ export default function CreditsPage() {
 
     script.onload = () => {
       // Initialize Paddle
-      const environment = process.env.NEXT_PUBLIC_PADDLE_ENVIRONMENT || 'sandbox';
-
       if (typeof window !== 'undefined' && (window as any).Paddle) {
         (window as any).Paddle.Initialize({
           token: process.env.NEXT_PUBLIC_PADDLE_CLIENT_TOKEN!,
-          environment: environment,
           eventCallback: (event: any) => {
             if (event.name === 'checkout.completed') {
               console.log('Paddle checkout completed:', event);
