@@ -73,6 +73,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         data: {
           type: 'checkouts',
           attributes: {
+            store_id: process.env.LEMONSQUEEZY_STORE_ID!,
+            variant_id: variantId,
+            product_options: {
+              redirect_url: `${appUrl}/credits?success=true`
+            },
             checkout_options: {
               button_color: '#ea580c'
             },
@@ -81,21 +86,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               custom: {
                 user_id: user.id,
                 credits: credits.toString(),
-              }
-            },
-            redirect_url: `${appUrl}/credits?success=true`
-          },
-          relationships: {
-            store: {
-              data: {
-                type: 'stores',
-                id: process.env.LEMONSQUEEZY_STORE_ID!
-              }
-            },
-            variant: {
-              data: {
-                type: 'variants',
-                id: variantId
               }
             }
           }
