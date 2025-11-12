@@ -73,13 +73,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         data: {
           type: 'checkouts',
           attributes: {
+            checkout_options: {
+              button_color: '#ea580c'
+            },
             checkout_data: {
               email: user.email,
               custom: {
                 user_id: user.id,
                 credits: credits.toString(),
               }
-            }
+            },
+            redirect_url: `${appUrl}/credits?success=true`,
+            expires_at: null,
+            preview: false,
+            test_mode: process.env.LEMONSQUEEZY_TEST_MODE === 'true'
           },
           relationships: {
             store: {
