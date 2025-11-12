@@ -1,11 +1,16 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
+import { URL } from "url";
 import https from "https";
 import http from "http";
 import fs from "fs";
 import path from "path";
 import { tmpdir } from "os";
 import ffmpeg from "fluent-ffmpeg";
+import { checkRateLimit, RateLimits } from "@/lib/rateLimit";
+
+// 🔒 Security limits for URL imports
+const MAX_FILE_SIZE_MB = 50; // 50MB max
 
 // Helper to get audio duration using ffprobe
 async function getAudioDuration(filePath: string): Promise<number> {
@@ -21,10 +26,62 @@ async function getAudioDuration(filePath: string): Promise<number> {
   });
 }
 
-// Helper to download file from URL
-async function downloadFile(url: string, outputPath: string): Promise<void> {
+// Helper to download file from URL (SECURE - prevents SSRF attacks)
+async function downloadFile(urlString: string, outputPath: string): Promise<void> {
   return new Promise((resolve, reject) => {
-    const protocol = url.startsWith("https") ? https : http;
+    // 🔐 Parse and validate URL
+    let url: URL;
+    try {
+      url = new URL(urlString);
+    } catch {
+      return reject(new Error('Invalid URL'));
+    }
+
+    // 🔐 Only allow HTTP/HTTPS protocols
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      return reject(new Error('Only HTTP/HTTPS protocols are allowed'));
+    }
+
+    // 🔐 Block access to private/internal IP ranges and localhost
+    const hostname = url.hostname.toLowerCase();
+    const blockedHosts = [
+      'localhost',
+      '127.0.0.1',
+      '0.0.0.0',
+      '169.254.169.254', // AWS metadata
+      '::1', // IPv6 localhost
+      'metadata.google.internal', // GCP metadata
+    ];
+
+    if (blockedHosts.includes(hostname)) {
+      return reject(new Error('Access to internal resources is not allowed'));
+    }
+
+    // 🔐 Block private IP ranges (RFC 1918)
+    if (
+      hostname.startsWith('10.') ||
+      hostname.startsWith('172.16.') ||
+      hostname.startsWith('172.17.') ||
+      hostname.startsWith('172.18.') ||
+      hostname.startsWith('172.19.') ||
+      hostname.startsWith('172.20.') ||
+      hostname.startsWith('172.21.') ||
+      hostname.startsWith('172.22.') ||
+      hostname.startsWith('172.23.') ||
+      hostname.startsWith('172.24.') ||
+      hostname.startsWith('172.25.') ||
+      hostname.startsWith('172.26.') ||
+      hostname.startsWith('172.27.') ||
+      hostname.startsWith('172.28.') ||
+      hostname.startsWith('172.29.') ||
+      hostname.startsWith('172.30.') ||
+      hostname.startsWith('172.31.') ||
+      hostname.startsWith('192.168.')
+    ) {
+      return reject(new Error('Access to private networks is not allowed'));
+    }
+
+    const protocol = url.protocol === 'https:' ? https : http;
 
     const file = fs.createWriteStream(outputPath);
 
@@ -34,7 +91,7 @@ async function downloadFile(url: string, outputPath: string): Promise<void> {
       }
     };
 
-    protocol.get(url, options, (response) => {
+    protocol.get(urlString, options, (response) => {
       // Handle redirects
       if (response.statusCode === 301 || response.statusCode === 302) {
         if (response.headers.location) {
@@ -71,6 +128,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(405).json({ error: "Method not allowed" });
   }
 
+  // 🔐 Authentication check
+  const authHeader = req.headers.authorization;
+  if (!authHeader) {
+    return res.status(401).json({ error: "Unauthorized - Please log in" });
+  }
+
+  const token = authHeader.replace('Bearer ', '');
+  const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(token);
+
+  if (authError || !user) {
+    return res.status(401).json({ error: "Unauthorized - Invalid session" });
+  }
+
+  // ⏱️ Rate limiting - prevent import abuse
+  const rateLimit = checkRateLimit(user.id, RateLimits.MUSIC_IMPORT);
+  if (!rateLimit.allowed) {
+    const retryAfter = Math.ceil((rateLimit.resetTime - Date.now()) / 1000);
+    return res.status(429).json({
+      error: "Too many import requests. Please wait before trying again.",
+      retry_after: retryAfter
+    });
+  }
+
   try {
     const { url, name, description, category, notes, uploaded_by } = req.body;
 
@@ -88,6 +168,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Download file from URL
     console.log("📥 Downloading from URL:", url);
     await downloadFile(url, tempFilePath);
+
+    // 🔒 Validate file size (security check)
+    const fileStats = fs.statSync(tempFilePath);
+    const fileSizeMB = fileStats.size / (1024 * 1024);
+    if (fileSizeMB > MAX_FILE_SIZE_MB) {
+      if (fs.existsSync(tempFilePath)) {
+        fs.unlinkSync(tempFilePath);
+      }
+      return res.status(400).json({
+        error: `File is too large. Maximum size is ${MAX_FILE_SIZE_MB}MB (${fileSizeMB.toFixed(1)}MB detected).`
+      });
+    }
 
     // Get audio duration
     const duration = await getAudioDuration(tempFilePath);

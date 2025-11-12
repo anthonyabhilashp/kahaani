@@ -91,4 +91,7 @@ export const RateLimits = {
 
   // Payment endpoints
   PAYMENT: { interval: 60000, maxRequests: 5 }, // 5 checkout/min
+
+  // Music import (prevent storage abuse)
+  MUSIC_IMPORT: { interval: 300000, maxRequests: 10 }, // 10 imports/5min
 };

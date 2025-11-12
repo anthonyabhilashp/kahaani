@@ -8,6 +8,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(405).json({ error: "Method not allowed" });
   }
 
+  // 🔐 Authentication check
+  const authHeader = req.headers.authorization;
+  if (!authHeader) {
+    return res.status(401).json({ error: "Unauthorized - Please log in" });
+  }
+
+  const token = authHeader.replace('Bearer ', '');
+  const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(token);
+
+  if (authError || !user) {
+    return res.status(401).json({ error: "Unauthorized - Invalid session" });
+  }
+
   const { story_id, scene_id, scene_order } = req.body;
 
   if (!story_id || (!scene_id && scene_order === undefined)) {
@@ -15,12 +28,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    // Get user_id from story for logging
-    const { data: storyData } = await supabaseAdmin
+    // 🔐 Verify user owns the story
+    const { data: storyData, error: storyError } = await supabaseAdmin
       .from("stories")
       .select("user_id")
       .eq("id", story_id)
       .single();
+
+    if (storyError || !storyData) {
+      return res.status(404).json({ error: "Story not found" });
+    }
+
+    if (storyData.user_id !== user.id) {
+      return res.status(403).json({ error: "Forbidden - You don't own this story" });
+    }
 
     const logger = storyData?.user_id ? getUserLogger(storyData.user_id) : null;
     logger?.info(`[${story_id}] 🗑️ Deleting scene for story`);

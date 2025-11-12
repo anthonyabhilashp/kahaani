@@ -4,10 +4,8 @@ import fs from "fs";
 import path from "path";
 import { tmpdir } from "os";
 import ffmpeg from "fluent-ffmpeg";
-import { exec } from "child_process";
-import { promisify } from "util";
-
-const execAsync = promisify(exec);
+import { spawn } from "child_process";
+import { checkRateLimit, RateLimits } from "@/lib/rateLimit";
 
 // Helper to get audio duration using ffprobe
 async function getAudioDuration(filePath: string): Promise<number> {
@@ -23,33 +21,95 @@ async function getAudioDuration(filePath: string): Promise<number> {
   });
 }
 
-// Helper to download YouTube audio using yt-dlp
+// 🔒 Security limits for YouTube imports
+const MAX_FILE_SIZE_MB = 50; // 50MB max
+
+// Helper to download YouTube audio using yt-dlp (SECURE - prevents command injection)
 async function downloadYouTubeAudio(url: string, outputPath: string): Promise<void> {
-  try {
-    // Use yt-dlp (or youtube-dl fallback) to download audio only
-    // yt-dlp is more maintained and works better with recent YouTube changes
-    const command = `yt-dlp -x --audio-format mp3 --audio-quality 0 -o "${outputPath}" "${url}"`;
+  return new Promise((resolve, reject) => {
+    // 🔐 Validate URL format (defense in depth)
+    const youtubeRegex = /^https?:\/\/(www\.)?(youtube\.com|youtu\.be)\/.+$/;
+    if (!youtubeRegex.test(url)) {
+      return reject(new Error('Invalid YouTube URL'));
+    }
+
+    // 🔐 Use spawn with args array instead of shell command (prevents command injection)
+    // Add max-filesize to prevent downloading huge files
+    const maxFilesizeBytes = MAX_FILE_SIZE_MB * 1024 * 1024;
+    const args = [
+      '-x',
+      '--audio-format', 'mp3',
+      '--audio-quality', '0',
+      '--max-filesize', maxFilesizeBytes.toString(), // Limit file size
+      '-o', outputPath,
+      url
+    ];
 
     console.log("📥 Downloading from YouTube:", url);
-    await execAsync(command);
+    const process = spawn('yt-dlp', args);
 
-    console.log("✅ YouTube download completed");
-  } catch (error: any) {
-    // Try youtube-dl as fallback
-    try {
-      console.log("⚠️ yt-dlp failed, trying youtube-dl...");
-      const fallbackCommand = `youtube-dl -x --audio-format mp3 --audio-quality 0 -o "${outputPath}" "${url}"`;
-      await execAsync(fallbackCommand);
-      console.log("✅ YouTube download completed with youtube-dl");
-    } catch (fallbackError) {
-      throw new Error("Unable to import from YouTube. Please check the URL and try again.");
-    }
-  }
+    let stderr = '';
+
+    process.stderr.on('data', (data) => {
+      stderr += data.toString();
+    });
+
+    process.on('close', (code) => {
+      if (code === 0) {
+        console.log("✅ YouTube download completed");
+        resolve();
+      } else {
+        // Try youtube-dl as fallback
+        console.log("⚠️ yt-dlp failed, trying youtube-dl...");
+        const fallbackProcess = spawn('youtube-dl', args);
+
+        fallbackProcess.on('close', (fallbackCode) => {
+          if (fallbackCode === 0) {
+            console.log("✅ YouTube download completed with youtube-dl");
+            resolve();
+          } else {
+            reject(new Error("Unable to import from YouTube. Please check the URL and try again."));
+          }
+        });
+
+        fallbackProcess.on('error', () => {
+          reject(new Error("Unable to import from YouTube. Please check the URL and try again."));
+        });
+      }
+    });
+
+    process.on('error', (err) => {
+      reject(new Error(`Failed to spawn yt-dlp: ${err.message}`));
+    });
+  });
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
+  }
+
+  // 🔐 Authentication check
+  const authHeader = req.headers.authorization;
+  if (!authHeader) {
+    return res.status(401).json({ error: "Unauthorized - Please log in" });
+  }
+
+  const token = authHeader.replace('Bearer ', '');
+  const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(token);
+
+  if (authError || !user) {
+    return res.status(401).json({ error: "Unauthorized - Invalid session" });
+  }
+
+  // ⏱️ Rate limiting - prevent import abuse
+  const rateLimit = checkRateLimit(user.id, RateLimits.MUSIC_IMPORT);
+  if (!rateLimit.allowed) {
+    const retryAfter = Math.ceil((rateLimit.resetTime - Date.now()) / 1000);
+    return res.status(429).json({
+      error: "Too many import requests. Please wait before trying again.",
+      retry_after: retryAfter
+    });
   }
 
   let tempFilePath: string | null = null;
@@ -81,6 +141,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Check if file exists (yt-dlp adds extension automatically)
     if (!fs.existsSync(tempFilePath)) {
       throw new Error("Downloaded file not found");
+    }
+
+    // 🔒 Validate file size (security check)
+    const fileStats = fs.statSync(tempFilePath);
+    const fileSizeMB = fileStats.size / (1024 * 1024);
+    if (fileSizeMB > MAX_FILE_SIZE_MB) {
+      if (fs.existsSync(tempFilePath)) {
+        fs.unlinkSync(tempFilePath);
+      }
+      return res.status(400).json({
+        error: `File is too large. Maximum size is ${MAX_FILE_SIZE_MB}MB (${fileSizeMB.toFixed(1)}MB detected).`
+      });
     }
 
     // Get audio duration
