@@ -83,24 +83,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         credits: credits.toString(),
         price: price.toString(),
       },
+      checkout: {
+        url: `${appUrl}/credits`
+      }
     });
 
     console.log(`Transaction created: ${transaction.id}`);
-
-    // Construct the Paddle Billing checkout URL
-    const environment = process.env.PADDLE_ENVIRONMENT || 'sandbox';
-    const checkoutDomain = environment === 'production'
-      ? 'https://checkout.paddle.com'
-      : 'https://sandbox-checkout.paddle.com';
-
-    // Use Paddle Billing's web checkout URL format
-    const checkoutUrl = `${checkoutDomain}/transact?_ptxn=${transaction.id}`;
-
-    console.log(`Paddle environment: ${environment}`);
-    console.log(`Checkout URL: ${checkoutUrl}`);
+    console.log(`Checkout URL: ${(transaction as any).checkout?.url}`);
 
     res.status(200).json({
-      checkoutUrl: checkoutUrl,
+      checkoutUrl: (transaction as any).checkout?.url || null,
       transactionId: transaction.id
     });
   } catch (err: any) {

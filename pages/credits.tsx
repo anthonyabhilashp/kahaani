@@ -15,6 +15,7 @@ import {
   Info
 } from "lucide-react";
 import { useCredits } from "../hooks/useCredits";
+import { initializePaddle, Paddle } from "@paddle/paddle-js";
 
 type CreditPackage = {
   id: string;
@@ -59,6 +60,7 @@ export default function CreditsPage() {
   const [purchasing, setPurchasing] = useState<string | null>(null);
   const [showSuccess, setShowSuccess] = useState(false);
   const [showCanceled, setShowCanceled] = useState(false);
+  const [paddle, setPaddle] = useState<Paddle | null>(null);
 
   // Check if page is embedded (loaded in iframe)
   const isEmbedded = router.query.embedded === 'true';
@@ -66,6 +68,45 @@ export default function CreditsPage() {
   useEffect(() => {
     checkUser();
   }, []);
+
+  // Initialize Paddle
+  useEffect(() => {
+    initializePaddle({
+      token: process.env.NEXT_PUBLIC_PADDLE_CLIENT_TOKEN!,
+      eventCallback: (event) => {
+        console.log('Paddle event:', event);
+        if (event.name === 'checkout.completed') {
+          console.log('Paddle checkout completed');
+          setShowSuccess(true);
+          refreshBalance();
+          setPurchasing(null);
+          router.replace('/credits', undefined, { shallow: true });
+        } else if (event.name === 'checkout.closed') {
+          console.log('Paddle checkout closed');
+          setPurchasing(null);
+          router.replace('/credits', undefined, { shallow: true });
+        }
+      }
+    }).then((paddleInstance) => {
+      if (paddleInstance) {
+        console.log('Paddle initialized successfully');
+        setPaddle(paddleInstance);
+      }
+    }).catch((error) => {
+      console.error('Failed to initialize Paddle:', error);
+    });
+  }, []);
+
+  // Check for _ptxn parameter and open checkout
+  useEffect(() => {
+    const transactionId = router.query._ptxn as string;
+    if (transactionId && paddle) {
+      console.log('Opening Paddle checkout for transaction:', transactionId);
+      paddle.Checkout.open({
+        transactionId: transactionId
+      });
+    }
+  }, [router.query._ptxn, paddle]);
 
   useEffect(() => {
     // Check for success/canceled params from Stripe redirect
