@@ -15,7 +15,6 @@ import {
   Info
 } from "lucide-react";
 import { useCredits } from "../hooks/useCredits";
-import { initializePaddle, Paddle } from "@paddle/paddle-js";
 
 type CreditPackage = {
   id: string;
@@ -60,7 +59,6 @@ export default function CreditsPage() {
   const [purchasing, setPurchasing] = useState<string | null>(null);
   const [showSuccess, setShowSuccess] = useState(false);
   const [showCanceled, setShowCanceled] = useState(false);
-  const [paddle, setPaddle] = useState<Paddle | null>(null);
 
   // Check if page is embedded (loaded in iframe)
   const isEmbedded = router.query.embedded === 'true';
@@ -69,47 +67,8 @@ export default function CreditsPage() {
     checkUser();
   }, []);
 
-  // Initialize Paddle
   useEffect(() => {
-    initializePaddle({
-      token: process.env.NEXT_PUBLIC_PADDLE_CLIENT_TOKEN!,
-      eventCallback: (event) => {
-        console.log('Paddle event:', event);
-        if (event.name === 'checkout.completed') {
-          console.log('Paddle checkout completed');
-          setShowSuccess(true);
-          refreshBalance();
-          setPurchasing(null);
-          router.replace('/credits', undefined, { shallow: true });
-        } else if (event.name === 'checkout.closed') {
-          console.log('Paddle checkout closed');
-          setPurchasing(null);
-          router.replace('/credits', undefined, { shallow: true });
-        }
-      }
-    }).then((paddleInstance) => {
-      if (paddleInstance) {
-        console.log('Paddle initialized successfully');
-        setPaddle(paddleInstance);
-      }
-    }).catch((error) => {
-      console.error('Failed to initialize Paddle:', error);
-    });
-  }, []);
-
-  // Check for _ptxn parameter and open checkout
-  useEffect(() => {
-    const transactionId = router.query._ptxn as string;
-    if (transactionId && paddle) {
-      console.log('Opening Paddle checkout for transaction:', transactionId);
-      paddle.Checkout.open({
-        transactionId: transactionId
-      });
-    }
-  }, [router.query._ptxn, paddle]);
-
-  useEffect(() => {
-    // Check for success/canceled params from Stripe redirect
+    // Check for success/canceled params from payment redirect
     if (router.query.success === 'true') {
       setShowSuccess(true);
       refreshBalance(); // Refresh credits after purchase
@@ -148,9 +107,9 @@ export default function CreditsPage() {
         return;
       }
 
-      console.log('Creating checkout for:', pkg.credits, 'credits');
+      console.log('Creating LemonSqueezy checkout for:', pkg.credits, 'credits');
 
-      const response = await fetch('/api/paddle/create-checkout', {
+      const response = await fetch('/api/lemonsqueezy/create-checkout', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -158,7 +117,6 @@ export default function CreditsPage() {
         },
         body: JSON.stringify({
           credits: pkg.credits,
-          price: pkg.price,
         }),
       });
 
@@ -176,8 +134,8 @@ export default function CreditsPage() {
       console.log('Checkout data:', data);
 
       if (data.checkoutUrl) {
-        console.log('Redirecting to:', data.checkoutUrl);
-        // Redirect to Paddle Checkout
+        console.log('Redirecting to LemonSqueezy:', data.checkoutUrl);
+        // Redirect to LemonSqueezy Checkout
         window.location.href = data.checkoutUrl;
       } else {
         console.error('No checkoutUrl in response:', data);
