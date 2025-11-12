@@ -61,6 +61,43 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
 
+    const payload = {
+      data: {
+        type: 'checkouts',
+        attributes: {
+          product_options: {
+            redirect_url: `${appUrl}/credits?success=true`
+          },
+          checkout_options: {
+            button_color: '#ea580c'
+          },
+          checkout_data: {
+            email: user.email,
+            custom: {
+              user_id: user.id,
+              credits: credits.toString(),
+            }
+          }
+        },
+        relationships: {
+          store: {
+            data: {
+              type: 'stores',
+              id: process.env.LEMONSQUEEZY_STORE_ID!
+            }
+          },
+          variant: {
+            data: {
+              type: 'variants',
+              id: variantId
+            }
+          }
+        }
+      }
+    };
+
+    console.log('🔍 LemonSqueezy Checkout Payload:', JSON.stringify(payload, null, 2));
+
     // Create checkout using fetch API (LemonSqueezy SDK method)
     const checkoutResponse = await fetch('https://api.lemonsqueezy.com/v1/checkouts', {
       method: 'POST',
@@ -69,28 +106,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         'Content-Type': 'application/vnd.api+json',
         'Authorization': `Bearer ${process.env.LEMONSQUEEZY_API_KEY!}`,
       },
-      body: JSON.stringify({
-        data: {
-          type: 'checkouts',
-          attributes: {
-            store_id: process.env.LEMONSQUEEZY_STORE_ID!,
-            variant_id: variantId,
-            product_options: {
-              redirect_url: `${appUrl}/credits?success=true`
-            },
-            checkout_options: {
-              button_color: '#ea580c'
-            },
-            checkout_data: {
-              email: user.email,
-              custom: {
-                user_id: user.id,
-                credits: credits.toString(),
-              }
-            }
-          }
-        }
-      })
+      body: JSON.stringify(payload)
     });
 
     if (!checkoutResponse.ok) {
