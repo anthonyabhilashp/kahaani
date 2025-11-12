@@ -86,6 +86,58 @@ export default function CreditsPage() {
     }
   }, [router.query]);
 
+  // Load and initialize Paddle.js
+  useEffect(() => {
+    // Load Paddle.js script
+    const script = document.createElement('script');
+    script.src = 'https://cdn.paddle.com/paddle/v2/paddle.js';
+    script.async = true;
+
+    script.onload = () => {
+      // Initialize Paddle
+      const environment = process.env.NEXT_PUBLIC_PADDLE_ENVIRONMENT || 'sandbox';
+
+      if (typeof window !== 'undefined' && (window as any).Paddle) {
+        (window as any).Paddle.Initialize({
+          token: process.env.NEXT_PUBLIC_PADDLE_CLIENT_TOKEN!,
+          environment: environment,
+          eventCallback: (event: any) => {
+            if (event.name === 'checkout.completed') {
+              console.log('Paddle checkout completed:', event);
+              setShowSuccess(true);
+              refreshBalance();
+              // Clear _ptxn parameter
+              router.replace('/credits', undefined, { shallow: true });
+            } else if (event.name === 'checkout.closed') {
+              console.log('Paddle checkout closed');
+              setPurchasing(null);
+              // Clear _ptxn parameter
+              router.replace('/credits', undefined, { shallow: true });
+            }
+          }
+        });
+
+        // Check for _ptxn parameter and open checkout
+        const transactionId = router.query._ptxn as string;
+        if (transactionId) {
+          console.log('Opening Paddle checkout for transaction:', transactionId);
+          (window as any).Paddle.Checkout.open({
+            transactionId: transactionId
+          });
+        }
+      }
+    };
+
+    document.head.appendChild(script);
+
+    return () => {
+      // Cleanup script on unmount
+      if (document.head.contains(script)) {
+        document.head.removeChild(script);
+      }
+    };
+  }, [router.query._ptxn]);
+
   const checkUser = async () => {
     const { data: { session } } = await supabase.auth.getSession();
 
