@@ -83,10 +83,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 credits: credits.toString(),
               }
             },
-            redirect_url: `${appUrl}/credits?success=true`,
-            expires_at: null,
-            preview: false,
-            test_mode: process.env.LEMONSQUEEZY_TEST_MODE === 'true'
+            redirect_url: `${appUrl}/credits?success=true`
           },
           relationships: {
             store: {
