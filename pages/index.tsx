@@ -222,7 +222,7 @@ StoryGrid.displayName = 'StoryGrid';
 export default function Dashboard() {
   const router = useRouter();
   const { user, loading: authLoading, signOut } = useAuth();
-  const { balance: creditBalance, loading: creditsLoading } = useCredits();
+  const { balance: creditBalance, loading: creditsLoading, refetch: refetchCredits } = useCredits();
   const [stories, setStories] = useState<Story[]>([]);
   const [series, setSeries] = useState<Series[]>([]);
   const [loading, setLoading] = useState(true);
@@ -327,6 +327,29 @@ export default function Dashboard() {
       }
     }
   }, [router.isReady, router.query.category, router.query.seriesId, series]);
+
+  // Handle payment success redirect
+  useEffect(() => {
+    if (router.isReady && router.query.payment_success === 'true') {
+      // Open credits page
+      setShowCreditsPage(true);
+
+      // Refresh credit balance
+      refetchCredits();
+
+      // Show success toast
+      toast({
+        title: "Payment Successful!",
+        description: "Your credits have been added to your account.",
+        duration: 5000,
+      });
+
+      // Clear URL params after showing message
+      setTimeout(() => {
+        router.replace('/', undefined, { shallow: true });
+      }, 1000);
+    }
+  }, [router.isReady, router.query.payment_success]);
 
   // Auto-start product tour for new users
   useEffect(() => {

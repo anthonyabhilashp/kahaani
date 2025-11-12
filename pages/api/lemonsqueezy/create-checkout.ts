@@ -66,7 +66,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         type: 'checkouts',
         attributes: {
           product_options: {
-            redirect_url: `${appUrl}/credits?success=true`
+            redirect_url: `${appUrl}/?credits=true&payment_success=true`
           },
           checkout_options: {
             button_color: '#ea580c'
