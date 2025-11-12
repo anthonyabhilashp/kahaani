@@ -99,6 +99,7 @@ export default function CreditsPage() {
         (window as any).Paddle.Initialize({
           token: process.env.NEXT_PUBLIC_PADDLE_CLIENT_TOKEN!,
           eventCallback: (event: any) => {
+            console.log('Paddle event:', event);
             if (event.name === 'checkout.completed') {
               console.log('Paddle checkout completed:', event);
               setShowSuccess(true);
@@ -114,14 +115,7 @@ export default function CreditsPage() {
           }
         });
 
-        // Check for _ptxn parameter and open checkout
-        const transactionId = router.query._ptxn as string;
-        if (transactionId) {
-          console.log('Opening Paddle checkout for transaction:', transactionId);
-          (window as any).Paddle.Checkout.open({
-            transactionId: transactionId
-          });
-        }
+        // Paddle.js automatically detects _ptxn parameter in URL and opens checkout
       }
     };
 
