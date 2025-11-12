@@ -62,10 +62,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Create Paddle checkout
     const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3005';
 
+    // Validate price ID exists
+    const priceId = process.env[`PADDLE_PRICE_ID_${credits}`];
+    console.log(`Credits: ${credits}, Price ID: ${priceId}`);
+
+    if (!priceId) {
+      throw new Error(`Missing PADDLE_PRICE_ID_${credits} environment variable`);
+    }
+
     const checkout = await paddle.transactions.create({
       items: [
         {
-          priceId: process.env[`PADDLE_PRICE_ID_${credits}`]!, // We'll set up price IDs in Paddle dashboard
+          priceId: priceId,
           quantity: 1,
         },
       ],
