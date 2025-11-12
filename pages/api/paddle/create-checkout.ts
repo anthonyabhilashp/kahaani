@@ -70,7 +70,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       throw new Error(`Missing PADDLE_PRICE_ID_${credits} environment variable`);
     }
 
-    const checkout = await paddle.transactions.create({
+    const transaction = await paddle.transactions.create({
       items: [
         {
           priceId: priceId,
@@ -83,19 +83,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         credits: credits.toString(),
         price: price.toString(),
       },
-      checkout: {
-        url: `${appUrl}/credits`,
-      },
     });
 
-    // Return Paddle's checkout URL (redirects to your domain with _ptxn parameter)
+    console.log(`Transaction created: ${transaction.id}`);
+
+    // Construct the Paddle Billing checkout URL
     const environment = process.env.PADDLE_ENVIRONMENT || 'sandbox';
+    const checkoutDomain = environment === 'production'
+      ? 'https://checkout.paddle.com'
+      : 'https://sandbox-checkout.paddle.com';
+
+    // Use Paddle Billing's web checkout URL format
+    const checkoutUrl = `${checkoutDomain}/transact?_ptxn=${transaction.id}`;
+
     console.log(`Paddle environment: ${environment}`);
-    console.log('Checkout URL from Paddle:', (checkout as any).checkout?.url);
+    console.log(`Checkout URL: ${checkoutUrl}`);
 
     res.status(200).json({
-      checkoutUrl: (checkout as any).checkout?.url || null,
-      transactionId: checkout.id
+      checkoutUrl: checkoutUrl,
+      transactionId: transaction.id
     });
   } catch (err: any) {
     console.error("Paddle checkout error:", JSON.stringify(err, null, 2));
