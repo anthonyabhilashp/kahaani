@@ -86,49 +86,6 @@ export default function CreditsPage() {
     }
   }, [router.query]);
 
-  // Load and initialize Paddle.js
-  useEffect(() => {
-    // Load Paddle.js script
-    const script = document.createElement('script');
-    script.src = 'https://cdn.paddle.com/paddle/v2/paddle.js';
-    script.async = true;
-
-    script.onload = () => {
-      // Initialize Paddle
-      if (typeof window !== 'undefined' && (window as any).Paddle) {
-        (window as any).Paddle.Initialize({
-          token: process.env.NEXT_PUBLIC_PADDLE_CLIENT_TOKEN!,
-          eventCallback: (event: any) => {
-            console.log('Paddle event:', event);
-            if (event.name === 'checkout.completed') {
-              console.log('Paddle checkout completed:', event);
-              setShowSuccess(true);
-              refreshBalance();
-              // Clear _ptxn parameter
-              router.replace('/credits', undefined, { shallow: true });
-            } else if (event.name === 'checkout.closed') {
-              console.log('Paddle checkout closed');
-              setPurchasing(null);
-              // Clear _ptxn parameter
-              router.replace('/credits', undefined, { shallow: true });
-            }
-          }
-        });
-
-        // Paddle.js automatically detects _ptxn parameter in URL and opens checkout
-      }
-    };
-
-    document.head.appendChild(script);
-
-    return () => {
-      // Cleanup script on unmount
-      if (document.head.contains(script)) {
-        document.head.removeChild(script);
-      }
-    };
-  }, [router.query._ptxn]);
-
   const checkUser = async () => {
     const { data: { session } } = await supabase.auth.getSession();
 
