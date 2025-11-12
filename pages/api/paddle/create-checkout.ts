@@ -88,18 +88,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       },
     });
 
-    // Construct direct hosted checkout URL
+    // Return Paddle's checkout URL (redirects to your domain with _ptxn parameter)
     const environment = process.env.PADDLE_ENVIRONMENT || 'sandbox';
-    const checkoutBaseUrl = environment === 'production'
-      ? 'https://buy.paddle.com'
-      : 'https://sandbox-buy.paddle.com';
-    const hostedCheckoutUrl = `${checkoutBaseUrl}/checkout?txn=${checkout.id}`;
-
     console.log(`Paddle environment: ${environment}`);
-    console.log(`Hosted checkout URL: ${hostedCheckoutUrl}`);
+    console.log('Checkout URL from Paddle:', (checkout as any).checkout?.url);
 
     res.status(200).json({
-      checkoutUrl: hostedCheckoutUrl,
+      checkoutUrl: (checkout as any).checkout?.url || null,
       transactionId: checkout.id
     });
   } catch (err: any) {
