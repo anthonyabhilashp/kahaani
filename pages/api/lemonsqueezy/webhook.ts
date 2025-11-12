@@ -64,7 +64,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       );
 
       if (!result.success) {
-        console.error("Failed to add credits:", result.error);
+        console.error("Failed to add credits to user account");
         return res.status(500).json({ error: "Failed to add credits" });
       }
 
