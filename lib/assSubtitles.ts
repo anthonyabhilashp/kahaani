@@ -52,7 +52,9 @@ export function generateWordByWordASS(
   highlightColor?: string,
   wordsPerBatch: number = 0, // 0 = show all words, >0 = show N words at a time
   textTransform: 'none' | 'uppercase' | 'lowercase' | 'capitalize' = 'none',
-  fullText?: string // Optional: full text to detect sentence boundaries
+  fullText?: string, // Optional: full text to detect sentence boundaries
+  videoWidth: number = 1080, // Actual video width for PlayResX
+  videoHeight: number = 1920 // Actual video height for PlayResY
 ): string {
   if (!wordTimestamps.length) return '';
 
@@ -109,8 +111,8 @@ export function generateWordByWordASS(
 Title: Word-by-Word Captions
 ScriptType: v4.00+
 WrapStyle: 0
-PlayResX: 1080
-PlayResY: 1920
+PlayResX: ${videoWidth}
+PlayResY: ${videoHeight}
 ScaledBorderAndShadow: yes
 
 [V4+ Styles]

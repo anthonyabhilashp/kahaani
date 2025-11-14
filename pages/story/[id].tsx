@@ -21,6 +21,7 @@ import { useAuth } from "../../contexts/AuthContext";
 import { supabase } from "../../lib/supabaseClient";
 import { toast } from "@/hooks/use-toast";
 import { knowledgeBase, categories, type KnowledgeArticle } from "@/lib/knowledgeBase";
+import { getFontsByCategory } from "@/lib/fonts";
 
 type Scene = {
   id?: string;
@@ -3097,6 +3098,7 @@ export default function StoryDetailsPage() {
 
     const hasAudio = !!scenes[sceneIndex].audio_url;
     const sceneId = scenes[sceneIndex].id;
+    if (!sceneId) return; // Type guard: ensure sceneId exists
 
     try {
       const headers = await getAuthHeaders();
@@ -4522,43 +4524,13 @@ export default function StoryDetailsPage() {
                           paddingRight: '2.5rem',
                         }}
                       >
-                        <optgroup label="Sans-Serif (Modern)" className="bg-gray-900 text-gray-400">
-                          <option value="Montserrat">Montserrat</option>
-                          <option value="Poppins">Poppins</option>
-                          <option value="Inter">Inter</option>
-                          <option value="Roboto">Roboto</option>
-                          <option value="Open Sans">Open Sans</option>
-                          <option value="Lato">Lato</option>
-                          <option value="Raleway">Raleway</option>
-                          <option value="Nunito">Nunito</option>
-                          <option value="Source Sans Pro">Source Sans Pro</option>
-                          <option value="Oswald">Oswald</option>
-                          <option value="Bebas Neue">Bebas Neue</option>
-                          <option value="Arial">Arial</option>
-                          <option value="Helvetica">Helvetica</option>
-                          <option value="Verdana">Verdana</option>
-                        </optgroup>
-                        <optgroup label="Serif (Classic)" className="bg-gray-900 text-gray-400">
-                          <option value="Playfair Display">Playfair Display</option>
-                          <option value="Merriweather">Merriweather</option>
-                          <option value="Lora">Lora</option>
-                          <option value="PT Serif">PT Serif</option>
-                          <option value="Times New Roman">Times New Roman</option>
-                          <option value="Georgia">Georgia</option>
-                        </optgroup>
-                        <optgroup label="Display & Handwriting" className="bg-gray-900 text-gray-400">
-                          <option value="Bangers">Bangers</option>
-                          <option value="Pacifico">Pacifico</option>
-                          <option value="Righteous">Righteous</option>
-                          <option value="Lobster">Lobster</option>
-                          <option value="Permanent Marker">Permanent Marker</option>
-                          <option value="Dancing Script">Dancing Script</option>
-                        </optgroup>
-                        <optgroup label="Monospace" className="bg-gray-900 text-gray-400">
-                          <option value="Courier New">Courier New</option>
-                          <option value="Roboto Mono">Roboto Mono</option>
-                          <option value="Source Code Pro">Source Code Pro</option>
-                        </optgroup>
+                        {Array.from(getFontsByCategory()).map(([category, fonts]) => (
+                          <optgroup key={category} label={category} className="bg-gray-900 text-gray-400">
+                            {fonts.map(font => (
+                              <option key={font.name} value={font.name}>{font.name}</option>
+                            ))}
+                          </optgroup>
+                        ))}
                       </select>
                     </div>
 

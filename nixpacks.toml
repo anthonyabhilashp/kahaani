@@ -1,8 +1,57 @@
 [phases.setup]
-nixPkgs = ["nodejs_20", "ffmpeg-full"]
+nixPkgs = ["nodejs_20", "ffmpeg-full", "fontconfig", "dejavu_fonts", "liberation_ttf"]
 
 [phases.install]
-cmds = ["npm ci"]
+cmds = [
+  "npm ci",
+  "mkdir -p /root/.fonts",
+  # Sans-Serif fonts
+  "curl -L https://github.com/google/fonts/raw/main/ofl/montserrat/Montserrat-Regular.ttf -o /root/.fonts/Montserrat-Regular.ttf",
+  "curl -L https://github.com/google/fonts/raw/main/ofl/montserrat/Montserrat-Bold.ttf -o /root/.fonts/Montserrat-Bold.ttf",
+  "curl -L https://github.com/google/fonts/raw/main/ofl/poppins/Poppins-Regular.ttf -o /root/.fonts/Poppins-Regular.ttf",
+  "curl -L https://github.com/google/fonts/raw/main/ofl/poppins/Poppins-Bold.ttf -o /root/.fonts/Poppins-Bold.ttf",
+  "curl -L https://github.com/google/fonts/raw/main/ofl/inter/Inter-Regular.ttf -o /root/.fonts/Inter-Regular.ttf",
+  "curl -L https://github.com/google/fonts/raw/main/ofl/inter/Inter-Bold.ttf -o /root/.fonts/Inter-Bold.ttf",
+  "curl -L https://github.com/google/fonts/raw/main/apache/roboto/Roboto-Regular.ttf -o /root/.fonts/Roboto-Regular.ttf",
+  "curl -L https://github.com/google/fonts/raw/main/apache/roboto/Roboto-Bold.ttf -o /root/.fonts/Roboto-Bold.ttf",
+  "curl -L https://github.com/google/fonts/raw/main/apache/opensans/OpenSans-Regular.ttf -o /root/.fonts/OpenSans-Regular.ttf",
+  "curl -L https://github.com/google/fonts/raw/main/apache/opensans/OpenSans-Bold.ttf -o /root/.fonts/OpenSans-Bold.ttf",
+  "curl -L https://github.com/google/fonts/raw/main/ofl/lato/Lato-Regular.ttf -o /root/.fonts/Lato-Regular.ttf",
+  "curl -L https://github.com/google/fonts/raw/main/ofl/lato/Lato-Bold.ttf -o /root/.fonts/Lato-Bold.ttf",
+  "curl -L https://github.com/google/fonts/raw/main/ofl/raleway/Raleway-Regular.ttf -o /root/.fonts/Raleway-Regular.ttf",
+  "curl -L https://github.com/google/fonts/raw/main/ofl/raleway/Raleway-Bold.ttf -o /root/.fonts/Raleway-Bold.ttf",
+  "curl -L https://github.com/google/fonts/raw/main/ofl/nunito/Nunito-Regular.ttf -o /root/.fonts/Nunito-Regular.ttf",
+  "curl -L https://github.com/google/fonts/raw/main/ofl/nunito/Nunito-Bold.ttf -o /root/.fonts/Nunito-Bold.ttf",
+  "curl -L https://github.com/google/fonts/raw/main/ofl/sourcesanspro/SourceSansPro-Regular.ttf -o /root/.fonts/SourceSansPro-Regular.ttf",
+  "curl -L https://github.com/google/fonts/raw/main/ofl/sourcesanspro/SourceSansPro-Bold.ttf -o /root/.fonts/SourceSansPro-Bold.ttf",
+  "curl -L https://github.com/google/fonts/raw/main/ofl/oswald/Oswald-Regular.ttf -o /root/.fonts/Oswald-Regular.ttf",
+  "curl -L https://github.com/google/fonts/raw/main/ofl/oswald/Oswald-Bold.ttf -o /root/.fonts/Oswald-Bold.ttf",
+  "curl -L https://github.com/google/fonts/raw/main/ofl/bebasneue/BebasNeue-Regular.ttf -o /root/.fonts/BebasNeue-Regular.ttf",
+  # Serif fonts
+  "curl -L https://github.com/google/fonts/raw/main/ofl/playfairdisplay/PlayfairDisplay-Regular.ttf -o /root/.fonts/PlayfairDisplay-Regular.ttf",
+  "curl -L https://github.com/google/fonts/raw/main/ofl/playfairdisplay/PlayfairDisplay-Bold.ttf -o /root/.fonts/PlayfairDisplay-Bold.ttf",
+  "curl -L https://github.com/google/fonts/raw/main/ofl/merriweather/Merriweather-Regular.ttf -o /root/.fonts/Merriweather-Regular.ttf",
+  "curl -L https://github.com/google/fonts/raw/main/ofl/merriweather/Merriweather-Bold.ttf -o /root/.fonts/Merriweather-Bold.ttf",
+  "curl -L https://github.com/google/fonts/raw/main/ofl/lora/Lora-Regular.ttf -o /root/.fonts/Lora-Regular.ttf",
+  "curl -L https://github.com/google/fonts/raw/main/ofl/lora/Lora-Bold.ttf -o /root/.fonts/Lora-Bold.ttf",
+  "curl -L https://github.com/google/fonts/raw/main/ofl/ptserif/PTSerif-Regular.ttf -o /root/.fonts/PTSerif-Regular.ttf",
+  "curl -L https://github.com/google/fonts/raw/main/ofl/ptserif/PTSerif-Bold.ttf -o /root/.fonts/PTSerif-Bold.ttf",
+  # Display & Handwriting fonts
+  "curl -L https://github.com/google/fonts/raw/main/ofl/bangers/Bangers-Regular.ttf -o /root/.fonts/Bangers-Regular.ttf",
+  "curl -L https://github.com/google/fonts/raw/main/ofl/pacifico/Pacifico-Regular.ttf -o /root/.fonts/Pacifico-Regular.ttf",
+  "curl -L https://github.com/google/fonts/raw/main/ofl/righteous/Righteous-Regular.ttf -o /root/.fonts/Righteous-Regular.ttf",
+  "curl -L https://github.com/google/fonts/raw/main/ofl/lobster/Lobster-Regular.ttf -o /root/.fonts/Lobster-Regular.ttf",
+  "curl -L https://github.com/google/fonts/raw/main/apache/permanentmarker/PermanentMarker-Regular.ttf -o /root/.fonts/PermanentMarker-Regular.ttf",
+  "curl -L https://github.com/google/fonts/raw/main/ofl/dancingscript/DancingScript-Regular.ttf -o /root/.fonts/DancingScript-Regular.ttf",
+  "curl -L https://github.com/google/fonts/raw/main/ofl/dancingscript/DancingScript-Bold.ttf -o /root/.fonts/DancingScript-Bold.ttf",
+  # Monospace fonts
+  "curl -L https://github.com/google/fonts/raw/main/apache/robotomono/RobotoMono-Regular.ttf -o /root/.fonts/RobotoMono-Regular.ttf",
+  "curl -L https://github.com/google/fonts/raw/main/apache/robotomono/RobotoMono-Bold.ttf -o /root/.fonts/RobotoMono-Bold.ttf",
+  "curl -L https://github.com/google/fonts/raw/main/ofl/sourcecodepro/SourceCodePro-Regular.ttf -o /root/.fonts/SourceCodePro-Regular.ttf",
+  "curl -L https://github.com/google/fonts/raw/main/ofl/sourcecodepro/SourceCodePro-Bold.ttf -o /root/.fonts/SourceCodePro-Bold.ttf",
+  # Refresh font cache so FFmpeg can find them
+  "fc-cache -f -v"
+]
 
 [phases.build]
 cmds = ["npm run build"]

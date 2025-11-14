@@ -399,9 +399,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // 7️⃣ Get video dimensions based on aspect ratio
     const aspectRatioMap: { [key: string]: { width: number; height: number } } = {
-      "9:16": { width: 1080, height: 1920 },  // Portrait (mobile/TikTok)
-      "16:9": { width: 1920, height: 1080 },  // Landscape (YouTube)
-      "1:1": { width: 1080, height: 1080 }    // Square (Instagram)
+      "9:16": { width: 2160, height: 3840 },  // Portrait (4K)
+      "16:9": { width: 3840, height: 2160 },  // Landscape (4K)
+      "1:1": { width: 3840, height: 3840 }    // Square (4K)
     };
 
     // Preview dimensions (from getPreviewDimensions in [id].tsx)
@@ -802,6 +802,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         };
 
         logger.info(`[${story_id}] 📏 Font size: ${previewFontSize}px (preview) → ${scaledFontSize}pt (video) [${fontSizeScalingFactor.toFixed(2)}x scale]`);
+        logger.info(`[${story_id}] 📐 ASS subtitle resolution: ${width}x${height}, marginV: ${marginV}px (${positionFromBottom}% from bottom)`);
 
         // Generate ASS with word-by-word animation and custom highlight color
         const highlightColor = convertHexToASSColor(captions.activeColor || '#FFEB3B');
@@ -814,7 +815,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           highlightColor,
           wordsPerBatch,
           textTransform,
-          fullText
+          fullText,
+          width,  // Pass actual video width for correct PlayResX
+          height  // Pass actual video height for correct PlayResY
         );
         fs.writeFileSync(assPath, assContent);
         logger.info(`[${story_id}] ✅ Generated word-by-word ASS subtitles with ${wordsPerBatch > 0 ? wordsPerBatch + ' words per batch' : 'all words'}, transform: ${textTransform}`);
@@ -855,7 +858,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const concatFilterStr = `${concatInputs}concat=n=${videoClips.length}:v=1:a=0[concatv]`;
 
       // Add floating watermark (always enabled) - moves in smooth, pseudo-random pattern
-      const watermarkFilter = `drawtext=text='AiVideoGen.cc':fontsize=20:fontcolor=white@0.4:x='w*0.5 + w*0.40*sin(2*PI*t/83)':y='h*0.5 + h*0.40*cos(2*PI*t/97)':shadowcolor=black@0.3:shadowx=1:shadowy=1`;
+      // Scale watermark font size to match preview (14px in preview -> scaled for video)
+      const watermarkPreviewFontSize = 14; // Preview watermark font size (from [id].tsx line 5173)
+      const watermarkScaledFontSize = Math.round(watermarkPreviewFontSize * fontSizeScalingFactor);
+      logger.info(`[${story_id}] 🏷️ Watermark font size: ${watermarkPreviewFontSize}px (preview) → ${watermarkScaledFontSize}pt (video)`);
+
+      // Constrained watermark movement: x ranges from 15% to 65%, y ranges from 20% to 80%
+      // This prevents text cutoff at edges while maintaining smooth movement
+      const watermarkFilter = `drawtext=text='AiVideoGen.cc':fontsize=${watermarkScaledFontSize}:fontcolor=white@0.4:x='w*0.15 + w*0.25*sin(2*PI*t/83)':y='h*0.20 + h*0.30*cos(2*PI*t/97)':shadowcolor=black@0.3:shadowx=1:shadowy=1`;
 
       // Build complete filter chain: concat -> subtitles (optional) -> watermark -> output
       let filterComplex;

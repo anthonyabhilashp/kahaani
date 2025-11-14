@@ -234,13 +234,83 @@ VIDEO_HEIGHT=1920
 
 ## Important Technical Details
 
-### FFmpeg Video Generation
+### FFmpeg Video Generation ⚠️ CRITICAL - READ CAREFULLY
 
-- Uses `fluent-ffmpeg` to combine images and audio
-- Each scene uses its audio duration for timing
-- Falls back to 30s default if ffprobe fails
-- Temporary files stored in `/tmp/{story_id}/` during processing
-- Final video uploaded to Supabase Storage
+**BEFORE modifying ANY video generation code, understand these critical requirements:**
+
+#### Video Concatenation - Concat FILTER vs Demuxer
+
+**🚨 NEVER switch back to concat demuxer - it breaks with different frame rates!**
+
+- **Current (CORRECT)**: Uses concat **FILTER** (`filter_complex`)
+  - Handles videos with different frame rates (23.976fps, 30fps, etc.)
+  - Required for user-uploaded YouTube videos
+  - Properly concatenates scenes with correct total duration
+
+- **Previous (BROKEN)**: Used concat **DEMUXER** (`-f concat`)
+  - Only works if ALL videos have identical codec parameters
+  - Silently failed with different frame rates
+  - Resulted in truncated videos (e.g., 21s instead of 32s)
+
+**Location**: `generate_video.ts` lines 843-894
+
+#### Video Duration Management - DO NOT REMOVE
+
+**🚨 NEVER remove `.setDuration()` from uploaded video processing!**
+
+```javascript
+// ✅ CORRECT - Trims uploaded video to match scene duration
+ffmpeg(scene.videoPath!)
+  .setStartTime(0)
+  .setDuration(scene.duration)  // ← CRITICAL! Do not remove!
+```
+
+**Why this matters:**
+- User uploads 30s video but scene duration is 10s
+- Without `.setDuration()`: Video plays for 30s, audio ends at 10s → "rushed" appearance
+- With `.setDuration()`: Video trimmed to 10s, matches audio perfectly
+
+**Location**: `generate_video.ts` lines 447-472
+
+#### Video Dimensions - Aspect Ratio Specific
+
+**🚨 DO NOT force all aspect ratios to use same dimensions!**
+
+Each aspect ratio uses specific 4K dimensions:
+- **9:16 portrait**: 2160 x 3840 (vertical/TikTok)
+- **16:9 landscape**: 3840 x 2160 (horizontal/YouTube)
+- **1:1 square**: 3840 x 3840 (Instagram)
+
+These are hardcoded in both `generate_images.ts` AND `generate_video.ts` and MUST match.
+
+**Location**:
+- `generate_images.ts` lines 465-480
+- `generate_video.ts` lines 400-418
+
+#### Font Scaling System - Preview vs Video
+
+**Captions and watermark MUST scale proportionally:**
+
+```javascript
+// Scaling factor = video width / preview width
+const fontSizeScalingFactor = width / previewDimensions.width;
+
+// For 1:1 aspect ratio:
+// 3840px (video) / 400px (preview) = 9.6x scale
+
+// Caption: 18px (preview) × 9.6 = 173pt (video)
+// Watermark: 14px (preview) × 9.6 = 134pt (video)
+```
+
+**Location**: `generate_video.ts` lines 420-421, 788-804, 859-863
+
+#### Temporary Files & Processing
+
+- Individual clips: `/tmp/{story_id}/clip-{index}.mp4`
+- Audio files: `/tmp/{story_id}/scene-{index}-audio.mp3`
+- Padded audio: `/tmp/{story_id}/padded-audio-{index}.m4a`
+- Final output: `/tmp/{story_id}/final-video-{story_id}.mp4`
+- Cleanup happens automatically after upload to Supabase
 
 ### Logging System
 
@@ -296,9 +366,54 @@ The story detail page uses a professional 3-panel layout:
 
 ### Modifying Video Dimensions
 
-1. Update `ASPECT_RATIO`, `VIDEO_WIDTH`, `VIDEO_HEIGHT` in `.env.local`
-2. Both `generate_images.ts` and `generate_video.ts` use these values
-3. Restart dev server for changes to take effect
+**⚠️ WARNING: Dimensions are aspect-ratio-specific, NOT from env vars!**
+
+The dimensions are **hardcoded per aspect ratio** in both files:
+- `generate_images.ts` lines 465-480
+- `generate_video.ts` lines 400-418
+
+**DO NOT** try to use `process.env.VIDEO_WIDTH/VIDEO_HEIGHT` for all aspect ratios!
+
+## Video Generation - Lessons Learned 🚨
+
+**These are REAL mistakes that were made and caused production issues:**
+
+### Mistake #1: Removed `.setDuration()` from video processing
+**What happened**: Thought videos should play at "natural duration" without trimming
+**Result**: 30s uploaded video played fully while 10s audio ended early → "rushed" video
+**Fix**: Always trim videos with `.setDuration(scene.duration)` to match audio
+**Never do this again!**
+
+### Mistake #2: Used concat demuxer instead of filter
+**What happened**: Used `-f concat` (demuxer) which requires identical codec params
+**Result**: Videos with different frame rates (23.976fps, 30fps) concatenated incorrectly → 21s instead of 32s
+**Fix**: Use concat **filter** (`filter_complex`) which handles different frame rates
+**Never switch back to demuxer!**
+
+### Mistake #3: Tried to force env vars for all aspect ratios
+**What happened**: Replaced aspect-ratio-specific dimensions with `process.env.VIDEO_WIDTH`
+**Result**: Would force 9:16 portrait (2160x3840) and 16:9 landscape (3840x2160) to use same dimensions
+**Fix**: Keep hardcoded dimensions per aspect ratio in both image and video generation
+**Never assume env vars work for everything!**
+
+### Mistake #4: Didn't scale watermark font size
+**What happened**: Hardcoded watermark to 20pt regardless of video resolution
+**Result**: Tiny watermark on 4K video (3840px) compared to preview (400px)
+**Fix**: Scale watermark using same `fontSizeScalingFactor` as captions
+**Always scale UI elements proportionally!**
+
+### Key Takeaway
+**Video generation is complex with many interdependent parts:**
+- Duration management (audio, video, trimming)
+- FFmpeg concat methods (demuxer vs filter)
+- Aspect ratios and dimensions
+- Font scaling between preview and final video
+
+**NEVER change video generation logic without:**
+1. Reading ALL related code completely
+2. Understanding the full architecture
+3. Testing with ACTUAL uploaded videos
+4. Verifying final video duration and quality
 
 ## Debugging UI Issues - CRITICAL LESSONS
 
