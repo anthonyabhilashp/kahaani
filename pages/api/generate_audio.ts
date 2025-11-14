@@ -287,15 +287,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // 8️⃣ Update scene with audio URL, voice_id, duration, word timestamps, and set audio_generated_at timestamp
     logger.info(`[${scene.story_id}] 💾 Updating scene ${scene_id} with voice_id: ${voiceId}`);
+
+    // Build update object
+    const updateData: any = {
+      audio_url: audioUrl,
+      voice_id: voiceId,
+      word_timestamps: wordTimestamps,
+      audio_generated_at: new Date().toISOString()
+    };
+
+    // Only update duration if there's NO video (for image-based scenes)
+    // Video uploads already have correct duration from video file
+    if (!scene.video_url) {
+      updateData.duration = duration;
+      logger.info(`[${scene.story_id}] ⏱️ Setting duration from audio: ${duration.toFixed(2)}s (no video exists)`);
+    } else {
+      logger.info(`[${scene.story_id}] ⏱️ Preserving existing video duration: ${scene.duration.toFixed(2)}s (video exists)`);
+    }
+
     const { error: updateErr } = await supabaseAdmin
       .from("scenes")
-      .update({
-        audio_url: audioUrl,
-        voice_id: voiceId,
-        duration: duration,
-        word_timestamps: wordTimestamps,
-        audio_generated_at: new Date().toISOString()
-      })
+      .update(updateData)
       .eq("id", scene_id);
 
     if (updateErr) {

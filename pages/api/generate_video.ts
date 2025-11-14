@@ -330,23 +330,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         logger.info(`[${story_id}] 📝 Scene ${index + 1} has no media - will be text-only`);
       }
 
-      // Download audio if exists and get its duration
+      // Download audio if exists
       if (scene.audio_url) {
         const audioRes = await fetch(scene.audio_url);
         const audioBuffer = Buffer.from(await audioRes.arrayBuffer());
         const audioPath = path.join(tmpDir, `scene-${index}-audio.mp3`);
         fs.writeFileSync(audioPath, audioBuffer);
         sceneFiles.audioPath = audioPath;
-
-        // Get actual audio duration using ffprobe
-        const audioDuration = await getAudioDuration(audioPath);
-        sceneFiles.duration = audioDuration;
-        logger.info(`[${story_id}] 🎵 Scene ${index + 1} audio duration: ${audioDuration.toFixed(2)}s`);
-      } else {
-        // No audio - use calculated duration from database
-        sceneFiles.duration = (scene as any).duration || 5; // Default to 5s if not set
-        logger.info(`[${story_id}] 📝 Scene ${index + 1} text-based duration: ${sceneFiles.duration.toFixed(2)}s (no audio)`);
+        logger.info(`[${story_id}] 🎵 Scene ${index + 1} audio downloaded`);
       }
+
+      // Always use scene.duration from database (already set correctly during upload/audio generation)
+      sceneFiles.duration = (scene as any).duration || 5; // Default to 5s if not set
+      logger.info(`[${story_id}] ⏱️ Scene ${index + 1} duration: ${sceneFiles.duration.toFixed(2)}s`);
+
 
       // Download overlay if exists
       const overlayUrl = (scene.effects as any)?.overlay_url;
@@ -457,7 +454,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               `pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black`
             ])
             .videoCodec('libx264')
-            .audioCodec('copy') // Keep original audio if exists
+            .noAudio() // Strip audio (already extracted separately during upload)
             .outputOptions([
               '-pix_fmt yuv420p',
               '-preset medium',
@@ -465,7 +462,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             ])
             .save(clipPath)
             .on('end', () => {
-              logger.info(`[${story_id}] ✅ Scene ${scene.sceneIndex + 1} video processed`);
+              logger.info(`[${story_id}] ✅ Scene ${scene.sceneIndex + 1} video processed and trimmed to ${scene.duration.toFixed(2)}s`);
               resolve();
             })
             .on('error', (err: any) => {
@@ -474,7 +471,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             });
         });
 
-        videoClips.push(`file '${clipPath.replace(/'/g, "'\\''")}'`);
+        videoClips.push(clipPath);
         if (scene.audioPath) {
           audioClips.push(scene.audioPath);
         }
@@ -693,7 +690,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
       }
 
-      videoClips.push(`file '${clipPath}'`);
+      videoClips.push(clipPath);
 
       // If scene has audio, add it to audio clips list
       if (scene.audioPath) {
@@ -720,9 +717,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await updateJobProgress(jobId, 60);
 
     // 9️⃣ Combine all video clips
-    const concatTxt = path.join(tmpDir, "video-concat.txt");
-    fs.writeFileSync(concatTxt, videoClips.join("\n"));
-
     const videoOnlyPath = path.join(tmpDir, `video-only-${story_id}.mp4`);
 
     await updateJobProgress(jobId, 62);
@@ -847,40 +841,56 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await updateJobProgress(jobId, 65);
 
     await new Promise<void>((resolve, reject) => {
-      const outputOpts = [
-        "-c:v libx264",
-        "-pix_fmt yuv420p",
-        "-movflags +faststart",
-      ];
+      // Use concat FILTER instead of concat demuxer to properly handle videos with different frame rates
+      logger.info(`[${story_id}] 🎬 Concatenating ${videoClips.length} video clips with concat filter...`);
 
-      // Build video filter with watermark and optional captions
-      let videoFilter = '';
+      // Build FFmpeg command with each clip as a separate input
+      let cmd = ffmpeg();
+      videoClips.forEach((clipPath) => {
+        cmd = cmd.input(clipPath);
+      });
+
+      // Build concat filter: [0:v][1:v]concat=n=2:v=1:a=0[concatv]
+      const concatInputs = videoClips.map((_, i) => `[${i}:v]`).join('');
+      const concatFilterStr = `${concatInputs}concat=n=${videoClips.length}:v=1:a=0[concatv]`;
 
       // Add floating watermark (always enabled) - moves in smooth, pseudo-random pattern
-      // Uses Lissajous curve with different frequencies (83s and 97s) for x and y
-      // This creates a complex, non-repeating pattern that appears random
-      // Range: 10% to 90% of screen width/height with padding to prevent text cutoff (center at 50%, amplitude ±40%)
       const watermarkFilter = `drawtext=text='AiVideoGen.cc':fontsize=20:fontcolor=white@0.4:x='w*0.5 + w*0.40*sin(2*PI*t/83)':y='h*0.5 + h*0.40*cos(2*PI*t/97)':shadowcolor=black@0.3:shadowx=1:shadowy=1`;
 
+      // Build complete filter chain: concat -> subtitles (optional) -> watermark -> output
+      let filterComplex;
       if (captionFilter) {
-        // Captions + watermark
-        videoFilter = `subtitles='${captionFilter}',${watermarkFilter}`;
-        logger.info(`[${story_id}] 🏷️ Adding floating watermark + captions to video`);
+        // Concat -> Captions -> Watermark
+        filterComplex = `${concatFilterStr};[concatv]subtitles=${captionFilter}[captioned];[captioned]${watermarkFilter}[outv]`;
+        logger.info(`[${story_id}] 🏷️ Adding concat + captions + watermark to video`);
       } else {
-        // Just watermark
-        videoFilter = watermarkFilter;
-        logger.info(`[${story_id}] 🏷️ Adding floating watermark to video`);
+        // Concat -> Watermark only
+        filterComplex = `${concatFilterStr};[concatv]${watermarkFilter}[outv]`;
+        logger.info(`[${story_id}] 🏷️ Adding concat + watermark to video`);
       }
 
-      outputOpts.push(`-vf ${videoFilter}`);
-
-      ffmpeg()
-        .input(concatTxt)
-        .inputOptions(["-f concat", "-safe 0"])
-        .outputOptions(outputOpts)
+      cmd
+        .complexFilter(filterComplex)
+        .outputOptions([
+          "-map [outv]",
+          "-c:v libx264",
+          "-crf 18", // High quality (same as individual clips)
+          "-preset medium",
+          "-pix_fmt yuv420p",
+          "-movflags +faststart",
+        ])
         .save(videoOnlyPath)
-        .on("end", () => resolve())
-        .on("error", reject);
+        .on("start", (cmdLine) => {
+          logger.info(`[${story_id}] 🚀 FFmpeg concat filter: ${cmdLine.substring(0, 200)}...`);
+        })
+        .on("end", () => {
+          logger.info(`[${story_id}] ✅ Video clips concatenated with filters applied`);
+          resolve();
+        })
+        .on("error", (err: any) => {
+          logger.error(`[${story_id}] ❌ FFmpeg concat failed: ${err.message}`);
+          reject(err);
+        });
     });
 
     await updateJobProgress(jobId, 72);
@@ -892,13 +902,52 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const hasAudio = mediaPaths.some(s => s.audioPath);
 
     if (hasAudio) {
-      // Create concat file for audio
+      // Pad each scene's audio to match its video duration, then concat
+      const paddedAudioFiles: string[] = [];
+
+      for (let i = 0; i < mediaPaths.length; i++) {
+        const scene = mediaPaths[i];
+
+        if (scene.audioPath) {
+          // Pad audio to match scene duration
+          const paddedAudioPath = path.join(tmpDir, `padded-audio-${i}.m4a`);
+          await new Promise<void>((resolve, reject) => {
+            ffmpeg(scene.audioPath!)
+              .audioFilters([
+                `apad=whole_dur=${scene.duration}` // Pad with silence to match video duration
+              ])
+              .audioCodec("aac")
+              .audioBitrate("256k")
+              .audioChannels(2)
+              .audioFrequency(48000)
+              .save(paddedAudioPath)
+              .on("end", () => resolve())
+              .on("error", reject);
+          });
+          paddedAudioFiles.push(paddedAudioPath);
+          logger.info(`[${story_id}] 🎵 Scene ${i + 1} audio padded to ${scene.duration.toFixed(2)}s`);
+        } else {
+          // No audio for this scene - create silence
+          const silencePath = path.join(tmpDir, `silence-${i}.m4a`);
+          await new Promise<void>((resolve, reject) => {
+            ffmpeg()
+              .input('anullsrc=r=48000:cl=stereo')
+              .inputOptions(['-f lavfi'])
+              .duration(scene.duration)
+              .audioCodec("aac")
+              .audioBitrate("256k")
+              .save(silencePath)
+              .on("end", () => resolve())
+              .on("error", reject);
+          });
+          paddedAudioFiles.push(silencePath);
+          logger.info(`[${story_id}] 🔇 Scene ${i + 1} silence created for ${scene.duration.toFixed(2)}s`);
+        }
+      }
+
+      // Create concat file for padded audio
       const audioConcat = path.join(tmpDir, "audio-concat.txt");
-      const audioFiles = mediaPaths
-        .map(s => s.audioPath)
-        .filter(Boolean)
-        .map(p => `file '${p}'`);
-      fs.writeFileSync(audioConcat, audioFiles.join("\n"));
+      fs.writeFileSync(audioConcat, paddedAudioFiles.map(p => `file '${p}'`).join("\n"));
 
       // Concat audio files (narration) with high quality settings and normalization
       const mergedNarrationAudio = path.join(tmpDir, "merged-narration.m4a");

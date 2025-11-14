@@ -234,14 +234,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // 5️⃣ Create video-only version (strip audio track)
+    if (!tempVideoPath) {
+      throw new Error("Video file path is missing");
+    }
+
     videoOnlyPath = path.join(tmpdir(), `scene-video-only-${scene_id}-${Date.now()}.mp4`);
     logger.info(`[Scene ${scene_id}] 🎬 Creating video-only file (removing audio track)...`);
 
     await new Promise<void>((resolve, reject) => {
-      ffmpeg(tempVideoPath)
+      ffmpeg(tempVideoPath!)
         .noAudio() // Strip audio track
         .videoCodec('copy') // Copy video as-is (fast, no re-encoding)
-        .output(videoOnlyPath)
+        .output(videoOnlyPath!)
         .on('end', () => {
           logger.info(`[Scene ${scene_id}] ✅ Video-only file created`);
           resolve();
@@ -278,12 +282,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     logger.info(`[Scene ${scene_id}] 📸 Extracting best frame as thumbnail...`);
 
     await new Promise<void>((resolve, reject) => {
-      ffmpeg(tempVideoPath)
+      ffmpeg(tempVideoPath!)
         .outputOptions([
           '-vf', 'thumbnail=300,scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2', // Analyze first 300 frames, pick best, then scale
           '-frames:v', '1' // Output only 1 frame
         ])
-        .output(thumbnailPath)
+        .output(thumbnailPath!)
         .on('end', () => {
           logger.info(`[Scene ${scene_id}] ✅ Best frame thumbnail extracted`);
           resolve();
