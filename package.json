@@ -9,6 +9,7 @@
     "dev": "next dev",
     "prebuild": "node scripts/validate-fonts.js",
     "build": "next build",
+    "postinstall": "bash scripts/setup-fonts.sh",
     "start": "node server.js",
     "test": "echo \"Error: no test specified\" && exit 1",
     "debug": "next dev --port 3000 --hostname localhost",

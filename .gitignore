@@ -89,6 +89,9 @@ dist
 tmp/
 temp/
 
+# Downloaded fonts (installed via postinstall)
+fonts/
+
 # Editor directories and files
 .vscode/settings.json
 .vscode/launch.json

@@ -347,6 +347,129 @@ The story detail page uses a professional 3-panel layout:
    - Audio player
    - Future: Captions, Background customization
 
+## Font Management System
+
+### Overview
+
+All caption fonts are managed through a centralized system that ensures fonts available in the UI are installed on the server during Railway deployment.
+
+### Components
+
+1. **`lib/fonts.ts`** - Single source of truth for all fonts
+   - Contains `CAPTION_FONTS` array with font metadata
+   - Includes font name, category, system font flag, file name, and Google Fonts path
+   - Exports `getFontsByCategory()` for UI rendering
+
+2. **`pages/story/[id].tsx`** - Uses centralized font list
+   - Imports and uses `getFontsByCategory()` to render font dropdown
+   - No hardcoded font list - all fonts come from `lib/fonts.ts`
+
+3. **`nixpacks.toml`** - Railway deployment configuration
+   - Downloads all non-system fonts during build
+   - Installs fonts to `/root/.fonts/`
+   - Runs `fc-cache -f -v` to refresh font cache for FFmpeg
+
+4. **`scripts/generate-font-install.js`** - Code generator
+   - Reads `lib/fonts.ts` and generates nixpacks.toml installation commands
+   - Run manually when adding new fonts: `npm run generate-font-install`
+
+5. **`scripts/validate-fonts.js`** - Build-time validator
+   - Checks that all fonts in `lib/fonts.ts` are configured in `nixpacks.toml`
+   - Runs automatically before every build (prebuild script)
+   - Fails build if fonts are missing from installation config
+
+### Adding a New Font
+
+**IMPORTANT: Follow these steps EXACTLY to avoid font mismatch issues:**
+
+1. **Add font to `lib/fonts.ts`**:
+   ```typescript
+   {
+     name: "Comic Sans MS",           // Display name in UI
+     category: "Display & Handwriting",
+     systemFont: false,                // false = needs download
+     fileName: "ComicSansMS",          // No spaces, for file paths
+     fontPath: "apache/comicsansms"    // Path in Google Fonts repo
+   },
+   ```
+
+2. **Generate installation commands**:
+   ```bash
+   npm run generate-font-install
+   ```
+   This outputs the curl commands needed for nixpacks.toml
+
+3. **Update `nixpacks.toml`**:
+   - Copy the output from step 2
+   - Replace the `[phases.install] cmds` array
+   - Keep `npm ci`, `mkdir`, and `fc-cache` commands
+
+4. **Validate**:
+   ```bash
+   npm run validate-fonts
+   ```
+   Should show: ✅ All fonts are properly configured
+
+5. **Test build**:
+   ```bash
+   npm run build
+   ```
+   Validation runs automatically (prebuild script)
+
+### Why This System Exists
+
+**Problem**: Users select fonts in the UI, but if those fonts aren't installed on the Railway server, FFmpeg falls back to default fonts, causing mismatch between preview and generated video.
+
+**Solution**:
+- Centralized font configuration prevents drift between UI and server
+- Automatic validation fails build if fonts are missing
+- Generator script makes it easy to update nixpacks.toml
+
+### Validation Behavior
+
+The validation script (`scripts/validate-fonts.js`) runs automatically before every build:
+
+```bash
+npm run build
+# → prebuild runs validate-fonts.js
+# → if validation fails, build stops with error
+# → if validation passes, build continues
+```
+
+**Manual validation**:
+```bash
+npm run validate-fonts
+```
+
+**What it checks**:
+- All non-system fonts in `lib/fonts.ts` have corresponding curl commands in `nixpacks.toml`
+- Looks for `{fileName}-Regular.ttf` in nixpacks.toml content
+- Exits with code 1 (fails build) if any fonts are missing
+
+### System vs. Downloadable Fonts
+
+**System fonts** (already on server, no download needed):
+- Arial, Helvetica, Verdana, Times New Roman, Georgia, Courier New
+- Set `systemFont: true` in `lib/fonts.ts`
+
+**Downloadable fonts** (from Google Fonts):
+- All others (Montserrat, Poppins, Roboto, etc.)
+- Set `systemFont: false` and provide `fileName` and `fontPath`
+- Downloaded during Railway build from GitHub repo
+
+### Troubleshooting
+
+**Error: "Font not available on server"**
+1. Check if font exists in `lib/fonts.ts`
+2. Run `npm run validate-fonts` to see if it's configured
+3. If missing, run `npm run generate-font-install` and update nixpacks.toml
+4. Rebuild and deploy
+
+**Font looks different in preview vs video**
+- Likely means font is not installed on server
+- Check Railway build logs for font download errors
+- Verify font file names match Google Fonts repo structure
+
 ## Common Workflows
 
 ### Adding a New Generation Step

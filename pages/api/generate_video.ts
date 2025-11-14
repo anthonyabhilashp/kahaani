@@ -92,6 +92,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const { story_id, aspect_ratio, captions, background_music } = req.body;
   if (!story_id) return res.status(400).json({ error: "story_id required" });
 
+  // Configure fontconfig to use project fonts directory
+  // This works the same on local and Railway
+  const projectRoot = path.resolve(process.cwd());
+  const fontConfigFile = path.join(projectRoot, 'fonts.conf');
+  process.env.FONTCONFIG_FILE = fontConfigFile;
+
   let jobId: string | null = null;
 
   try {
@@ -788,12 +794,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const previewFontSize = captions.fontSize || 20;
         const scaledFontSize = Math.round(previewFontSize * fontSizeScalingFactor);
 
+        // Map CSS font weight to ASS font name with weight variant
+        // This ensures the same visual weight as preview
+        const fontWeight = captions.fontWeight || 600;
+        let fontNameWithWeight = captions.fontFamily || 'Montserrat';
+        let assBold = 0;
+
+        // Use specific font weight variants for better matching
+        if (fontWeight >= 700) {
+          fontNameWithWeight += ' Bold';
+          assBold = 1; // Also set bold flag for fallback
+        } else if (fontWeight >= 600) {
+          fontNameWithWeight += ' SemiBold';
+          assBold = 0;
+        } else if (fontWeight >= 500) {
+          fontNameWithWeight += ' Medium';
+          assBold = 0;
+        }
+        // else use Regular (default, no suffix needed)
+
         const assStyle: any = {
           name: 'Custom',
-          fontName: captions.fontFamily || 'Montserrat',
+          fontName: fontNameWithWeight,
           fontSize: scaledFontSize,
           primaryColour: convertHexToASSColor(captions.inactiveColor || '#FFFFFF'),
-          bold: captions.fontWeight >= 600 ? 1 : 0,
+          bold: assBold,
           italic: 0,
           outline: 0, // No outline - matches preview's clean text
           shadow: 3, // Drop shadow - matches preview's textShadow
@@ -801,7 +826,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           marginV: marginV,
         };
 
-        logger.info(`[${story_id}] 📏 Font size: ${previewFontSize}px (preview) → ${scaledFontSize}pt (video) [${fontSizeScalingFactor.toFixed(2)}x scale]`);
+        logger.info(`[${story_id}] 📏 Font: "${fontNameWithWeight}", size: ${previewFontSize}px (preview) → ${scaledFontSize}pt (video) [${fontSizeScalingFactor.toFixed(2)}x scale]`);
+        logger.info(`[${story_id}] 📏 Font weight: ${fontWeight} (CSS) → "${fontNameWithWeight}" (ASS), bold=${assBold}`);
         logger.info(`[${story_id}] 📐 ASS subtitle resolution: ${width}x${height}, marginV: ${marginV}px (${positionFromBottom}% from bottom)`);
 
         // Generate ASS with word-by-word animation and custom highlight color
