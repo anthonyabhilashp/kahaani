@@ -261,10 +261,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     await updateJobProgress(jobId, 10);
 
-    // 1️⃣ Fetch scenes with images, audio, word timestamps, and effects
+    // 1️⃣ Fetch scenes with images, videos, audio, word timestamps, and effects
     const { data: scenes, error: sceneErr } = await supabaseAdmin
       .from("scenes")
-      .select("id, order, text, image_url, audio_url, word_timestamps, effects, duration")
+      .select("id, order, text, image_url, video_url, audio_url, word_timestamps, effects, duration")
       .eq("story_id", story_id)
       .order("order", { ascending: true });
 
@@ -273,16 +273,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     await updateJobProgress(jobId, 15);
 
-    // 2️⃣ Verify images exist in scenes
-    const scenesWithImages = scenes.filter(s => s.image_url);
-    logger.info(`[${story_id}] 🖼️ Found ${scenesWithImages.length} scenes with images out of ${scenes.length} total`);
-    if (!scenesWithImages.length) throw new Error("No images found for this story");
+    // 2️⃣ Verify media (images or videos) exist in scenes
+    const scenesWithMedia = scenes.filter(s => s.image_url || (s as any).video_url);
+    logger.info(`[${story_id}] 🎬 Found ${scenesWithMedia.length} scenes with media out of ${scenes.length} total`);
+    if (!scenesWithMedia.length) throw new Error("No media (images or videos) found for this story");
 
     // 3️⃣ Download all media files and get audio durations
     const mediaPaths: Array<{
       sceneIndex: number;
       duration: number;
       imagePath?: string;
+      videoPath?: string;
       audioPath?: string;
     }> = [];
 
@@ -290,8 +291,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const scene = scenes[index];
       const sceneFiles: any = { sceneIndex: index, duration: 5 }; // Default 5 seconds if no audio
 
-      // Download image
-      if (scene.image_url) {
+      // Download video (if user uploaded one) OR image (if AI generated)
+      if ((scene as any).video_url) {
+        // User uploaded video for this scene
+        try {
+          const videoRes = await fetch((scene as any).video_url);
+          if (!videoRes.ok) {
+            throw new Error(`HTTP ${videoRes.status}: ${videoRes.statusText}`);
+          }
+          const buf = Buffer.from(await videoRes.arrayBuffer());
+          const videoPath = path.join(tmpDir, `scene-${index}-video.mp4`);
+          fs.writeFileSync(videoPath, buf);
+          sceneFiles.videoPath = videoPath;
+          logger.info(`[${story_id}] 🎥 Scene ${index + 1} video downloaded successfully`);
+        } catch (err: any) {
+          logger.error(`[${story_id}] ❌ Failed to download video for scene ${index + 1}: ${err.message}`);
+          logger.warn(`[${story_id}] ⚠️ Scene ${index + 1} will be skipped in video generation`);
+          // Don't set videoPath - scene will be skipped
+        }
+      } else if (scene.image_url) {
+        // AI-generated image for this scene
         try {
           const imgRes = await fetch(scene.image_url);
           if (!imgRes.ok) {
@@ -308,7 +327,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           // Don't set imagePath - scene will be skipped
         }
       } else {
-        logger.info(`[${story_id}] 📝 Scene ${index + 1} has no image URL - will be text-only`);
+        logger.info(`[${story_id}] 📝 Scene ${index + 1} has no media - will be text-only`);
       }
 
       // Download audio if exists and get its duration
@@ -414,7 +433,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await updateJobProgress(jobId, 35);
 
     for (const scene of mediaPaths) {
-      if (!scene.imagePath) continue; // Skip scenes without images
+      // Skip scenes without media (need either video or image)
+      if (!scene.videoPath && !scene.imagePath) continue;
 
       const clipPath = path.join(tmpDir, `clip-${scene.sceneIndex}.mp4`);
 
@@ -422,6 +442,44 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const sceneData = scenes[scene.sceneIndex];
       const effectId = sceneData.effects?.motion || "none";
       const effect = getEffect(effectId);
+
+      // 🎥 If scene has an uploaded video, use it directly
+      if (scene.videoPath) {
+        logger.info(`[${story_id}] 🎥 Scene ${scene.sceneIndex + 1}: Using uploaded video (${scene.duration.toFixed(2)}s)`);
+
+        // Trim/resize video to match story dimensions and duration
+        await new Promise<void>((resolve, reject) => {
+          ffmpeg(scene.videoPath!)
+            .setStartTime(0)
+            .setDuration(scene.duration)
+            .videoFilters([
+              `scale=${width}:${height}:force_original_aspect_ratio=decrease`,
+              `pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black`
+            ])
+            .videoCodec('libx264')
+            .audioCodec('copy') // Keep original audio if exists
+            .outputOptions([
+              '-pix_fmt yuv420p',
+              '-preset medium',
+              '-crf 18',
+            ])
+            .save(clipPath)
+            .on('end', () => {
+              logger.info(`[${story_id}] ✅ Scene ${scene.sceneIndex + 1} video processed`);
+              resolve();
+            })
+            .on('error', (err: any) => {
+              logger.error(`[${story_id}] ❌ Error processing video for scene ${scene.sceneIndex + 1}: ${err.message}`);
+              reject(err);
+            });
+        });
+
+        videoClips.push(`file '${clipPath.replace(/'/g, "'\\''")}'`);
+        if (scene.audioPath) {
+          audioClips.push(scene.audioPath);
+        }
+        continue; // Skip image processing for video clips
+      }
 
       logger.info(`[${story_id}] 🎬 Scene ${scene.sceneIndex + 1}: Applying "${effect.name}" effect`);
 
@@ -674,12 +732,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (captions?.enabled) {
       logger.info(`[${story_id}] 🎨 Generating captions with style: ${captions.style}, position: ${captions.position}`);
 
-      // Collect all word timestamps from all scenes
+      // Collect all word timestamps and full text from all scenes
       const allWordTimestamps: WordTimestamp[] = [];
+      const allSceneTexts: string[] = [];
       let timeOffset = 0;
 
       for (const scene of mediaPaths) {
         const sceneData = scenes[scene.sceneIndex];
+        allSceneTexts.push(sceneData.text); // Collect text for sentence boundary detection
+
         if (sceneData.word_timestamps && Array.isArray(sceneData.word_timestamps)) {
           // Use existing timestamps from database
           // These are either:
@@ -711,6 +772,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         timeOffset += scene.duration;
       }
 
+      // Combine all scene texts for sentence boundary detection
+      const fullText = allSceneTexts.join(' ');
+
       logger.info(`[${story_id}] 📝 Collected ${allWordTimestamps.length} word timestamps from ${mediaPaths.length} scenes`);
 
       // Use word-by-word ASS if we have timestamps, otherwise fallback to simple SRT
@@ -737,8 +801,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           primaryColour: convertHexToASSColor(captions.inactiveColor || '#FFFFFF'),
           bold: captions.fontWeight >= 600 ? 1 : 0,
           italic: 0,
-          outline: 3,
-          shadow: 2,
+          outline: 0, // No outline - matches preview's clean text
+          shadow: 3, // Drop shadow - matches preview's textShadow
           alignment: 2, // Bottom center
           marginV: marginV,
         };
@@ -755,7 +819,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           assStyle,
           highlightColor,
           wordsPerBatch,
-          textTransform
+          textTransform,
+          fullText
         );
         fs.writeFileSync(assPath, assContent);
         logger.info(`[${story_id}] ✅ Generated word-by-word ASS subtitles with ${wordsPerBatch > 0 ? wordsPerBatch + ' words per batch' : 'all words'}, transform: ${textTransform}`);
@@ -788,10 +853,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         "-movflags +faststart",
       ];
 
-      // Add caption filter if enabled (using ASS file)
+      // Build video filter with watermark and optional captions
+      let videoFilter = '';
+
+      // Add floating watermark (always enabled) - moves in smooth, pseudo-random pattern
+      // Uses Lissajous curve with different frequencies (83s and 97s) for x and y
+      // This creates a complex, non-repeating pattern that appears random
+      // Range: 10% to 90% of screen width/height with padding to prevent text cutoff (center at 50%, amplitude ±40%)
+      const watermarkFilter = `drawtext=text='AiVideoGen.cc':fontsize=20:fontcolor=white@0.4:x='w*0.5 + w*0.40*sin(2*PI*t/83)':y='h*0.5 + h*0.40*cos(2*PI*t/97)':shadowcolor=black@0.3:shadowx=1:shadowy=1`;
+
       if (captionFilter) {
-        outputOpts.push(`-vf subtitles='${captionFilter}'`);
+        // Captions + watermark
+        videoFilter = `subtitles='${captionFilter}',${watermarkFilter}`;
+        logger.info(`[${story_id}] 🏷️ Adding floating watermark + captions to video`);
+      } else {
+        // Just watermark
+        videoFilter = watermarkFilter;
+        logger.info(`[${story_id}] 🏷️ Adding floating watermark to video`);
       }
+
+      outputOpts.push(`-vf ${videoFilter}`);
 
       ffmpeg()
         .input(concatTxt)

@@ -51,10 +51,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   let storyIdForLog: string | null = null;
 
   try {
-    // 1️⃣ Fetch scene data
+    // 1️⃣ Fetch scene data (including video_url and duration for speed matching)
     const { data: scene, error: sceneErr } = await supabaseAdmin
       .from("scenes")
-      .select("id, text, story_id, order")
+      .select("id, text, story_id, order, video_url, duration")
       .eq("id", scene_id)
       .single();
 
@@ -120,6 +120,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const openaiVoice = VOICE_MAPPING[voiceId] || VOICE_MAPPING["default"];
     logger.info(`[${scene.story_id}] 🎤 Mapped voice to OpenAI: ${openaiVoice}`);
 
+    // Calculate TTS speed to match video duration (if video exists)
+    let ttsSpeed = 1.0;
+    const targetDuration = scene.video_url && scene.duration ? scene.duration : null;
+
+    if (targetDuration) {
+      // Estimate natural speech duration based on word count
+      const wordCount = sceneText.trim().split(/\s+/).length;
+      const wordsPerSecond = 2.5; // Average speaking rate
+      const naturalDuration = wordCount / wordsPerSecond;
+
+      // Calculate speed factor to match video duration
+      ttsSpeed = naturalDuration / targetDuration;
+
+      // Clamp speed to OpenAI's supported range (0.25 - 4.0)
+      ttsSpeed = Math.max(0.25, Math.min(4.0, ttsSpeed));
+
+      logger.info(`[${scene.story_id}] 🎯 Video duration detected: ${targetDuration.toFixed(2)}s`);
+      logger.info(`[${scene.story_id}] 📊 Word count: ${wordCount}, Natural duration: ${naturalDuration.toFixed(2)}s`);
+      logger.info(`[${scene.story_id}] ⚡ Adjusted TTS speed: ${ttsSpeed.toFixed(2)}x to match video`);
+    }
+
     // 2️⃣ Generate audio with OpenAI TTS
     const audioModel = process.env.AUDIO_MODEL || "tts-1-hd";
     logger.info(`[${scene.story_id}] 🧠 Generating TTS with OpenAI voice: ${openaiVoice} (model: ${audioModel})`);
@@ -134,7 +155,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         input: sceneText,
         voice: openaiVoice,
         response_format: "mp3",
-        speed: 1.0 // Normal speed
+        speed: ttsSpeed
       }),
     });
 
@@ -155,8 +176,56 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // 4️⃣ Get duration
     const info = await ffprobeAsync(audioPath);
-    const duration = info.format?.duration || 0;
+    let duration = info.format?.duration || 0;
     logger.info(`[${scene.story_id}] ⏱ Audio duration: ${duration.toFixed(2)} seconds`);
+
+    // 4.5️⃣ Adjust audio to match video duration exactly using FFmpeg (if video exists)
+    if (targetDuration && Math.abs(duration - targetDuration) > 0.5) {
+      logger.info(`[${scene.story_id}] 🔧 Fine-tuning audio duration to match video exactly...`);
+
+      const tempoFactor = duration / targetDuration; // Speed up/slow down
+      logger.info(`[${scene.story_id}] 📐 Tempo adjustment factor: ${tempoFactor.toFixed(3)}x`);
+
+      const adjustedAudioPath = path.join(tempDir, `scene-${scene_id}-adjusted.mp3`);
+
+      await new Promise<void>((resolve, reject) => {
+        // FFmpeg atempo filter supports 0.5 to 2.0 range
+        // For values outside this range, we chain multiple atempo filters
+        let filterComplex = '';
+
+        if (tempoFactor >= 0.5 && tempoFactor <= 2.0) {
+          filterComplex = `atempo=${tempoFactor.toFixed(3)}`;
+        } else if (tempoFactor < 0.5) {
+          // Chain multiple atempo filters for very slow speeds
+          filterComplex = `atempo=0.5,atempo=${(tempoFactor / 0.5).toFixed(3)}`;
+        } else {
+          // Chain multiple atempo filters for very fast speeds
+          filterComplex = `atempo=2.0,atempo=${(tempoFactor / 2.0).toFixed(3)}`;
+        }
+
+        ffmpeg(audioPath)
+          .audioFilters(filterComplex)
+          .output(adjustedAudioPath)
+          .on('end', () => {
+            logger.info(`[${scene.story_id}] ✅ Audio duration adjusted successfully`);
+            resolve();
+          })
+          .on('error', (err) => {
+            logger.error(`[${scene.story_id}] ❌ FFmpeg adjustment error: ${err.message}`);
+            reject(err);
+          })
+          .run();
+      });
+
+      // Replace original audio with adjusted version
+      fs.unlinkSync(audioPath);
+      fs.renameSync(adjustedAudioPath, audioPath);
+
+      // Get new duration
+      const adjustedInfo = await ffprobeAsync(audioPath);
+      duration = adjustedInfo.format?.duration || targetDuration;
+      logger.info(`[${scene.story_id}] ⏱ Final audio duration: ${duration.toFixed(2)} seconds (target: ${targetDuration.toFixed(2)}s)`);
+    }
 
     // 5️⃣ Generate word-level timestamps using forced alignment
     logger.info(`[${scene.story_id}] 🔍 Generating word-level timestamps with forced alignment...`);

@@ -23,7 +23,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const { story_id, scene_text, position } = req.body;
 
-  if (!story_id || !scene_text || position === undefined) {
+  if (!story_id || scene_text === undefined || scene_text === null || position === undefined) {
     return res.status(400).json({ error: "story_id, scene_text, and position are required" });
   }
 

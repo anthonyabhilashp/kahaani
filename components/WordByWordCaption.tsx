@@ -22,6 +22,7 @@ interface WordByWordCaptionProps {
   dimmedOpacity?: number;
   wordsPerBatch?: number; // Show N words at a time (1-5)
   textTransform?: 'none' | 'uppercase' | 'lowercase' | 'capitalize';
+  text?: string; // Optional: full text to detect sentence boundaries
 }
 
 export const WordByWordCaption = React.memo(function WordByWordCaption({
@@ -33,6 +34,7 @@ export const WordByWordCaption = React.memo(function WordByWordCaption({
   dimmedOpacity = 0.6,
   wordsPerBatch = 3, // Default 3 words at a time
   textTransform = 'none',
+  text,
 }: WordByWordCaptionProps) {
   if (!wordTimestamps || wordTimestamps.length === 0) {
     return null;
@@ -58,6 +60,22 @@ export const WordByWordCaption = React.memo(function WordByWordCaption({
     }
   }, [textTransform]);
 
+  // Detect which word indices end sentences (using text if available)
+  const sentenceEndIndices = useMemo(() => {
+    if (!text) return new Set<number>();
+
+    const indices = new Set<number>();
+    const textWords = text.trim().split(/\s+/);
+
+    textWords.forEach((word, idx) => {
+      if (word.endsWith('.') || word.endsWith('!') || word.endsWith('?')) {
+        indices.add(idx);
+      }
+    });
+
+    return indices;
+  }, [text]);
+
   // Determine which words to show based on wordsPerBatch - memoized
   const { visibleWords, startIndex } = useMemo(() => {
     let visible = wordTimestamps;
@@ -73,17 +91,45 @@ export const WordByWordCaption = React.memo(function WordByWordCaption({
         activeIndex = wordTimestamps.length - 1;
       }
 
-      // Calculate which batch the active word belongs to
-      // Batch 0: words 0-2, Batch 1: words 3-5, Batch 2: words 6-8, etc.
-      const batchIndex = Math.floor(activeIndex / wordsPerBatch);
-      start = batchIndex * wordsPerBatch;
-      const endIndex = Math.min(wordTimestamps.length, start + wordsPerBatch);
+      // Build batches respecting sentence boundaries
+      const batches: Array<[number, number]> = []; // [startIndex, endIndex]
+      let currentBatchStart = 0;
 
-      visible = wordTimestamps.slice(start, endIndex);
+      while (currentBatchStart < wordTimestamps.length) {
+        let batchEnd = currentBatchStart;
+
+        // Add up to wordsPerBatch words
+        for (let i = 0; i < wordsPerBatch && batchEnd < wordTimestamps.length; i++) {
+          batchEnd++;
+
+          // Check if this word index ends a sentence (using parsed text)
+          if (sentenceEndIndices.has(batchEnd - 1)) {
+            break; // End batch here, start new batch with next sentence
+          }
+        }
+
+        batches.push([currentBatchStart, batchEnd]);
+        currentBatchStart = batchEnd;
+      }
+
+      // Find which batch contains the active word
+      const activeBatch = batches.find(([batchStart, batchEnd]) =>
+        activeIndex >= batchStart && activeIndex < batchEnd
+      );
+
+      if (activeBatch) {
+        const [batchStart, batchEnd] = activeBatch;
+        start = batchStart;
+        visible = wordTimestamps.slice(batchStart, batchEnd);
+      } else {
+        // Fallback to first batch
+        start = 0;
+        visible = wordTimestamps.slice(0, Math.min(wordsPerBatch, wordTimestamps.length));
+      }
     }
 
     return { visibleWords: visible, startIndex: start };
-  }, [wordTimestamps, wordsPerBatch, currentWordIndex, currentTime]);
+  }, [wordTimestamps, wordsPerBatch, currentWordIndex, currentTime, sentenceEndIndices]);
 
   // Get inactive word color (use inactiveColor prop or style.color)
   const inactiveWordColor = inactiveColor || style.color;

@@ -49,14 +49,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // 1️⃣ Get scene data before deleting (for storage cleanup)
     const { data: sceneData, error: fetchSceneError } = await supabaseAdmin
       .from("scenes")
-      .select("id, image_url, audio_url")
+      .select("id, image_url, audio_url, video_url")
       .eq("id", scene_id)
       .single();
 
     if (fetchSceneError) {
       logger?.info(`[${story_id}] ⚠️ Warning: Could not fetch scene data: ${fetchSceneError.message}`);
     } else {
-      logger?.info(`[${story_id}] 📦 Scene data: image=${!!sceneData?.image_url}, audio=${!!sceneData?.audio_url}`);
+      logger?.info(`[${story_id}] 📦 Scene data: image=${!!sceneData?.image_url}, audio=${!!sceneData?.audio_url}, video=${!!sceneData?.video_url}`);
     }
 
     // Get image URLs before deleting from database (for storage cleanup)
@@ -156,14 +156,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             const url = new URL(image.image_url);
             const pathParts = url.pathname.split('/');
             const fileIndex = pathParts.findIndex(part => part === 'story-assets');
-            
+
             if (fileIndex !== -1 && fileIndex < pathParts.length - 1) {
               const filePath = pathParts.slice(fileIndex + 1).join('/');
-              
+
               const { error: storageError } = await supabaseAdmin.storage
                 .from('story-assets')
                 .remove([filePath]);
-              
+
               if (storageError) {
                 logger?.info(`[${story_id}] ⚠️ Warning: Could not delete storage file ${filePath}: ${storageError.message}`);
               } else {
@@ -174,6 +174,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             logger?.info(`[${story_id}] ⚠️ Warning: Could not parse image URL for storage deletion: ${image.image_url}`);
           }
         }
+      }
+    }
+
+    // 4️⃣ Delete video file from storage
+    if (sceneData?.video_url) {
+      try {
+        const videoPath = sceneData.video_url.split("/videos/")[1];
+        if (videoPath) {
+          logger?.info(`[${story_id}] 🎥 Deleting video file: ${videoPath}`);
+
+          const { error: videoStorageError } = await supabaseAdmin.storage
+            .from("videos")
+            .remove([videoPath]);
+
+          if (videoStorageError) {
+            logger?.info(`[${story_id}] ⚠️ Warning: Could not delete video file: ${videoStorageError.message}`);
+          } else {
+            logger?.info(`[${story_id}] ✅ Video file deleted: ${videoPath}`);
+          }
+        }
+      } catch (videoErr) {
+        logger?.info(`[${story_id}] ⚠️ Warning: Error deleting video: ${videoErr instanceof Error ? videoErr.message : 'Unknown'}`);
       }
     }
 

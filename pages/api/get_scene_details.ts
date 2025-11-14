@@ -8,7 +8,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     const { data: scene, error } = await supabaseAdmin
       .from("scenes")
-      .select("id, story_id, text, order, image_url, audio_url, voice_id, duration, word_timestamps, last_modified_at, created_at, image_generated_at, audio_generated_at, scene_text_modified_at, effects")
+      .select("id, story_id, text, order, image_url, video_url, audio_url, voice_id, duration, word_timestamps, last_modified_at, created_at, image_generated_at, audio_generated_at, scene_text_modified_at, effects")
       .eq("id", id)
       .single();
 

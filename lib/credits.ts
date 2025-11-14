@@ -1,8 +1,8 @@
 import { supabaseAdmin } from './supabaseAdmin';
-import { CREDIT_COSTS, NEW_USER_CREDITS, type TransactionType } from './creditConstants';
+import { CREDIT_COSTS, NEW_USER_CREDITS, type TransactionType, calculateVideoUploadCost } from './creditConstants';
 
 // Re-export for backward compatibility
-export { CREDIT_COSTS, NEW_USER_CREDITS, type TransactionType };
+export { CREDIT_COSTS, NEW_USER_CREDITS, type TransactionType, calculateVideoUploadCost };
 
 /**
  * Get user's credit balance

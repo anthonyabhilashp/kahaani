@@ -51,7 +51,8 @@ export function generateWordByWordASS(
   style: ASSStyle,
   highlightColor?: string,
   wordsPerBatch: number = 0, // 0 = show all words, >0 = show N words at a time
-  textTransform: 'none' | 'uppercase' | 'lowercase' | 'capitalize' = 'none'
+  textTransform: 'none' | 'uppercase' | 'lowercase' | 'capitalize' = 'none',
+  fullText?: string // Optional: full text to detect sentence boundaries
 ): string {
   if (!wordTimestamps.length) return '';
 
@@ -69,6 +70,40 @@ export function generateWordByWordASS(
     }
   };
 
+  // Detect which word indices end sentences (using fullText if available)
+  const sentenceEndIndices = new Set<number>();
+  if (fullText) {
+    const textWords = fullText.trim().split(/\s+/);
+    textWords.forEach((word, idx) => {
+      if (word.endsWith('.') || word.endsWith('!') || word.endsWith('?')) {
+        sentenceEndIndices.add(idx);
+      }
+    });
+  }
+
+  // Build batches respecting sentence boundaries (if wordsPerBatch > 0)
+  const batches: Array<[number, number]> = []; // [startIndex, endIndex]
+  if (wordsPerBatch > 0) {
+    let currentBatchStart = 0;
+
+    while (currentBatchStart < wordTimestamps.length) {
+      let batchEnd = currentBatchStart;
+
+      // Add up to wordsPerBatch words
+      for (let i = 0; i < wordsPerBatch && batchEnd < wordTimestamps.length; i++) {
+        batchEnd++;
+
+        // Check if this word index ends a sentence
+        if (sentenceEndIndices.has(batchEnd - 1)) {
+          break; // End batch here, start new batch with next sentence
+        }
+      }
+
+      batches.push([currentBatchStart, batchEnd]);
+      currentBatchStart = batchEnd;
+    }
+  }
+
   // Build ASS header
   const header = `[Script Info]
 Title: Word-by-Word Captions
@@ -80,7 +115,7 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: ${style.name},${style.fontName},${style.fontSize},${style.primaryColour},${style.secondaryColour || style.primaryColour},${style.outlineColour || '&H00000000'},${style.backColour || '&H00000000'},${style.bold},${style.italic},0,0,100,100,0,0,${style.outline > 0 ? 1 : 3},${style.outline},${style.shadow},${style.alignment},${style.marginL || 10},${style.marginR || 10},${style.marginV},1
+Style: ${style.name},${style.fontName},${style.fontSize},${style.primaryColour},${style.secondaryColour || style.primaryColour},${style.outlineColour || '&H00000000'},${style.backColour || '&H00000000'},${style.bold},${style.italic},0,0,100,100,0,0,1,${style.outline},${style.shadow},${style.alignment},${style.marginL || 10},${style.marginR || 10},${style.marginV},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -100,10 +135,18 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     let endIndex = wordTimestamps.length;
 
     if (wordsPerBatch > 0) {
-      // Calculate which batch the current word belongs to
-      const batchIndex = Math.floor(i / wordsPerBatch);
-      startIndex = batchIndex * wordsPerBatch;
-      endIndex = Math.min(wordTimestamps.length, startIndex + wordsPerBatch);
+      // Find which batch contains the current word
+      const activeBatch = batches.find(([batchStart, batchEnd]) =>
+        i >= batchStart && i < batchEnd
+      );
+
+      if (activeBatch) {
+        [startIndex, endIndex] = activeBatch;
+      } else {
+        // Fallback to first batch
+        startIndex = 0;
+        endIndex = Math.min(wordsPerBatch, wordTimestamps.length);
+      }
     }
 
     // Build text with only visible words

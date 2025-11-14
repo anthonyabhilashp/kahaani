@@ -59,6 +59,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const logger = story?.user_id ? getUserLogger(story.user_id) : null;
     logger?.info(`[${story_id}] 📝 Editing scene for story`);
 
+    // Fetch the scene to check if it has audio or video
+    let sceneData;
+    if (scene_id) {
+      const { data, error } = await supabaseAdmin
+        .from("scenes")
+        .select("audio_url, video_url, duration")
+        .eq("id", scene_id)
+        .single();
+
+      if (error) {
+        logger?.warn(`[${story_id}] ⚠️ Could not fetch scene data: ${error.message}`);
+      }
+      sceneData = data;
+    }
+
     // Update the scene in the database
     // Note: The database trigger will automatically invalidate the video
     const updateData: any = {
@@ -69,11 +84,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (text !== undefined) {
       updateData.text = text;
       updateData.scene_text_modified_at = new Date().toISOString();
-      // Recalculate duration based on new text
-      updateData.duration = calculateSceneDuration(text);
-      // Regenerate word timestamps based on new text
-      updateData.word_timestamps = text.trim().length > 0 ? generateWordTimestamps(text) : [];
-      logger?.info(`[${story_id}] 📝 Regenerated word timestamps for updated text`);
+
+      // Only recalculate duration if scene doesn't have a video
+      // If video exists, video duration is the source of truth
+      if (!sceneData?.video_url) {
+        updateData.duration = calculateSceneDuration(text);
+        logger?.info(`[${story_id}] ⏱️ Recalculated duration from text: ${updateData.duration}s`);
+      } else {
+        logger?.info(`[${story_id}] 🎥 Keeping video duration: ${sceneData.duration}s (not recalculating from text)`);
+      }
+
+      // Use synthetic timestamps immediately for quick save
+      if (text.trim().length > 0) {
+        updateData.word_timestamps = generateWordTimestamps(text);
+        logger?.info(`[${story_id}] 📝 Using synthetic word timestamps for quick save`);
+      } else {
+        updateData.word_timestamps = [];
+      }
     }
 
     let updateResult;

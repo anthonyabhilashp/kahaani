@@ -16,7 +16,7 @@ import { OverlaySelectionModal } from "../../components/OverlaySelectionModal";
 import type { EffectType } from "../../lib/videoEffects";
 import { getEffectAnimationClass } from "../../lib/videoEffects";
 import { useCredits } from "../../hooks/useCredits";
-import { CREDIT_COSTS } from "../../lib/creditConstants";
+import { CREDIT_COSTS, calculateVideoUploadCost } from "../../lib/creditConstants";
 import { useAuth } from "../../contexts/AuthContext";
 import { supabase } from "../../lib/supabaseClient";
 import { toast } from "@/hooks/use-toast";
@@ -28,6 +28,7 @@ type Scene = {
   scene_description?: string;
   order: number;
   image_url?: string;
+  video_url?: string;
   audio_url?: string;
   voice_id?: string;
   duration?: number;
@@ -71,6 +72,10 @@ export default function StoryDetailsPage() {
   const [audioProgress, setAudioProgress] = useState({ current: 0, total: 0 });
   const [generatingSceneImage, setGeneratingSceneImage] = useState<Set<number>>(new Set());
   const [generatingSceneAudio, setGeneratingSceneAudio] = useState<Set<number>>(new Set());
+  const [uploadingSceneVideo, setUploadingSceneVideo] = useState<Set<number>>(new Set());
+  const [videoUploadProgress, setVideoUploadProgress] = useState<{ [key: number]: number }>({});
+  const videoFileInputRef = useRef<HTMLInputElement | null>(null);
+  const [selectedVideoSceneIndex, setSelectedVideoSceneIndex] = useState<number | null>(null);
   const [generatingVideo, setGeneratingVideo] = useState(false);
   const [videoProgress, setVideoProgress] = useState(0);
   const [downloadingVideo, setDownloadingVideo] = useState(false);
@@ -103,6 +108,7 @@ export default function StoryDetailsPage() {
   const [currentTime, setCurrentTime] = useState(0); // Current playback time for word-by-word captions
   const progressIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const currentAudioRef = useRef<HTMLAudioElement | null>(null); // Track currently playing audio
+  const videoElementsRef = useRef<{ [key: number]: HTMLVideoElement | null }>({});
   const captionSettingsLoadedRef = useRef(false); // Track if caption settings have been loaded from DB
   const bgMusicSettingsLoadedRef = useRef(false); // Track if background music settings have been loaded from DB
   const hasFetchedRef = useRef(false); // Track if story has been fetched to prevent duplicates
@@ -249,6 +255,15 @@ export default function StoryDetailsPage() {
   const [imageInstructions, setImageInstructions] = useState<string>("");
   const [bulkImageDrawerOpen, setBulkImageDrawerOpen] = useState(false);
   const [bulkAudioDrawerOpen, setBulkAudioDrawerOpen] = useState(false);
+
+  // Video upload drawer state
+  const [videoDrawerOpen, setVideoDrawerOpen] = useState(false);
+  const [videoDrawerScene, setVideoDrawerScene] = useState<number | null>(null);
+  const [selectedVideoFile, setSelectedVideoFile] = useState<File | null>(null);
+  const [videoFileDuration, setVideoFileDuration] = useState<number>(0);
+  const [loadingVideoDuration, setLoadingVideoDuration] = useState(false);
+  const [videoImportMode, setVideoImportMode] = useState<'file' | 'youtube'>('file');
+  const [youtubeUrl, setYoutubeUrl] = useState<string>('');
   const [creditConfirmOpen, setCreditConfirmOpen] = useState(false);
   const [creditConfirmAction, setCreditConfirmAction] = useState<{
     title: string;
@@ -565,6 +580,7 @@ export default function StoryDetailsPage() {
       const scenesWithTimestamp = (data.scenes || []).map((scene: any) => ({
         ...scene,
         image_url: scene.image_url ? `${scene.image_url}?t=${timestamp}&r=${random}` : scene.image_url,
+        video_url: scene.video_url ? `${scene.video_url}?t=${timestamp}&r=${random}` : scene.video_url,
         audio_url: scene.audio_url ? `${scene.audio_url}?t=${timestamp}&r=${random}` : scene.audio_url
       }));
 
@@ -685,6 +701,7 @@ export default function StoryDetailsPage() {
       const updatedScene = {
         ...data.scene,
         image_url: data.scene.image_url ? `${data.scene.image_url}?t=${timestamp}&r=${random}` : data.scene.image_url,
+        video_url: data.scene.video_url ? `${data.scene.video_url}?t=${timestamp}&r=${random}` : data.scene.video_url,
         audio_url: data.scene.audio_url ? `${data.scene.audio_url}?t=${timestamp}&r=${random}` : data.scene.audio_url
       };
 
@@ -1587,6 +1604,251 @@ export default function StoryDetailsPage() {
     setImageDrawerOpen(true);
   };
 
+  // Handle video file selection for scene
+  const handleSceneVideoUpload = async (sceneIndex: number, file: File) => {
+    const scene = scenes[sceneIndex];
+    if (!scene || !scene.id) return;
+
+    try {
+      setUploadingSceneVideo(prev => new Set(prev).add(sceneIndex));
+      setVideoUploadProgress(prev => ({ ...prev, [sceneIndex]: 0 }));
+
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        throw new Error("Please log in to upload videos");
+      }
+
+      // Create form data
+      const formData = new FormData();
+      formData.append('scene_id', scene.id);
+      formData.append('video', file);
+
+      // Upload with progress tracking
+      const xhr = new XMLHttpRequest();
+
+      xhr.upload.addEventListener('progress', (e) => {
+        if (e.lengthComputable) {
+          const progress = Math.round((e.loaded / e.total) * 100);
+          setVideoUploadProgress(prev => ({ ...prev, [sceneIndex]: progress }));
+        }
+      });
+
+      xhr.addEventListener('load', async () => {
+        if (xhr.status === 200) {
+          const result = JSON.parse(xhr.responseText);
+
+          toast({
+            title: "✅ Video Uploaded Successfully",
+            description: `Scene ${sceneIndex + 1} video uploaded and transcribed`,
+          });
+
+          // Refresh story data to get updated scene
+          await fetchStory(false, true);
+        } else {
+          const error = JSON.parse(xhr.responseText);
+          toast({
+            title: "❌ Upload Failed",
+            description: error.error || 'Upload failed',
+            variant: "destructive",
+          });
+        }
+
+        // Clear uploading state after completion (success or failure)
+        setUploadingSceneVideo(prev => {
+          const newSet = new Set(prev);
+          newSet.delete(sceneIndex);
+          return newSet;
+        });
+        setVideoUploadProgress(prev => {
+          const newProgress = { ...prev };
+          delete newProgress[sceneIndex];
+          return newProgress;
+        });
+      });
+
+      xhr.addEventListener('error', () => {
+        toast({
+          title: "❌ Upload Failed",
+          description: 'Network error during upload',
+          variant: "destructive",
+        });
+
+        // Clear uploading state on network error
+        setUploadingSceneVideo(prev => {
+          const newSet = new Set(prev);
+          newSet.delete(sceneIndex);
+          return newSet;
+        });
+        setVideoUploadProgress(prev => {
+          const newProgress = { ...prev };
+          delete newProgress[sceneIndex];
+          return newProgress;
+        });
+      });
+
+      xhr.open('POST', '/api/upload-scene-video');
+      xhr.setRequestHeader('Authorization', `Bearer ${session.access_token}`);
+      xhr.send(formData);
+
+    } catch (err: any) {
+      console.error('Error uploading video:', err);
+      toast({
+        title: "❌ Upload Failed",
+        description: err.message || "Failed to upload video",
+        variant: "destructive",
+      });
+
+      // Clear uploading state on exception
+      setUploadingSceneVideo(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(sceneIndex);
+        return newSet;
+      });
+      setVideoUploadProgress(prev => {
+        const newProgress = { ...prev };
+        delete newProgress[sceneIndex];
+        return newProgress;
+      });
+    }
+  };
+
+  // Open video upload drawer
+  const openVideoUpload = (sceneIndex: number) => {
+    setVideoDrawerScene(sceneIndex);
+    setSelectedVideoFile(null);
+    setVideoFileDuration(0);
+    setYoutubeUrl('');
+    setVideoImportMode('file');
+    setVideoDrawerOpen(true);
+  };
+
+  // Handle YouTube video import
+  const handleYouTubeVideoImport = async (sceneIndex: number, url: string) => {
+    const scene = scenes[sceneIndex];
+    if (!scene || !scene.id) return;
+
+    try {
+      setUploadingSceneVideo(prev => new Set(prev).add(sceneIndex));
+
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        throw new Error("Please log in to import videos");
+      }
+
+      const response = await fetch('/api/import-youtube-video', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${session.access_token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          scene_id: scene.id,
+          youtube_url: url,
+        }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Import failed');
+      }
+
+      const result = await response.json();
+
+      toast({
+        title: "✅ Video Imported Successfully",
+        description: `YouTube video imported and transcribed for scene ${sceneIndex + 1}`,
+      });
+
+      // Refresh story data to get updated scene
+      await fetchStory(false, true);
+
+    } catch (err: any) {
+      console.error('Error importing YouTube video:', err);
+      toast({
+        title: "❌ Import Failed",
+        description: err.message || "Failed to import YouTube video",
+        variant: "destructive",
+      });
+    } finally {
+      setUploadingSceneVideo(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(sceneIndex);
+        return newSet;
+      });
+    }
+  };
+
+  // Handle video file selection in drawer
+  const handleVideoFileSelected = async (file: File) => {
+    setSelectedVideoFile(file);
+    setLoadingVideoDuration(true);
+
+    // Get video duration for credit calculation
+    try {
+      const videoElement = document.createElement('video');
+      videoElement.preload = 'metadata';
+
+      videoElement.onloadedmetadata = () => {
+        window.URL.revokeObjectURL(videoElement.src);
+        const duration = videoElement.duration;
+        setVideoFileDuration(duration);
+        setLoadingVideoDuration(false);
+      };
+
+      videoElement.onerror = () => {
+        setLoadingVideoDuration(false);
+        toast({
+          title: "Error",
+          description: "Could not read video file. Please try a different file.",
+          variant: "destructive"
+        });
+      };
+
+      videoElement.src = URL.createObjectURL(file);
+    } catch (error) {
+      setLoadingVideoDuration(false);
+      toast({
+        title: "Error",
+        description: "Could not read video file",
+        variant: "destructive"
+      });
+    }
+  };
+
+  // Handle file input change
+  const handleVideoFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file && selectedVideoSceneIndex !== null) {
+      // Validate file
+      if (!file.type.startsWith('video/')) {
+        toast({
+          title: "❌ Invalid File",
+          description: "Please select a video file",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      // Check file size (200MB max)
+      const maxSize = 200 * 1024 * 1024;
+      if (file.size > maxSize) {
+        toast({
+          title: "❌ File Too Large",
+          description: "Maximum file size is 200MB",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      handleSceneVideoUpload(selectedVideoSceneIndex, file);
+    }
+
+    // Reset file input
+    if (e.target) {
+      e.target.value = '';
+    }
+  };
+
   // Open voice update confirmation dialog
   const openVoiceUpdateConfirm = (voiceId: string) => {
     const voiceName = voices.find(v => v.id === voiceId)?.name || "Unknown Voice";
@@ -2008,6 +2270,15 @@ export default function StoryDetailsPage() {
       audio.currentTime = 0;
     });
 
+    // Stop all video elements
+    Object.values(videoElementsRef.current).forEach(video => {
+      if (video) {
+        video.pause();
+        video.currentTime = 0;
+        video.muted = true;
+      }
+    });
+
     // Also stop any other audio elements as fallback
     const audios = document.querySelectorAll('audio');
     audios.forEach(audio => {
@@ -2041,11 +2312,16 @@ export default function StoryDetailsPage() {
     setSceneProgress(sceneTime);
     setTotalProgress(targetTotalTime);
     setCurrentTime(sceneTime); // Update current time for captions
-    if (preloadedAudio[sceneIndex]) {
+
+    // Set duration based on media type
+    const scene = scenes[sceneIndex];
+    const videoElement = scene?.video_url ? videoElementsRef.current[sceneIndex] : null;
+    if (videoElement && videoElement.duration) {
+      setSceneDuration(videoElement.duration);
+    } else if (preloadedAudio[sceneIndex]) {
       setSceneDuration(preloadedAudio[sceneIndex].duration);
     } else {
-      // No audio - use calculated duration from database
-      const scene = scenes[sceneIndex];
+      // No media - use calculated duration from database
       setSceneDuration(scene?.duration || 5);
     }
 
@@ -2067,12 +2343,21 @@ export default function StoryDetailsPage() {
       if (wasPlaying) {
         previewCancelledRef.current = true;
 
-        // Stop current playback
+        // Stop current playback (audio or video)
         if (currentAudioRef.current) {
           currentAudioRef.current.pause();
           currentAudioRef.current.currentTime = 0;
           currentAudioRef.current = null;
         }
+
+        // Stop any playing video
+        const currentVideo = videoElementsRef.current[selectedScene];
+        if (currentVideo) {
+          currentVideo.pause();
+          currentVideo.currentTime = 0;
+          currentVideo.muted = true;
+        }
+
         if (progressIntervalRef.current) {
           clearInterval(progressIntervalRef.current);
           progressIntervalRef.current = null;
@@ -2082,8 +2367,9 @@ export default function StoryDetailsPage() {
         await new Promise(resolve => setTimeout(resolve, 100));
       }
 
-      // Set up audio for the new scene
-      if (preloadedAudio[sceneIndex]) {
+      // Set up media for the new scene (video or audio)
+      const targetScene = scenes[sceneIndex];
+      if (targetScene?.video_url || preloadedAudio[sceneIndex]) {
         // If was playing, start new preview loop from this position
         if (wasPlaying) {
           // Reset cancellation flag for the new loop
@@ -2095,7 +2381,96 @@ export default function StoryDetailsPage() {
       }
     } else {
       // Same scene, just seek within it
-      if (currentAudioRef.current) {
+      const scene = scenes[sceneIndex];
+      const videoElement = scene?.video_url ? videoElementsRef.current[sceneIndex] : null;
+      const audioElement = scene?.audio_url ? preloadedAudio[sceneIndex] : null;
+
+      // If scene has video AND separate audio, seek both
+      if (videoElement && audioElement && scene?.video_url && scene?.audio_url) {
+        const wasPlaying = !audioElement.paused;
+
+        // Clear interval temporarily to prevent overwriting
+        if (progressIntervalRef.current) {
+          clearInterval(progressIntervalRef.current);
+          progressIntervalRef.current = null;
+        }
+
+        videoElement.pause();
+        audioElement.pause();
+        videoElement.currentTime = sceneTime;
+        audioElement.currentTime = sceneTime;
+
+        // Update progress states immediately
+        setSceneProgress(sceneTime);
+        setTotalProgress(targetTotalTime);
+        setCurrentTime(sceneTime);
+
+        if (wasPlaying) {
+          // Restart progress tracking
+          const sceneStartTimes = getSceneStartTimes();
+          const cumulativeStart = sceneStartTimes[selectedScene];
+
+          progressIntervalRef.current = setInterval(() => {
+            if (audioElement && !audioElement.paused) {
+              const currentSceneTime = audioElement.currentTime;
+              setSceneProgress(currentSceneTime);
+              setTotalProgress(cumulativeStart + currentSceneTime);
+              setCurrentTime(currentSceneTime);
+
+              // Keep video synced with audio
+              if (videoElement && Math.abs(videoElement.currentTime - audioElement.currentTime) > 0.1) {
+                videoElement.currentTime = audioElement.currentTime;
+              }
+            }
+          }, 100);
+
+          try {
+            await Promise.all([videoElement.play(), audioElement.play()]);
+          } catch (err) {
+            console.error("Resume video + audio play error:", err);
+          }
+        }
+      }
+      // If scene has video only, seek video element
+      else if (videoElement) {
+        const wasPlaying = !videoElement.paused;
+
+        // Clear interval temporarily to prevent overwriting
+        if (progressIntervalRef.current) {
+          clearInterval(progressIntervalRef.current);
+          progressIntervalRef.current = null;
+        }
+
+        videoElement.pause();
+        videoElement.currentTime = sceneTime;
+
+        // Update progress states immediately
+        setSceneProgress(sceneTime);
+        setTotalProgress(targetTotalTime);
+        setCurrentTime(sceneTime);
+
+        if (wasPlaying) {
+          // Restart progress tracking
+          const sceneStartTimes = getSceneStartTimes();
+          const cumulativeStart = sceneStartTimes[selectedScene];
+
+          progressIntervalRef.current = setInterval(() => {
+            if (videoElement && !videoElement.paused) {
+              const currentSceneTime = videoElement.currentTime;
+              setSceneProgress(currentSceneTime);
+              setTotalProgress(cumulativeStart + currentSceneTime);
+              setCurrentTime(currentSceneTime);
+            }
+          }, 100);
+
+          try {
+            await videoElement.play();
+          } catch (err) {
+            console.error("Resume video play error:", err);
+          }
+        }
+      } else if (currentAudioRef.current) {
+        // Otherwise, seek audio element (for image scenes)
         const audio = currentAudioRef.current;
         const wasPlaying = !audio.paused;
 
@@ -2111,6 +2486,7 @@ export default function StoryDetailsPage() {
         // Update progress states immediately
         setSceneProgress(sceneTime);
         setTotalProgress(targetTotalTime);
+        setCurrentTime(sceneTime);
 
         if (wasPlaying) {
           // Restart progress tracking
@@ -2122,6 +2498,7 @@ export default function StoryDetailsPage() {
               const currentSceneTime = audio.currentTime;
               setSceneProgress(currentSceneTime);
               setTotalProgress(cumulativeStart + currentSceneTime);
+              setCurrentTime(currentSceneTime);
             }
           }, 100);
 
@@ -2183,6 +2560,61 @@ export default function StoryDetailsPage() {
       setSelectedScene(sceneIndex);
 
       const scene = scenes[sceneIndex];
+
+      // Handle video scenes
+      if (scene?.video_url && videoElementsRef.current[sceneIndex]) {
+        const videoElement = videoElementsRef.current[sceneIndex];
+        if (videoElement) {
+          videoElement.currentTime = startTime;
+          videoElement.volume = volumeRef.current;
+          videoElement.muted = false;
+
+          const duration = videoElement.duration || scene.duration || 5;
+          const sceneStartTimes = getSceneStartTimes();
+          const cumulativeStart = sceneStartTimes[sceneIndex];
+
+          setSceneDuration(duration);
+          setSceneProgress(startTime);
+          setTotalProgress(cumulativeStart + startTime);
+          setCurrentTime(startTime);
+
+          try {
+            // Start progress tracking
+            progressIntervalRef.current = setInterval(() => {
+              if (videoElement && !videoElement.paused) {
+                const currentSceneTime = videoElement.currentTime;
+                setSceneProgress(currentSceneTime);
+                setTotalProgress(cumulativeStart + currentSceneTime);
+                setCurrentTime(currentSceneTime);
+              }
+            }, 100);
+
+            await videoElement.play();
+            await new Promise<void>((resolve) => {
+              videoElement.onended = () => {
+                if (progressIntervalRef.current) {
+                  clearInterval(progressIntervalRef.current);
+                }
+                resolve();
+              };
+              videoElement.onerror = () => {
+                if (progressIntervalRef.current) {
+                  clearInterval(progressIntervalRef.current);
+                }
+                resolve();
+              };
+            });
+          } catch (err) {
+            console.error("Video play error:", err);
+            if (progressIntervalRef.current) {
+              clearInterval(progressIntervalRef.current);
+            }
+          }
+        }
+        return !previewCancelledRef.current;
+      }
+
+      // Handle audio-only scenes (AI-generated images)
       if (scene?.audio_url && preloadedAudio[sceneIndex]) {
         const currentVol = volumeRef.current;
         const audio = preloadedAudio[sceneIndex];
@@ -2355,6 +2787,161 @@ export default function StoryDetailsPage() {
       setSelectedScene(sceneIndex);
 
       const scene = scenes[sceneIndex];
+
+      // If scene has uploaded video AND separate audio, play video muted + sync with audio
+      if (scene?.video_url && scene?.audio_url && videoElementsRef.current[sceneIndex] && preloadedAudio[sceneIndex]) {
+        const videoElement = videoElementsRef.current[sceneIndex];
+        const audio = preloadedAudio[sceneIndex];
+
+        if (videoElement && audio) {
+          console.log(`🎥🔊 Playing video (muted) with separate audio narration for scene ${sceneIndex + 1}`);
+
+          // Reset both video and audio
+          videoElement.currentTime = 0;
+          videoElement.muted = true; // Mute video audio
+          audio.currentTime = 0;
+          audio.volume = volumeRef.current;
+
+          // Set scene duration from audio (should match video duration after generation)
+          const duration = audio.duration || scene.duration || 5;
+          setSceneDuration(duration);
+          setSceneProgress(0);
+          currentAudioRef.current = audio;
+
+          // Calculate cumulative start time
+          const sceneStartTimes = getSceneStartTimes();
+          const cumulativeStart = sceneStartTimes[sceneIndex];
+
+          try {
+            // Start progress tracking
+            progressIntervalRef.current = setInterval(() => {
+              if (audio && !audio.paused) {
+                const currentSceneTime = audio.currentTime;
+                setSceneProgress(currentSceneTime);
+                setTotalProgress(cumulativeStart + currentSceneTime);
+                setCurrentTime(currentSceneTime);
+
+                // Keep video synced with audio
+                if (videoElement && Math.abs(videoElement.currentTime - audio.currentTime) > 0.1) {
+                  videoElement.currentTime = audio.currentTime;
+                }
+              }
+            }, 100);
+
+            // Play both video and audio together
+            await Promise.all([videoElement.play(), audio.play()]);
+
+            await new Promise<void>((resolve) => {
+              const checkCancellation = () => {
+                if (previewCancelledRef.current) {
+                  videoElement.pause();
+                  audio.pause();
+                  if (progressIntervalRef.current) {
+                    clearInterval(progressIntervalRef.current);
+                  }
+                  resolve();
+                  return;
+                }
+                setTimeout(checkCancellation, 100);
+              };
+
+              audio.onended = () => {
+                videoElement.pause();
+                if (progressIntervalRef.current) {
+                  clearInterval(progressIntervalRef.current);
+                }
+                resolve();
+              };
+
+              audio.onerror = () => {
+                videoElement.pause();
+                if (progressIntervalRef.current) {
+                  clearInterval(progressIntervalRef.current);
+                }
+                resolve();
+              };
+
+              checkCancellation();
+            });
+          } catch (err) {
+            console.error("Video + Audio sync play error:", err);
+            if (progressIntervalRef.current) {
+              clearInterval(progressIntervalRef.current);
+            }
+          }
+        }
+        return true;
+      }
+
+      // If scene has uploaded video only (no separate audio), play the video with its built-in audio
+      if (scene?.video_url && videoElementsRef.current[sceneIndex]) {
+        const videoElement = videoElementsRef.current[sceneIndex];
+        if (videoElement) {
+          console.log(`🎥 Playing uploaded video for scene ${sceneIndex + 1}`);
+          videoElement.currentTime = 0;
+          videoElement.volume = volumeRef.current;
+          videoElement.muted = false;
+
+          // Set scene duration from video
+          const duration = videoElement.duration || scene.duration || 5;
+          setSceneDuration(duration);
+          setSceneProgress(0);
+
+          // Calculate cumulative start time
+          const sceneStartTimes = getSceneStartTimes();
+          const cumulativeStart = sceneStartTimes[sceneIndex];
+
+          try {
+            // Start progress tracking for video
+            progressIntervalRef.current = setInterval(() => {
+              if (videoElement && !videoElement.paused) {
+                const currentSceneTime = videoElement.currentTime;
+                setSceneProgress(currentSceneTime);
+                setTotalProgress(cumulativeStart + currentSceneTime);
+                setCurrentTime(currentSceneTime);
+              }
+            }, 100);
+
+            await videoElement.play();
+            await new Promise<void>((resolve) => {
+              const checkCancellation = () => {
+                if (previewCancelledRef.current) {
+                  videoElement.pause();
+                  if (progressIntervalRef.current) {
+                    clearInterval(progressIntervalRef.current);
+                  }
+                  resolve();
+                  return;
+                }
+                setTimeout(checkCancellation, 100);
+              };
+
+              videoElement.onended = () => {
+                if (progressIntervalRef.current) {
+                  clearInterval(progressIntervalRef.current);
+                }
+                resolve();
+              };
+              videoElement.onerror = () => {
+                if (progressIntervalRef.current) {
+                  clearInterval(progressIntervalRef.current);
+                }
+                resolve();
+              };
+
+              checkCancellation();
+            });
+          } catch (err) {
+            console.error("Video play error:", err);
+            if (progressIntervalRef.current) {
+              clearInterval(progressIntervalRef.current);
+            }
+          }
+        }
+        return true;
+      }
+
+      // Otherwise, play audio-only scenes (AI-generated images with separate audio)
       if (scene?.audio_url && preloadedAudio[sceneIndex]) {
         const currentVol = volumeRef.current;
         console.log(`🔊 Playing preloaded audio for scene ${sceneIndex + 1} with volume ${currentVol}`);
@@ -2508,6 +3095,9 @@ export default function StoryDetailsPage() {
   const editScene = async (sceneIndex: number, newText: string) => {
     if (!id || !scenes[sceneIndex]) return;
 
+    const hasAudio = !!scenes[sceneIndex].audio_url;
+    const sceneId = scenes[sceneIndex].id;
+
     try {
       const headers = await getAuthHeaders();
       const res = await fetch("/api/edit_scene", {
@@ -2515,7 +3105,7 @@ export default function StoryDetailsPage() {
         headers,
         body: JSON.stringify({
           story_id: id,
-          scene_id: scenes[sceneIndex].id,
+          scene_id: sceneId,
           scene_order: sceneIndex,
           text: newText,
         }),
@@ -2539,9 +3129,46 @@ export default function StoryDetailsPage() {
       setEditingScene(null);
       setEditText("");
       setEditSceneDescription("");
+
+      // If scene has audio, trigger async alignment in the background
+      if (hasAudio && newText.trim().length > 0) {
+        toast({
+          title: "Scene saved!",
+          description: "Aligning text with audio in the background...",
+        });
+
+        // Trigger alignment asynchronously (don't await)
+        fetch("/api/align_scene_text", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            story_id: id,
+            scene_id: sceneId,
+          }),
+        })
+          .then(async (alignRes) => {
+            if (alignRes.ok) {
+              // Refresh scene to get new word timestamps (pass scene ID, not index)
+              await fetchAndUpdateScene(sceneId);
+              toast({
+                title: "Alignment complete!",
+                description: "Text synced with audio successfully",
+              });
+            } else {
+              console.warn("Alignment failed, using synthetic timestamps");
+            }
+          })
+          .catch((err) => {
+            console.warn("Alignment error:", err);
+          });
+      }
     } catch (err) {
       console.error("Scene edit error:", err);
-      alert(`Failed to edit scene: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      toast({
+        title: "Error",
+        description: `Failed to edit scene: ${err instanceof Error ? err.message : 'Unknown error'}`,
+        variant: "destructive"
+      });
     }
   };
 
@@ -2750,7 +3377,7 @@ export default function StoryDetailsPage() {
   };
 
   const handleAddScene = async () => {
-    if (!newSceneText.trim() || addScenePosition === null || !id) return;
+    if (addScenePosition === null || !id) return;
 
     setAddingScene(true);
     try {
@@ -2760,7 +3387,7 @@ export default function StoryDetailsPage() {
         headers,
         body: JSON.stringify({
           story_id: id,
-          scene_text: newSceneText.trim(),
+          scene_text: newSceneText.trim(), // Can be empty string - useful for video uploads
           position: addScenePosition // 0 = before first scene, 1 = after first scene, etc.
         }),
       });
@@ -2775,6 +3402,7 @@ export default function StoryDetailsPage() {
         const scenesWithTimestamp = result.updated_scenes.map((scene: any) => ({
           ...scene,
           image_url: scene.image_url ? `${scene.image_url}?t=${timestamp}` : scene.image_url,
+          video_url: scene.video_url ? `${scene.video_url}?t=${timestamp}` : scene.video_url,
           audio_url: scene.audio_url ? `${scene.audio_url}?t=${timestamp}` : scene.audio_url
         }));
         setScenes(scenesWithTimestamp);
@@ -3401,6 +4029,13 @@ export default function StoryDetailsPage() {
                         <div className="absolute top-1 left-1 bg-black/80 px-2 py-0.5 rounded text-white text-xs font-bold">
                           #{index + 1}
                         </div>
+                        {/* Video indicator badge */}
+                        {scene.video_url && (
+                          <div className="absolute top-1 right-1 bg-purple-600/90 backdrop-blur-sm px-1.5 py-0.5 rounded text-white text-[9px] font-bold flex items-center gap-0.5 shadow-lg">
+                            <PlayCircle className="w-2.5 h-2.5" />
+                            <span className="hidden sm:inline">VIDEO</span>
+                          </div>
+                        )}
                         {/* Audio indicator - clickable to play/pause */}
                         {scene.audio_url && (
                           <button
@@ -3494,7 +4129,7 @@ export default function StoryDetailsPage() {
                     {/* Action Buttons */}
                     <div className="flex items-center justify-between gap-1.5 lg:gap-2 pt-3 border-t border-gray-800">
                       <div className="flex gap-1.5 lg:gap-2">
-                        {/* Audio Button or Status */}
+                        {/* Audio Button - Always show */}
                         <Tooltip>
                           <TooltipTrigger asChild>
                             {scene.audio_url ? (
@@ -3538,7 +4173,7 @@ export default function StoryDetailsPage() {
                                   </>
                                 ) : (
                                   <>
-                                    <X className="w-3 h-3" />
+                                    <Plus className="w-3 h-3" />
                                     <span className="text-[10px] lg:text-xs">Audio</span>
                                   </>
                                 )}
@@ -3550,31 +4185,88 @@ export default function StoryDetailsPage() {
                           </TooltipContent>
                         </Tooltip>
 
-                        {/* Image Button or Status */}
+                        {/* Image Button - Only show if no video and not uploading video */}
+                        {!scene.video_url && !uploadingSceneVideo.has(index) && (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              {scene.image_url ? (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    openImageDrawer(index);
+                                  }}
+                                  disabled={generatingSceneImage.has(index)}
+                                  className={`px-2 lg:px-3 py-1.5 text-xs rounded transition-colors flex items-center gap-1 lg:gap-1.5 disabled:opacity-50 ${
+                                    isImageOutdated(scene)
+                                      ? 'bg-yellow-900/50 hover:bg-yellow-800/60 border border-yellow-700/50 text-yellow-400'
+                                      : 'bg-green-800 hover:bg-green-700 text-white'
+                                  }`}
+                                >
+                                  {generatingSceneImage.has(index) ? (
+                                    <>
+                                      <Loader2 className="w-3 h-3 animate-spin" />
+                                      <span className="text-[10px] lg:text-xs">Gen...</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Check className="w-3 h-3" />
+                                      <span className="text-[10px] lg:text-xs">Image</span>
+                                    </>
+                                  )}
+                                </button>
+                              ) : (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    openImageDrawer(index);
+                                  }}
+                                  disabled={generatingSceneImage.has(index)}
+                                  className="px-2 lg:px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-400 text-xs rounded transition-colors flex items-center gap-1 lg:gap-1.5 disabled:opacity-50"
+                                >
+                                  {generatingSceneImage.has(index) ? (
+                                    <>
+                                      <Loader2 className="w-3 h-3 animate-spin" />
+                                      <span className="text-[10px] lg:text-xs">Gen...</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Plus className="w-3 h-3" />
+                                      <span className="text-[10px] lg:text-xs">Image</span>
+                                    </>
+                                  )}
+                                </button>
+                              )}
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              <p>{getImageButtonTooltip(scene)}</p>
+                            </TooltipContent>
+                          </Tooltip>
+                        )}
+
+                        {/* Video Button */}
                         <Tooltip>
                           <TooltipTrigger asChild>
-                            {scene.image_url ? (
+                            {scene.video_url ? (
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  openImageDrawer(index);
+                                  toast({
+                                    title: "Video Uploaded",
+                                    description: "Video is ready for final generation",
+                                  });
                                 }}
-                                disabled={generatingSceneImage.has(index)}
-                                className={`px-2 lg:px-3 py-1.5 text-xs rounded transition-colors flex items-center gap-1 lg:gap-1.5 disabled:opacity-50 ${
-                                  isImageOutdated(scene)
-                                    ? 'bg-yellow-900/50 hover:bg-yellow-800/60 border border-yellow-700/50 text-yellow-400'
-                                    : 'bg-green-800 hover:bg-green-700 text-white'
-                                }`}
+                                disabled={uploadingSceneVideo.has(index)}
+                                className="px-2 lg:px-3 py-1.5 text-xs rounded transition-colors flex items-center gap-1 lg:gap-1.5 disabled:opacity-50 bg-green-800 hover:bg-green-700 text-white"
                               >
-                                {generatingSceneImage.has(index) ? (
+                                {uploadingSceneVideo.has(index) ? (
                                   <>
                                     <Loader2 className="w-3 h-3 animate-spin" />
-                                    <span className="text-[10px] lg:text-xs">Regen...</span>
+                                    <span className="text-[10px] lg:text-xs">Video</span>
                                   </>
                                 ) : (
                                   <>
                                     <Check className="w-3 h-3" />
-                                    <span className="text-[10px] lg:text-xs">Image</span>
+                                    <span className="text-[10px] lg:text-xs">Video</span>
                                   </>
                                 )}
                               </button>
@@ -3582,32 +4274,32 @@ export default function StoryDetailsPage() {
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  openImageDrawer(index);
+                                  openVideoUpload(index);
                                 }}
-                                disabled={generatingSceneImage.has(index)}
+                                disabled={uploadingSceneVideo.has(index)}
                                 className="px-2 lg:px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-400 text-xs rounded transition-colors flex items-center gap-1 lg:gap-1.5 disabled:opacity-50"
                               >
-                                {generatingSceneImage.has(index) ? (
+                                {uploadingSceneVideo.has(index) ? (
                                   <>
                                     <Loader2 className="w-3 h-3 animate-spin" />
-                                    <span className="text-[10px] lg:text-xs">Image...</span>
+                                    <span className="text-[10px] lg:text-xs">Video</span>
                                   </>
                                 ) : (
                                   <>
-                                    <X className="w-3 h-3" />
-                                    <span className="text-[10px] lg:text-xs">Image</span>
+                                    <Plus className="w-3 h-3" />
+                                    <span className="text-[10px] lg:text-xs">Video</span>
                                   </>
                                 )}
                               </button>
                             )}
                           </TooltipTrigger>
                           <TooltipContent>
-                            <p>{getImageButtonTooltip(scene)}</p>
+                            <p>{scene.video_url ? 'Video uploaded and ready' : 'Upload a video for this scene'}</p>
                           </TooltipContent>
                         </Tooltip>
 
-                        {/* Effect Button - Icon Only */}
-                        {scene.image_url && (
+                        {/* Effect Button - Icon Only (only show for AI-generated images, not uploaded videos) */}
+                        {scene.image_url && !scene.video_url && (
                           <Tooltip>
                             <TooltipTrigger asChild>
                               <button
@@ -3627,8 +4319,8 @@ export default function StoryDetailsPage() {
                           </Tooltip>
                         )}
 
-                        {/* Overlay Button - Icon Only */}
-                        {scene.image_url && (
+                        {/* Overlay Button - Icon Only (only show for AI-generated images, not uploaded videos) */}
+                        {scene.image_url && !scene.video_url && (
                           <Tooltip>
                             <TooltipTrigger asChild>
                               <button
@@ -4355,7 +5047,7 @@ export default function StoryDetailsPage() {
           {/* Right Preview Section - Toggleable on mobile, 50% on tablets/desktop */}
           <div className={`${mobileView === 'preview' ? 'flex' : 'hidden'} md:flex flex-1 md:w-[50%] bg-black w-full flex-col relative overflow-hidden`}>
             <div className="video-preview-container flex-1 flex items-center justify-center p-3 overflow-y-auto" data-tour="video-preview">
-              {scenes[selectedScene]?.image_url ? (
+              {scenes[selectedScene]?.video_url || scenes[selectedScene]?.image_url ? (
                 <div className="relative">
                   {/* Main Preview Container */}
                   <div
@@ -4365,10 +5057,25 @@ export default function StoryDetailsPage() {
                       height: `${getPreviewDimensions().height}px`,
                     }}
                   >
-                    {/* Render all scene images but only show the selected one */}
-                    {/* This prevents animation restart issues by mounting each image once */}
+                    {/* Render all scene videos/images but only show the selected one */}
+                    {/* This prevents animation restart issues by mounting each media element once */}
                     {scenes.map((scene, index) => (
-                      scene.image_url ? (
+                      scene.video_url ? (
+                        // User-uploaded video
+                        <video
+                          key={`scene-${index}-${scene.video_url}`}
+                          ref={(el) => { videoElementsRef.current[index] = el; }}
+                          src={scene.video_url}
+                          className={`absolute inset-0 w-full h-full object-contain transition-opacity duration-300 ${
+                            index === selectedScene ? 'opacity-100' : 'opacity-0 pointer-events-none'
+                          }`}
+                          muted={!isPlayingPreview}
+                          loop={false}
+                          playsInline
+                          preload="metadata"
+                        />
+                      ) : scene.image_url ? (
+                        // AI-generated image
                         <img
                           key={`scene-${index}-${scene.image_url}`}
                           src={scene.image_url}
@@ -4443,6 +5150,7 @@ export default function StoryDetailsPage() {
                                 dimmedOpacity={0.6}
                                 wordsPerBatch={captionWordsPerBatch}
                                 textTransform={captionTextTransform}
+                                text={scenes[selectedScene].text}
                               />
                             ) : (
                               <SimpleCaption text={scenes[selectedScene].text} style={baseStyle} />
@@ -4451,6 +5159,43 @@ export default function StoryDetailsPage() {
                         </div>
                       );
                     })()}
+
+                    {/* Watermark Overlay - Floating */}
+                    <div
+                      className="absolute pointer-events-none"
+                      style={{
+                        animation: 'float-watermark-x 83s ease-in-out infinite, float-watermark-y 97s ease-in-out infinite',
+                      }}
+                    >
+                      <div
+                        style={{
+                          fontFamily: 'Arial, sans-serif',
+                          fontSize: '14px',
+                          fontWeight: 300,
+                          color: 'rgba(255, 255, 255, 0.4)',
+                          textShadow: '1px 1px 2px rgba(0, 0, 0, 0.3)',
+                        }}
+                      >
+                        AiVideoGen.cc
+                      </div>
+                    </div>
+                    <style jsx>{`
+                      @keyframes float-watermark-x {
+                        0% { right: 10%; }
+                        20% { right: 70%; }
+                        45% { right: 25%; }
+                        70% { right: 60%; }
+                        90% { right: 40%; }
+                        100% { right: 10%; }
+                      }
+                      @keyframes float-watermark-y {
+                        0% { bottom: 10%; }
+                        25% { bottom: 80%; }
+                        50% { bottom: 30%; }
+                        75% { bottom: 75%; }
+                        100% { bottom: 10%; }
+                      }
+                    `}</style>
 
                     {/* Video Controls Overlay */}
                     <div className="absolute inset-0 opacity-100 transition-opacity duration-300">
@@ -4888,7 +5633,7 @@ export default function StoryDetailsPage() {
                 </Button>
                 <Button
                   onClick={handleAddScene}
-                  disabled={!newSceneText.trim() || addingScene}
+                  disabled={addingScene}
                   className="flex-1 bg-orange-600 hover:bg-orange-700 text-white disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {addingScene ? (
@@ -5217,6 +5962,312 @@ export default function StoryDetailsPage() {
                     <>
                       <Image className="w-4 h-4 mr-2" />
                       Generate Image
+                    </>
+                  )}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Video Upload Drawer */}
+      {videoDrawerOpen && videoDrawerScene !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          {/* Background Overlay */}
+          <div
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            onClick={() => {
+              setVideoDrawerOpen(false);
+              setSelectedVideoFile(null);
+              setVideoFileDuration(0);
+              setYoutubeUrl('');
+            }}
+          />
+
+          {/* Drawer Content */}
+          <div className="relative bg-gray-900 rounded-2xl shadow-2xl border border-gray-700 max-w-md w-full max-h-[90vh] overflow-y-auto transform transition-all">
+            <div className="p-5">
+              {/* Header */}
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold text-white">
+                  Upload Video to Scene #{videoDrawerScene + 1}
+                </h3>
+                <button
+                  onClick={() => {
+                    setVideoDrawerOpen(false);
+                    setSelectedVideoFile(null);
+                    setVideoFileDuration(0);
+                    setYoutubeUrl('');
+                  }}
+                  className="text-gray-400 hover:text-white transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Import Mode Tabs */}
+              <div className="mb-4 flex gap-2 border-b border-gray-700">
+                <button
+                  onClick={() => setVideoImportMode('file')}
+                  className={`px-4 py-2 text-sm font-medium transition-colors border-b-2 ${
+                    videoImportMode === 'file'
+                      ? 'border-orange-600 text-orange-400'
+                      : 'border-transparent text-gray-400 hover:text-gray-300'
+                  }`}
+                >
+                  <Upload className="w-4 h-4 inline mr-2" />
+                  Upload File
+                </button>
+                <button
+                  onClick={() => setVideoImportMode('youtube')}
+                  className={`px-4 py-2 text-sm font-medium transition-colors border-b-2 ${
+                    videoImportMode === 'youtube'
+                      ? 'border-orange-600 text-orange-400'
+                      : 'border-transparent text-gray-400 hover:text-gray-300'
+                  }`}
+                >
+                  <PlayCircle className="w-4 h-4 inline mr-2" />
+                  YouTube URL
+                </button>
+              </div>
+
+              {/* Info Box */}
+              <div className="mb-4 p-3 bg-orange-900/20 border border-orange-700/30 rounded-lg">
+                <div className="flex items-start gap-2">
+                  <Upload className="w-4 h-4 text-orange-400 mt-0.5 flex-shrink-0" />
+                  <div className="text-xs text-orange-300">
+                    {videoImportMode === 'file'
+                      ? 'Upload your video and generate captions with precise word-level timing'
+                      : 'Import video from YouTube URL and generate captions automatically'}
+                  </div>
+                </div>
+              </div>
+
+              {/* File Upload Mode */}
+              {videoImportMode === 'file' && (
+                <>
+              {/* File Selection */}
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-300 mb-2">
+                  Select Video File
+                </label>
+                <input
+                  type="file"
+                  accept="video/*"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) {
+                      // Validate file size (200MB max)
+                      if (file.size > 200 * 1024 * 1024) {
+                        toast({
+                          title: "File too large",
+                          description: "Video must be under 200MB",
+                          variant: "destructive"
+                        });
+                        return;
+                      }
+                      handleVideoFileSelected(file);
+                    }
+                  }}
+                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-md text-white file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:text-sm file:font-semibold file:bg-orange-600 file:text-white hover:file:bg-orange-700 cursor-pointer"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Max 5 minutes, under 200MB
+                </p>
+              </div>
+
+              {/* Selected File Info */}
+              {selectedVideoFile && (
+                <div className="mb-4 p-3 bg-gray-800 rounded-lg">
+                  <div className="flex items-start gap-2">
+                    <PlayCircle className="w-4 h-4 text-green-400 mt-0.5 flex-shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm text-white font-medium truncate">
+                        {selectedVideoFile.name}
+                      </div>
+                      <div className="text-xs text-gray-400 mt-1">
+                        Size: {(selectedVideoFile.size / 1024 / 1024).toFixed(2)} MB
+                        {loadingVideoDuration && (
+                          <span className="ml-2">
+                            <Loader2 className="w-3 h-3 inline animate-spin" /> Analyzing...
+                          </span>
+                        )}
+                        {!loadingVideoDuration && videoFileDuration > 0 && (
+                          <span className="ml-2">
+                            Duration: {Math.ceil(videoFileDuration)} seconds ({Math.ceil(videoFileDuration / 60)} min)
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Credit Cost Display */}
+              {selectedVideoFile && !loadingVideoDuration && videoFileDuration > 0 && (
+                <div className="mb-4">
+                  <div className="flex items-center justify-center gap-2 bg-orange-900/30 border border-orange-600/50 rounded-lg p-4">
+                    <Coins className="w-5 h-5 text-orange-400" />
+                    <span className="text-base font-bold text-orange-400">
+                      This will cost you {calculateVideoUploadCost(videoFileDuration)} {calculateVideoUploadCost(videoFileDuration) === 1 ? 'credit' : 'credits'}
+                    </span>
+                  </div>
+                  <p className="text-xs text-gray-500 text-center mt-2">
+                    {Math.ceil(videoFileDuration / 60)} {Math.ceil(videoFileDuration / 60) === 1 ? 'minute' : 'minutes'} × 3 credits/min
+                  </p>
+                </div>
+              )}
+
+              {/* Warning if video too long */}
+              {videoFileDuration > 300 && (
+                <div className="mb-4 p-3 bg-red-900/20 border border-red-700/30 rounded-lg">
+                  <div className="flex items-start gap-2">
+                    <X className="w-4 h-4 text-red-400 mt-0.5 flex-shrink-0" />
+                    <div className="text-xs text-red-300">
+                      Video is too long. Maximum duration is 5 minutes.
+                    </div>
+                  </div>
+                </div>
+              )}
+                </>
+              )}
+
+              {/* YouTube URL Mode */}
+              {videoImportMode === 'youtube' && (
+                <div className="mb-4">
+                  <label className="block text-sm font-medium text-gray-300 mb-2">
+                    YouTube Video URL
+                  </label>
+                  <input
+                    type="text"
+                    value={youtubeUrl}
+                    onChange={(e) => setYoutubeUrl(e.target.value)}
+                    placeholder="https://www.youtube.com/watch?v=..."
+                    className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-md text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-orange-600"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    Max 5 minutes video. Video will be downloaded and transcribed.
+                  </p>
+
+                  {/* YouTube URL preview */}
+                  {youtubeUrl && /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\/.+$/.test(youtubeUrl) && (
+                    <div className="mt-3 p-3 bg-green-900/20 border border-green-700/30 rounded-lg">
+                      <div className="flex items-start gap-2">
+                        <PlayCircle className="w-4 h-4 text-green-400 mt-0.5 flex-shrink-0" />
+                        <div className="text-xs text-green-300">
+                          Valid YouTube URL detected. Ready to import!
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Warning for invalid URL */}
+                  {youtubeUrl && !/^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\/.+$/.test(youtubeUrl) && (
+                    <div className="mt-3 p-3 bg-red-900/20 border border-red-700/30 rounded-lg">
+                      <div className="flex items-start gap-2">
+                        <X className="w-4 h-4 text-red-400 mt-0.5 flex-shrink-0" />
+                        <div className="text-xs text-red-300">
+                          Please enter a valid YouTube URL
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Action Buttons */}
+              <div className="flex gap-3">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setVideoDrawerOpen(false);
+                    setSelectedVideoFile(null);
+                    setVideoFileDuration(0);
+                    setYoutubeUrl('');
+                  }}
+                  className="flex-1 border-gray-700 text-gray-300 hover:bg-gray-800"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={() => {
+                    if (videoDrawerScene === null) return;
+
+                    // File upload mode
+                    if (videoImportMode === 'file' && selectedVideoFile) {
+                      const creditsNeeded = calculateVideoUploadCost(videoFileDuration);
+                      const sceneToUpload = videoDrawerScene;
+                      const fileToUpload = selectedVideoFile;
+
+                      setCreditConfirmAction({
+                        title: "Upload and Transcribe Video?",
+                        message: `Upload video for scene ${sceneToUpload + 1}. The video will be transcribed using AI to extract speech and word-level timing for captions.`,
+                        credits: creditsNeeded,
+                        onConfirm: () => {
+                          // Close video drawer
+                          setVideoDrawerOpen(false);
+                          setSelectedVideoFile(null);
+                          setVideoFileDuration(0);
+                          setYoutubeUrl('');
+
+                          // Upload video
+                          handleSceneVideoUpload(sceneToUpload, fileToUpload);
+                        }
+                      });
+                      setCreditConfirmOpen(true);
+                    }
+
+                    // YouTube import mode
+                    if (videoImportMode === 'youtube' && youtubeUrl) {
+                      const sceneToImport = videoDrawerScene;
+                      const urlToImport = youtubeUrl;
+
+                      // For YouTube, we can't calculate credits upfront (don't know duration)
+                      // Just show a warning that credits will be charged based on video duration
+                      setCreditConfirmAction({
+                        title: "Import YouTube Video?",
+                        message: `Import video from YouTube for scene ${sceneToImport + 1}. Credits will be charged based on video duration (3 credits per minute, max 5 minutes). The video will be downloaded and transcribed automatically.`,
+                        credits: 0, // We don't know the duration yet
+                        onConfirm: () => {
+                          // Close video drawer
+                          setVideoDrawerOpen(false);
+                          setSelectedVideoFile(null);
+                          setVideoFileDuration(0);
+                          setYoutubeUrl('');
+
+                          // Import from YouTube
+                          handleYouTubeVideoImport(sceneToImport, urlToImport);
+                        }
+                      });
+                      setCreditConfirmOpen(true);
+                    }
+                  }}
+                  disabled={
+                    (videoImportMode === 'file' && (!selectedVideoFile || loadingVideoDuration || videoFileDuration === 0 || videoFileDuration > 300)) ||
+                    (videoImportMode === 'youtube' && (!youtubeUrl || !/^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\/.+$/.test(youtubeUrl))) ||
+                    uploadingSceneVideo.has(videoDrawerScene)
+                  }
+                  className="flex-1 bg-orange-600 hover:bg-orange-700 text-white disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {uploadingSceneVideo.has(videoDrawerScene) ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      {videoImportMode === 'file' ? 'Uploading...' : 'Importing...'}
+                    </>
+                  ) : (
+                    <>
+                      {videoImportMode === 'file' ? (
+                        <>
+                          <Upload className="w-4 h-4 mr-2" />
+                          Upload Video
+                        </>
+                      ) : (
+                        <>
+                          <PlayCircle className="w-4 h-4 mr-2" />
+                          Import from YouTube
+                        </>
+                      )}
                     </>
                   )}
                 </Button>
@@ -6450,6 +7501,15 @@ export default function StoryDetailsPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Hidden file input for video upload */}
+      <input
+        ref={videoFileInputRef}
+        type="file"
+        accept="video/*"
+        onChange={handleVideoFileChange}
+        style={{ display: 'none' }}
+      />
     </div>
     </TooltipProvider>
   );
