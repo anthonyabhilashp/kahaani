@@ -2265,18 +2265,18 @@ export default function StoryDetailsPage() {
       bgMusicAudioRef.current.pause();
     }
 
-    // Stop preloaded audio elements
+    // Stop preloaded audio elements (don't reset position - preserve for resume)
     Object.values(preloadedAudio).forEach(audio => {
       audio.pause();
-      audio.currentTime = 0;
+      // Don't reset currentTime - preserve paused position
     });
 
-    // Stop all video elements
+    // Stop all video elements (don't reset position - preserve for resume)
     Object.values(videoElementsRef.current).forEach(video => {
       if (video) {
         video.pause();
-        video.currentTime = 0;
-        video.muted = true;
+        // Don't reset currentTime - preserve paused frame
+        // Don't mute - preserve volume state
       }
     });
 
@@ -2284,7 +2284,7 @@ export default function StoryDetailsPage() {
     const audios = document.querySelectorAll('audio');
     audios.forEach(audio => {
       audio.pause();
-      audio.currentTime = 0;
+      // Don't reset currentTime - preserve paused position
     });
 
     // Clear progress tracking
@@ -2292,9 +2292,10 @@ export default function StoryDetailsPage() {
       clearInterval(progressIntervalRef.current);
       progressIntervalRef.current = null;
     }
-    setSceneProgress(0);
-    setSceneDuration(0);
-    setCurrentTime(0);
+    // Don't reset progress states - preserve position for resume
+    // setSceneProgress(0);
+    // setSceneDuration(0);
+    // setCurrentTime(0);
     currentAudioRef.current = null;
   };
 
@@ -2338,40 +2339,39 @@ export default function StoryDetailsPage() {
 
     // If we're in a different scene, stop current and switch
     if (sceneIndex !== selectedScene) {
+      console.log(`🔄 Switching from scene ${selectedScene + 1} to scene ${sceneIndex + 1}`);
       const wasPlaying = isPlayingPreview;
 
       // IMPORTANT: Cancel the original preview loop completely
-      if (wasPlaying) {
-        previewCancelledRef.current = true;
+      previewCancelledRef.current = true;
 
-        // Stop current playback (audio or video)
-        if (currentAudioRef.current) {
-          currentAudioRef.current.pause();
-          currentAudioRef.current.currentTime = 0;
-          currentAudioRef.current = null;
-        }
-
-        // Stop any playing video
-        const currentVideo = videoElementsRef.current[selectedScene];
-        if (currentVideo) {
-          currentVideo.pause();
-          currentVideo.currentTime = 0;
-          currentVideo.muted = true;
-        }
-
-        if (progressIntervalRef.current) {
-          clearInterval(progressIntervalRef.current);
-          progressIntervalRef.current = null;
-        }
-
-        // Wait for the old loop to fully stop
-        await new Promise(resolve => setTimeout(resolve, 100));
+      // Stop current playback (audio or video)
+      if (currentAudioRef.current) {
+        currentAudioRef.current.pause();
+        currentAudioRef.current.currentTime = 0;
+        currentAudioRef.current = null;
       }
+
+      // Stop any playing video
+      const currentVideo = videoElementsRef.current[selectedScene];
+      if (currentVideo) {
+        currentVideo.pause();
+        currentVideo.currentTime = 0;
+        currentVideo.muted = true;
+      }
+
+      if (progressIntervalRef.current) {
+        clearInterval(progressIntervalRef.current);
+        progressIntervalRef.current = null;
+      }
+
+      // Wait for the old loop to fully stop
+      await new Promise(resolve => setTimeout(resolve, 100));
 
       // Set up media for the new scene (video or audio)
       const targetScene = scenes[sceneIndex];
       if (targetScene?.video_url || preloadedAudio[sceneIndex]) {
-        // If was playing, start new preview loop from this position
+        // Only resume playback if it was playing before seeking
         if (wasPlaying) {
           // Reset cancellation flag for the new loop
           previewCancelledRef.current = false;
@@ -2388,7 +2388,8 @@ export default function StoryDetailsPage() {
 
       // If scene has video AND separate audio, seek both
       if (videoElement && audioElement && scene?.video_url && scene?.audio_url) {
-        const wasPlaying = !audioElement.paused;
+        console.log(`🎯 Seeking video+audio to ${sceneTime.toFixed(2)}s`);
+        const wasPlaying = isPlayingPreview;
 
         // Clear interval temporarily to prevent overwriting
         if (progressIntervalRef.current) {
@@ -2396,18 +2397,30 @@ export default function StoryDetailsPage() {
           progressIntervalRef.current = null;
         }
 
+        // Pause both before seeking
         videoElement.pause();
         audioElement.pause();
+
+        // Update currentAudioRef to point to this audio element
+        currentAudioRef.current = audioElement;
+
+        // Set time on both - CRITICAL: Do this after pause completes
         videoElement.currentTime = sceneTime;
         audioElement.currentTime = sceneTime;
+
+        // Set audio volume to current volume (fixes muted audio after seek)
+        audioElement.volume = volumeRef.current;
 
         // Update progress states immediately
         setSceneProgress(sceneTime);
         setTotalProgress(targetTotalTime);
         setCurrentTime(sceneTime);
 
+        // Only resume playback if it was playing before seeking
         if (wasPlaying) {
-          // Restart progress tracking
+          setIsPlayingPreview(true);
+
+          // Restart progress tracking BEFORE playing
           const sceneStartTimes = getSceneStartTimes();
           const cumulativeStart = sceneStartTimes[selectedScene];
 
@@ -2425,16 +2438,26 @@ export default function StoryDetailsPage() {
             }
           }, 100);
 
+          // Play audio FIRST (wait for it), then video
           try {
-            await Promise.all([videoElement.play(), audioElement.play()]);
+            await audioElement.play();
+            console.log("✅ Audio playing at", audioElement.currentTime.toFixed(2), "s");
           } catch (err) {
-            console.error("Resume video + audio play error:", err);
+            console.error("❌ Audio play failed:", err);
+          }
+
+          try {
+            await videoElement.play();
+            console.log("✅ Video playing at", videoElement.currentTime.toFixed(2), "s");
+          } catch (err) {
+            console.error("❌ Video play failed:", err);
           }
         }
       }
       // If scene has video only, seek video element
       else if (videoElement) {
-        const wasPlaying = !videoElement.paused;
+        console.log(`🎯 Seeking video-only to ${sceneTime.toFixed(2)}s`);
+        const wasPlaying = isPlayingPreview;
 
         // Clear interval temporarily to prevent overwriting
         if (progressIntervalRef.current) {
@@ -2450,7 +2473,10 @@ export default function StoryDetailsPage() {
         setTotalProgress(targetTotalTime);
         setCurrentTime(sceneTime);
 
+        // Only resume playback if it was playing before seeking
         if (wasPlaying) {
+          setIsPlayingPreview(true);
+
           // Restart progress tracking
           const sceneStartTimes = getSceneStartTimes();
           const cumulativeStart = sceneStartTimes[selectedScene];
@@ -2466,14 +2492,15 @@ export default function StoryDetailsPage() {
 
           try {
             await videoElement.play();
+            console.log("✅ Video playing at", videoElement.currentTime.toFixed(2), "s");
           } catch (err) {
-            console.error("Resume video play error:", err);
+            console.error("❌ Video play error:", err);
           }
         }
       } else if (currentAudioRef.current) {
         // Otherwise, seek audio element (for image scenes)
         const audio = currentAudioRef.current;
-        const wasPlaying = !audio.paused;
+        const wasPlaying = isPlayingPreview;
 
         // Clear interval temporarily to prevent overwriting
         if (progressIntervalRef.current) {
@@ -2484,11 +2511,15 @@ export default function StoryDetailsPage() {
         audio.pause();
         audio.currentTime = sceneTime;
 
+        // Set audio volume to current volume (fixes muted audio after seek)
+        audio.volume = volumeRef.current;
+
         // Update progress states immediately
         setSceneProgress(sceneTime);
         setTotalProgress(targetTotalTime);
         setCurrentTime(sceneTime);
 
+        // If was playing, resume playback
         if (wasPlaying) {
           // Restart progress tracking
           const sceneStartTimes = getSceneStartTimes();
@@ -2505,8 +2536,9 @@ export default function StoryDetailsPage() {
 
           try {
             await audio.play();
+            console.log("✅ Audio resumed after seek");
           } catch (err) {
-            console.error("Resume play error:", err);
+            console.error("❌ Audio play error:", err);
           }
         }
       }
@@ -2562,7 +2594,92 @@ export default function StoryDetailsPage() {
 
       const scene = scenes[sceneIndex];
 
-      // Handle video scenes
+      // Handle video scenes with separate audio (uploaded video + AI narration)
+      if (scene?.video_url && scene?.audio_url && videoElementsRef.current[sceneIndex] && preloadedAudio[sceneIndex]) {
+        const videoElement = videoElementsRef.current[sceneIndex];
+        const audio = preloadedAudio[sceneIndex];
+
+        if (videoElement && audio) {
+          console.log(`🎥🔊 Playing video+audio from ${startTime.toFixed(1)}s for scene ${sceneIndex + 1}`);
+
+          // Set positions and volume
+          videoElement.currentTime = startTime;
+          videoElement.muted = true; // Mute video's own audio
+          audio.currentTime = startTime;
+          audio.volume = volumeRef.current;
+          currentAudioRef.current = audio;
+
+          const duration = audio.duration || scene.duration || 5;
+          const sceneStartTimes = getSceneStartTimes();
+          const cumulativeStart = sceneStartTimes[sceneIndex];
+
+          setSceneDuration(duration);
+          setSceneProgress(startTime);
+          setTotalProgress(cumulativeStart + startTime);
+          setCurrentTime(startTime);
+
+          try {
+            // Start progress tracking
+            progressIntervalRef.current = setInterval(() => {
+              if (audio && !audio.paused) {
+                const currentSceneTime = audio.currentTime;
+                setSceneProgress(currentSceneTime);
+                setTotalProgress(cumulativeStart + currentSceneTime);
+                setCurrentTime(currentSceneTime);
+
+                // Keep video synced with audio
+                if (videoElement && Math.abs(videoElement.currentTime - audio.currentTime) > 0.1) {
+                  videoElement.currentTime = audio.currentTime;
+                }
+              }
+            }, 100);
+
+            // Play both video and audio
+            await Promise.all([videoElement.play(), audio.play()]);
+
+            await new Promise<void>((resolve) => {
+              const checkCancellation = () => {
+                if (previewCancelledRef.current) {
+                  videoElement.pause();
+                  audio.pause();
+                  if (progressIntervalRef.current) {
+                    clearInterval(progressIntervalRef.current);
+                  }
+                  resolve();
+                  return;
+                }
+                setTimeout(checkCancellation, 100);
+              };
+
+              audio.onended = () => {
+                videoElement.pause();
+                if (progressIntervalRef.current) {
+                  clearInterval(progressIntervalRef.current);
+                }
+                resolve();
+              };
+
+              audio.onerror = () => {
+                videoElement.pause();
+                if (progressIntervalRef.current) {
+                  clearInterval(progressIntervalRef.current);
+                }
+                resolve();
+              };
+
+              checkCancellation();
+            });
+          } catch (err) {
+            console.error("Video + Audio play error:", err);
+            if (progressIntervalRef.current) {
+              clearInterval(progressIntervalRef.current);
+            }
+          }
+        }
+        return !previewCancelledRef.current;
+      }
+
+      // Handle video-only scenes (video with its own audio)
       if (scene?.video_url && videoElementsRef.current[sceneIndex]) {
         const videoElement = videoElementsRef.current[sceneIndex];
         if (videoElement) {
@@ -2748,14 +2865,18 @@ export default function StoryDetailsPage() {
   const startVideoPreview = async () => {
     console.log("🎬 Starting video preview from scene:", selectedScene);
 
+    // Capture current progress before stopping (in case user seeked while paused)
+    const startFromTime = sceneProgress;
+    console.log(`📍 Captured startFromTime: ${startFromTime.toFixed(2)}s from sceneProgress`);
+
     // Stop any existing preview first
     stopVideoPreview();
 
     // Wait for cleanup
     await new Promise(resolve => setTimeout(resolve, 50));
 
-    // Reset progress
-    setSceneProgress(0);
+    // Don't reset progress to 0 - preserve seeked position
+    // (will be set by playScene or continuePreviewFromPosition)
 
     // Reset cancellation flag and start new preview
     previewCancelledRef.current = false;
@@ -3067,12 +3188,18 @@ export default function StoryDetailsPage() {
     };
     
     try {
-      // Play scenes starting from selected scene
-      for (let i = selectedScene; i < scenes.length; i++) {
-        const shouldContinue = await playScene(i);
-        if (!shouldContinue) {
-          console.log("🛑 Preview cancelled");
-          return;
+      // If user seeked while paused, start from that position
+      if (startFromTime > 0) {
+        console.log(`▶️ Resuming from seeked position: ${startFromTime.toFixed(1)}s`);
+        await continuePreviewFromPosition(selectedScene, startFromTime);
+      } else {
+        // Normal flow - play scenes starting from selected scene
+        for (let i = selectedScene; i < scenes.length; i++) {
+          const shouldContinue = await playScene(i);
+          if (!shouldContinue) {
+            console.log("🛑 Preview cancelled");
+            return;
+          }
         }
       }
 
@@ -5041,7 +5168,7 @@ export default function StoryDetailsPage() {
                           className={`absolute inset-0 w-full h-full object-contain transition-opacity duration-300 ${
                             index === selectedScene ? 'opacity-100' : 'opacity-0 pointer-events-none'
                           }`}
-                          muted={!isPlayingPreview}
+                          muted={volume === 0}
                           loop={false}
                           playsInline
                           preload="metadata"
