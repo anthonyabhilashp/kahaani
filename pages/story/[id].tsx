@@ -4158,13 +4158,6 @@ export default function StoryDetailsPage() {
                         <div className="absolute top-1 left-1 bg-black/80 px-2 py-0.5 rounded text-white text-xs font-bold">
                           #{index + 1}
                         </div>
-                        {/* Video indicator badge */}
-                        {scene.video_url && (
-                          <div className="absolute top-1 right-1 bg-purple-600/90 backdrop-blur-sm px-1.5 py-0.5 rounded text-white text-[9px] font-bold flex items-center gap-0.5 shadow-lg">
-                            <PlayCircle className="w-2.5 h-2.5" />
-                            <span className="hidden sm:inline">VIDEO</span>
-                          </div>
-                        )}
                         {/* Audio indicator - clickable to play/pause */}
                         {scene.audio_url && (
                           <button
@@ -5357,17 +5350,24 @@ export default function StoryDetailsPage() {
                               </button>
 
                               <div className="overflow-hidden transition-all duration-200 w-16 md:w-0 md:group-hover/volume:w-16">
-                                <Slider
-                                  value={[volume]}
-                                  max={1}
-                                  step={0.01}
-                                  onValueChange={(value) => {
-                                    const newVolume = value[0];
-                                    setVolume(newVolume);
-                                    if (newVolume > 0) setLastVolume(newVolume);
-                                    // Background music volume will be updated automatically via useEffect
-                                  }}
-                                />
+                                <div
+                                  onTouchStart={(e) => e.stopPropagation()}
+                                  onTouchMove={(e) => e.stopPropagation()}
+                                  onTouchEnd={(e) => e.stopPropagation()}
+                                  className="touch-none"
+                                >
+                                  <Slider
+                                    value={[volume]}
+                                    max={1}
+                                    step={0.01}
+                                    onValueChange={(value) => {
+                                      const newVolume = value[0];
+                                      setVolume(newVolume);
+                                      if (newVolume > 0) setLastVolume(newVolume);
+                                      // Background music volume will be updated automatically via useEffect
+                                    }}
+                                  />
+                                </div>
                               </div>
                             </div>
 
