@@ -1205,6 +1205,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       logger.info(`[${story_id}] ✅ Video generation job ${jobId} marked as completed`);
     }
 
+    // Track analytics event
+    await supabaseAdmin.from("analytics_events").insert({
+      user_id: story.user_id,
+      event_name: 'video_generated',
+      event_data: {
+        story_id,
+        duration: totalDuration,
+        aspect_ratio: aspect_ratio || '9:16'
+      }
+    });
+
     res.status(200).json({ story_id, video_url: publicUrl, duration: totalDuration, is_valid: true, job_id: jobId });
   } catch (err: any) {
     console.error(`[${story_id}] Error generating video:`, err);

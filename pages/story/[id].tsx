@@ -21,6 +21,7 @@ import { useAuth } from "../../contexts/AuthContext";
 import { supabase } from "../../lib/supabaseClient";
 import { toast } from "@/hooks/use-toast";
 import { knowledgeBase, categories, type KnowledgeArticle } from "@/lib/knowledgeBase";
+import { trackEvent } from "@/lib/analytics";
 import { getFontsByCategory } from "@/lib/fonts";
 
 type Scene = {
@@ -2047,6 +2048,13 @@ export default function StoryDetailsPage() {
 
     setDownloadConfirmOpen(false);
     setDownloadingVideo(true);
+
+    // Track analytics event
+    trackEvent('download_clicked', {
+      story_id: id,
+      story_title: story?.title,
+      video_duration: video?.duration
+    });
 
     try {
       const response = await fetch(video.video_url);

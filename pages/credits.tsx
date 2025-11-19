@@ -15,6 +15,7 @@ import {
   Info
 } from "lucide-react";
 import { useCredits } from "../hooks/useCredits";
+import { trackEvent } from "../lib/analytics";
 
 type CreditPackage = {
   id: string;
@@ -108,6 +109,13 @@ export default function CreditsPage() {
       }
 
       console.log('Creating LemonSqueezy checkout for:', pkg.credits, 'credits');
+
+      // Track analytics event
+      trackEvent('upgrade_clicked', {
+        package_id: pkg.id,
+        credits: pkg.credits,
+        price: pkg.price
+      });
 
       const response = await fetch('/api/lemonsqueezy/create-checkout', {
         method: 'POST',

@@ -205,6 +205,19 @@ User request: ${prompt}
     }).eq("id", storyId);
 
     logger.log(`📚 Saved ${scenes.length} scenes for story ${storyId}`);
+
+    // Track analytics event
+    await supabaseAdmin.from("analytics_events").insert({
+      user_id: user.id,
+      event_name: 'story_created',
+      event_data: {
+        story_id: storyId,
+        scene_count: scenes.length,
+        is_manual: isManual,
+        is_blank: isBlank
+      }
+    });
+
     res.status(200).json({ story_id: storyId, scenes });
   } catch (err: any) {
     logger?.error(`❌ Error generating scenes: ${err instanceof Error ? err.message : String(err)}`);
