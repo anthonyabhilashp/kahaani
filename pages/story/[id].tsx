@@ -3181,11 +3181,13 @@ export default function StoryDetailsPage() {
         bgMusicAudioRef.current.currentTime = 0; // Only reset on fresh start
       }
       // Apply background music volume directly (matches generated video)
-      bgMusicAudioRef.current.volume = bgMusicVolume / 100;
-      // Don't reset currentTime here - preserve paused position for resume
-      bgMusicAudioRef.current.play().catch(err => {
-        console.error("Failed to play background music in preview:", err);
-      });
+      if (bgMusicAudioRef.current) {
+        bgMusicAudioRef.current.volume = bgMusicVolume / 100;
+        // Don't reset currentTime here - preserve paused position for resume
+        bgMusicAudioRef.current.play().catch(err => {
+          console.error("Failed to play background music in preview:", err);
+        });
+      }
     }
     
     const playScene = async (sceneIndex: number) => {
