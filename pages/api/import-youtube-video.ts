@@ -58,7 +58,6 @@ async function transcribeWithEchogarden(audioPath: string): Promise<{
 
 // 🔒 Security limits for YouTube video imports
 const MAX_FILE_SIZE_MB = 200; // 200MB max (same as upload)
-const MAX_DURATION_SECONDS = 300; // 5 minutes max
 
 // Helper to download YouTube video using yt-dlp (SECURE - prevents command injection)
 async function downloadYouTubeVideo(url: string, outputPath: string): Promise<void> {
@@ -206,13 +205,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // 3️⃣ Get video duration
     const duration = await getVideoDuration(tempVideoPath);
     logger.info(`[Scene ${scene_id}] ⏱️ Video duration: ${duration.toFixed(2)} seconds`);
-
-    if (duration > MAX_DURATION_SECONDS) {
-      if (fs.existsSync(tempVideoPath)) {
-        fs.unlinkSync(tempVideoPath);
-      }
-      throw new Error(`Video is too long. Maximum duration is ${MAX_DURATION_SECONDS / 60} minutes.`);
-    }
 
     // 4️⃣ Calculate credits needed based on duration
     const creditsNeeded = calculateVideoUploadCost(duration);

@@ -9,7 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../componen
 import { Slider } from "../../components/ui/slider";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../../components/ui/tooltip";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../../components/ui/dropdown-menu";
-import { ArrowLeft, Play, Pause, Download, Volume2, VolumeX, Maximize, Loader2, ImageIcon, Image, Pencil, Trash2, Check, X, PlayCircle, ChevronDown, Plus, Type, Music, Upload, Sparkles, ExternalLink, MoreHorizontal, Coins, Copy, Layers, HelpCircle, Search, ChevronRight, MessageCircle } from "lucide-react";
+import { ArrowLeft, Play, Pause, Download, Volume2, VolumeX, Maximize, Loader2, ImageIcon, Image, Pencil, Trash2, Check, X, PlayCircle, ChevronDown, Plus, Type, Music, Upload, Sparkles, ExternalLink, MoreHorizontal, Coins, Copy, Layers, HelpCircle, Search, ChevronRight, MessageCircle, Scissors } from "lucide-react";
 import { WordByWordCaption, SimpleCaption, type WordTimestamp } from "../../components/WordByWordCaption";
 import { EffectSelectionModal } from "../../components/EffectSelectionModal";
 import { OverlaySelectionModal } from "../../components/OverlaySelectionModal";
@@ -74,6 +74,9 @@ export default function StoryDetailsPage() {
   const [audioProgress, setAudioProgress] = useState({ current: 0, total: 0 });
   const [generatingSceneImage, setGeneratingSceneImage] = useState<Set<number>>(new Set());
   const [generatingSceneAudio, setGeneratingSceneAudio] = useState<Set<number>>(new Set());
+  const [generatingSceneVideoFromImage, setGeneratingSceneVideoFromImage] = useState<Set<number>>(new Set());
+  const [aiVideoDialogOpen, setAiVideoDialogOpen] = useState(false);
+  const [aiVideoDialogSceneIndex, setAiVideoDialogSceneIndex] = useState<number | null>(null);
   const [uploadingSceneVideo, setUploadingSceneVideo] = useState<Set<number>>(new Set());
   const [videoUploadProgress, setVideoUploadProgress] = useState<{ [key: number]: number }>({});
   const videoFileInputRef = useRef<HTMLInputElement | null>(null);
@@ -329,6 +332,20 @@ export default function StoryDetailsPage() {
   const [clearingStuckJob, setClearingStuckJob] = useState(false);
   const [stuckImageJobDialogOpen, setStuckImageJobDialogOpen] = useState(false);
   const [clearingImageJob, setClearingImageJob] = useState(false);
+
+  // Shorts cutting feature state
+  const [shortsDrawerOpen, setShortsDrawerOpen] = useState(false);
+  const [shortsDrawerScene, setShortsDrawerScene] = useState<number | null>(null);
+  const [analyzingShorts, setAnalyzingShorts] = useState(false);
+  const [shortsSuggestions, setShortsSuggestions] = useState<Array<{
+    id: string;
+    start: number;
+    end: number;
+    duration: number;
+    title: string;
+    reason: string;
+  }>>([]);
+  const [cuttingShort, setCuttingShort] = useState<string | null>(null);
 
   // Import dialogs
   const [importUrlDialog, setImportUrlDialog] = useState(false);
@@ -1546,6 +1563,92 @@ export default function StoryDetailsPage() {
     }
   };
 
+  // Generate AI video from scene image using Kling
+  const generateVideoFromImage = async (sceneIndex: number) => {
+    const scene = scenes[sceneIndex];
+    if (!scene?.image_url) {
+      toast({
+        title: "Image Required",
+        description: "Generate an image for this scene first before creating a video.",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    setGeneratingSceneVideoFromImage(prev => {
+      const newSet = new Set(prev);
+      newSet.add(sceneIndex);
+      return newSet;
+    });
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        throw new Error("Please log in to generate video");
+      }
+
+      toast({
+        title: "Generating video...",
+        description: "This takes 60-90 seconds. Please wait.",
+      });
+
+      const res = await fetch("/api/generate_video_from_image", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${session.access_token}`
+        },
+        body: JSON.stringify({
+          scene_id: scene.id,
+          story_id: id
+        }),
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || "Video generation failed");
+      }
+
+      const result = await res.json();
+
+      // Refetch scene to get updated video URL
+      if (scene.id) {
+        await fetchAndUpdateScene(scene.id);
+      }
+
+      // Refetch credit balance
+      await refetchCredits();
+
+      toast({
+        title: "Video generated!",
+        description: `Scene ${sceneIndex + 1} video is ready. ${result.credits_used} credits used.`,
+      });
+
+    } catch (err: any) {
+      console.error("Video from image generation error:", err);
+
+      let title = "Generation Failed";
+      let description = err.message || "Failed to generate video from image";
+
+      if (err.message?.includes("Insufficient credits")) {
+        title = "Insufficient Credits";
+        description = "You need 5 credits to generate a video. Please purchase more credits.";
+      }
+
+      toast({
+        title,
+        description,
+        variant: "destructive"
+      });
+    } finally {
+      setGeneratingSceneVideoFromImage(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(sceneIndex);
+        return newSet;
+      });
+    }
+  };
+
   // Fetch ElevenLabs voices
   const fetchVoices = async () => {
     setLoadingVoices(true);
@@ -1766,9 +1869,26 @@ export default function StoryDetailsPage() {
 
     } catch (err: any) {
       console.error('Error importing YouTube video:', err);
+
+      // Handle specific error messages with user-friendly responses
+      const errorMessage = err.message || "Failed to import YouTube video";
+      let title = "Import Failed";
+      let description = errorMessage;
+
+      if (errorMessage.includes("too large")) {
+        title = "Video Too Large";
+        description = "Video file must be under 200MB. Please choose a smaller video or compress it.";
+      } else if (errorMessage.includes("Invalid YouTube URL")) {
+        title = "Invalid URL";
+        description = "Please enter a valid YouTube video URL (e.g., youtube.com/watch?v=...)";
+      } else if (errorMessage.includes("unavailable") || errorMessage.includes("not found")) {
+        title = "Video Unavailable";
+        description = "This YouTube video is not available. It may be private or deleted.";
+      }
+
       toast({
-        title: "❌ Import Failed",
-        description: err.message || "Failed to import YouTube video",
+        title,
+        description,
         variant: "destructive",
       });
     } finally {
@@ -1777,6 +1897,155 @@ export default function StoryDetailsPage() {
         newSet.delete(sceneIndex);
         return newSet;
       });
+    }
+  };
+
+  // Open shorts drawer for a scene with uploaded video
+  const openShortsDrawer = (sceneIndex: number) => {
+    setShortsDrawerScene(sceneIndex);
+    setShortsSuggestions([]);
+    setShortsDrawerOpen(true);
+  };
+
+  // Analyze video for best short segments
+  const analyzeForShorts = async (sceneIndex: number) => {
+    const scene = scenes[sceneIndex];
+    if (!scene?.video_url) return;
+
+    setAnalyzingShorts(true);
+    setShortsSuggestions([]);
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        throw new Error("Please log in to analyze videos");
+      }
+
+      const response = await fetch('/api/analyze_shorts', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${session.access_token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          video_url: scene.video_url.split('?')[0], // Remove cache busting params
+          story_id: id,
+          scene_id: scene.id,
+        }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Analysis failed');
+      }
+
+      const result = await response.json();
+      setShortsSuggestions(result.shorts || []);
+
+      if (result.shorts?.length === 0) {
+        toast({
+          title: "No shorts found",
+          description: "The AI couldn't identify good short segments in this video",
+        });
+      } else {
+        toast({
+          title: `Found ${result.shorts.length} shorts`,
+          description: "Review the suggestions and cut the ones you like",
+        });
+      }
+    } catch (err: any) {
+      console.error('Error analyzing for shorts:', err);
+
+      // Handle specific error messages with user-friendly responses
+      const errorMessage = err.message || "Failed to analyze video for shorts";
+      let title = "Analysis Failed";
+      let description = errorMessage;
+
+      if (errorMessage.includes("too short")) {
+        title = "Video Too Short";
+        description = "Your video needs to be at least 30 seconds long to find good short segments.";
+      } else if (errorMessage.includes("no speech detected")) {
+        title = "No Speech Detected";
+        description = "We couldn't detect any speech in the video. Make sure your video has clear audio narration.";
+      } else if (errorMessage.includes("Could not transcribe")) {
+        title = "Transcription Failed";
+        description = "We couldn't transcribe the audio. Please try a video with clearer audio.";
+      }
+
+      toast({
+        title,
+        description,
+        variant: "destructive",
+      });
+    } finally {
+      setAnalyzingShorts(false);
+    }
+  };
+
+  // Cut a short segment from the video
+  const cutShort = async (short: { id: string; start: number; end: number; title: string }) => {
+    const sceneIndex = shortsDrawerScene;
+    if (sceneIndex === null) return;
+
+    const scene = scenes[sceneIndex];
+    if (!scene?.video_url) return;
+
+    setCuttingShort(short.id);
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        throw new Error("Please log in to cut shorts");
+      }
+
+      const response = await fetch('/api/cut_short', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${session.access_token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          video_url: scene.video_url.split('?')[0], // Remove cache busting params
+          start: short.start,
+          end: short.end,
+          title: short.title,
+          story_id: id,
+          scene_id: scene.id,
+        }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Cut failed');
+      }
+
+      const result = await response.json();
+
+      toast({
+        title: "Short created!",
+        description: (
+          <div className="flex flex-col gap-2">
+            <p>{short.title} ({result.duration.toFixed(1)}s)</p>
+            <a
+              href={result.video_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-orange-400 hover:text-orange-300 underline text-sm"
+            >
+              Download short
+            </a>
+          </div>
+        ),
+      });
+    } catch (err: any) {
+      console.error('Error cutting short:', err);
+      toast({
+        title: "Cut Failed",
+        description: err.message || "Failed to cut short from video",
+        variant: "destructive",
+      });
+    } finally {
+      setCuttingShort(null);
     }
   };
 
@@ -2273,6 +2542,13 @@ export default function StoryDetailsPage() {
       bgMusicAudioRef.current.pause();
     }
 
+    // Stop music preview if playing
+    if (musicPreviewAudioRef.current) {
+      musicPreviewAudioRef.current.pause();
+      musicPreviewAudioRef.current = null;
+      setMusicPreviewPlaying(null);
+    }
+
     // Stop preloaded audio elements (don't reset position - preserve for resume)
     Object.values(preloadedAudio).forEach(audio => {
       audio.pause();
@@ -2457,8 +2733,11 @@ export default function StoryDetailsPage() {
           try {
             await videoElement.play();
             console.log("✅ Video playing at", videoElement.currentTime.toFixed(2), "s");
-          } catch (err) {
-            console.error("❌ Video play failed:", err);
+          } catch (err: any) {
+            // Ignore AbortError - this is expected when user seeks/pauses during playback
+            if (err?.name !== 'AbortError') {
+              console.error("❌ Video play failed:", err);
+            }
           }
         }
       }
@@ -2677,8 +2956,11 @@ export default function StoryDetailsPage() {
 
               checkCancellation();
             });
-          } catch (err) {
-            console.error("Video + Audio play error:", err);
+          } catch (err: any) {
+            // Ignore AbortError - this is expected when user seeks/pauses during playback
+            if (err?.name !== 'AbortError') {
+              console.error("Video + Audio play error:", err);
+            }
             if (progressIntervalRef.current) {
               clearInterval(progressIntervalRef.current);
             }
@@ -2892,13 +3174,15 @@ export default function StoryDetailsPage() {
 
     // Start background music if enabled
     if (bgMusicEnabled && bgMusicUrl) {
-      if (!bgMusicAudioRef.current || bgMusicAudioRef.current.src !== bgMusicUrl) {
+      const needsNewAudio = !bgMusicAudioRef.current || bgMusicAudioRef.current.src !== bgMusicUrl;
+      if (needsNewAudio) {
         bgMusicAudioRef.current = new Audio(bgMusicUrl);
         bgMusicAudioRef.current.loop = false; // Don't loop - stop when video ends
+        bgMusicAudioRef.current.currentTime = 0; // Only reset on fresh start
       }
       // Apply background music volume directly (matches generated video)
       bgMusicAudioRef.current.volume = bgMusicVolume / 100;
-      bgMusicAudioRef.current.currentTime = 0;
+      // Don't reset currentTime here - preserve paused position for resume
       bgMusicAudioRef.current.play().catch(err => {
         console.error("Failed to play background music in preview:", err);
       });
@@ -2993,8 +3277,11 @@ export default function StoryDetailsPage() {
 
               checkCancellation();
             });
-          } catch (err) {
-            console.error("Video + Audio sync play error:", err);
+          } catch (err: any) {
+            // Ignore AbortError - this is expected when user seeks/pauses during playback
+            if (err?.name !== 'AbortError') {
+              console.error("Video + Audio sync play error:", err);
+            }
             if (progressIntervalRef.current) {
               clearInterval(progressIntervalRef.current);
             }
@@ -3815,6 +4102,7 @@ export default function StoryDetailsPage() {
               </AlertDialogContent>
             </AlertDialog>
 
+
             {/* Reusable Credit Confirmation Dialog */}
             <AlertDialog open={creditConfirmOpen} onOpenChange={setCreditConfirmOpen}>
               <AlertDialogContent className="bg-gray-900 border-gray-700 text-white">
@@ -4373,6 +4661,38 @@ export default function StoryDetailsPage() {
                           </Tooltip>
                         )}
 
+                        {/* AI Video Button - Generate video from image */}
+                        {scene.image_url && !scene.video_url && !uploadingSceneVideo.has(index) && (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setAiVideoDialogSceneIndex(index);
+                                  setAiVideoDialogOpen(true);
+                                }}
+                                disabled={generatingSceneVideoFromImage.has(index)}
+                                className="px-2 lg:px-3 py-1.5 text-xs rounded transition-colors flex items-center gap-1 lg:gap-1.5 disabled:opacity-50 bg-blue-700 hover:bg-blue-600 text-white"
+                              >
+                                {generatingSceneVideoFromImage.has(index) ? (
+                                  <>
+                                    <Loader2 className="w-3 h-3 animate-spin" />
+                                    <span className="text-[10px] lg:text-xs">Gen...</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Sparkles className="w-3 h-3" />
+                                    <span className="text-[10px] lg:text-xs">AI Vid</span>
+                                  </>
+                                )}
+                              </button>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              <p>Generate AI video from image (5 credits)</p>
+                            </TooltipContent>
+                          </Tooltip>
+                        )}
+
                         {/* Video Button */}
                         <Tooltip>
                           <TooltipTrigger asChild>
@@ -4427,6 +4747,26 @@ export default function StoryDetailsPage() {
                             <p>{scene.video_url ? 'Video uploaded and ready' : 'Upload a video for this scene'}</p>
                           </TooltipContent>
                         </Tooltip>
+
+                        {/* Shorts Button - Only show when video is uploaded */}
+                        {scene.video_url && (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openShortsDrawer(index);
+                                }}
+                                className="p-1.5 bg-purple-800 hover:bg-purple-700 text-white rounded transition-colors"
+                              >
+                                <Scissors className="w-3.5 h-3.5" />
+                              </button>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              <p>Cut shorts from this video</p>
+                            </TooltipContent>
+                          </Tooltip>
+                        )}
 
                         {/* Effect Button - Icon Only (only show for AI-generated images, not uploaded videos) */}
                         {scene.image_url && !scene.video_url && (
@@ -6180,7 +6520,7 @@ export default function StoryDetailsPage() {
                   className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-md text-white file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:text-sm file:font-semibold file:bg-orange-600 file:text-white hover:file:bg-orange-700 cursor-pointer"
                 />
                 <p className="text-xs text-gray-500 mt-1">
-                  Max 5 minutes, under 200MB
+                  Max 200MB file size
                 </p>
               </div>
 
@@ -6226,17 +6566,6 @@ export default function StoryDetailsPage() {
                 </div>
               )}
 
-              {/* Warning if video too long */}
-              {videoFileDuration > 300 && (
-                <div className="mb-4 p-3 bg-red-900/20 border border-red-700/30 rounded-lg">
-                  <div className="flex items-start gap-2">
-                    <X className="w-4 h-4 text-red-400 mt-0.5 flex-shrink-0" />
-                    <div className="text-xs text-red-300">
-                      Video is too long. Maximum duration is 5 minutes.
-                    </div>
-                  </div>
-                </div>
-              )}
                 </>
               )}
 
@@ -6254,7 +6583,7 @@ export default function StoryDetailsPage() {
                     className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-md text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-orange-600"
                   />
                   <p className="text-xs text-gray-500 mt-1">
-                    Max 5 minutes video. Video will be downloaded and transcribed.
+                    Video will be downloaded and transcribed (max 200MB)
                   </p>
 
                   {/* YouTube URL preview */}
@@ -6334,7 +6663,7 @@ export default function StoryDetailsPage() {
                       // Just show a warning that credits will be charged based on video duration
                       setCreditConfirmAction({
                         title: "Import YouTube Video?",
-                        message: `Import video from YouTube for scene ${sceneToImport + 1}. Credits will be charged based on video duration (3 credits per minute, max 5 minutes). The video will be downloaded and transcribed automatically.`,
+                        message: `Import video from YouTube for scene ${sceneToImport + 1}. Credits will be charged based on video duration (3 credits per minute). The video will be downloaded and transcribed automatically.`,
                         credits: 0, // We don't know the duration yet
                         onConfirm: () => {
                           // Close video drawer
@@ -6379,6 +6708,145 @@ export default function StoryDetailsPage() {
                   )}
                 </Button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Shorts Cutting Drawer */}
+      {shortsDrawerOpen && shortsDrawerScene !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          {/* Background Overlay */}
+          <div
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            onClick={() => {
+              setShortsDrawerOpen(false);
+              setShortsSuggestions([]);
+            }}
+          />
+
+          {/* Drawer Content */}
+          <div className="relative bg-gray-900 rounded-2xl shadow-2xl border border-gray-700 max-w-lg w-full max-h-[90vh] overflow-y-auto transform transition-all">
+            <div className="p-5">
+              {/* Header */}
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h3 className="text-lg font-semibold text-white flex items-center gap-2">
+                    <Scissors className="w-5 h-5 text-purple-400" />
+                    Cut Shorts from Scene #{shortsDrawerScene + 1}
+                  </h3>
+                  <p className="text-xs text-gray-400 mt-1">
+                    AI will analyze your video to find the best short segments
+                  </p>
+                </div>
+                <button
+                  onClick={() => {
+                    setShortsDrawerOpen(false);
+                    setShortsSuggestions([]);
+                  }}
+                  className="text-gray-400 hover:text-white transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Info Box */}
+              <div className="mb-4 p-3 bg-purple-900/20 border border-purple-700/30 rounded-lg">
+                <div className="flex items-start gap-2">
+                  <Sparkles className="w-4 h-4 text-purple-400 mt-0.5 flex-shrink-0" />
+                  <div className="text-xs text-purple-300">
+                    Click "Analyze Video" to find 3-5 best 30-60 second segments for shorts
+                  </div>
+                </div>
+              </div>
+
+              {/* Analyze Button */}
+              {shortsSuggestions.length === 0 && (
+                <Button
+                  onClick={() => analyzeForShorts(shortsDrawerScene)}
+                  disabled={analyzingShorts}
+                  className="w-full bg-purple-600 hover:bg-purple-700 text-white mb-4"
+                >
+                  {analyzingShorts ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Analyzing video...
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="w-4 h-4 mr-2" />
+                      Analyze Video for Shorts
+                    </>
+                  )}
+                </Button>
+              )}
+
+              {/* Shorts Suggestions */}
+              {shortsSuggestions.length > 0 && (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-sm font-semibold text-white">
+                      Found {shortsSuggestions.length} potential shorts
+                    </h4>
+                    <button
+                      onClick={() => analyzeForShorts(shortsDrawerScene)}
+                      disabled={analyzingShorts}
+                      className="text-xs text-purple-400 hover:text-purple-300"
+                    >
+                      Re-analyze
+                    </button>
+                  </div>
+
+                  {shortsSuggestions.map((short) => (
+                    <div
+                      key={short.id}
+                      className="p-3 bg-gray-800 rounded-lg border border-gray-700"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex-1 min-w-0">
+                          <h5 className="text-sm font-medium text-white truncate">
+                            {short.title}
+                          </h5>
+                          <p className="text-xs text-gray-400 mt-1">
+                            {short.start.toFixed(1)}s - {short.end.toFixed(1)}s ({short.duration.toFixed(0)}s)
+                          </p>
+                          <p className="text-xs text-gray-500 mt-1 line-clamp-2">
+                            {short.reason}
+                          </p>
+                        </div>
+                        <Button
+                          onClick={() => cutShort(short)}
+                          disabled={cuttingShort === short.id}
+                          size="sm"
+                          className="bg-orange-600 hover:bg-orange-700 text-white flex-shrink-0"
+                        >
+                          {cuttingShort === short.id ? (
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                          ) : (
+                            <>
+                              <Scissors className="w-3 h-3 mr-1" />
+                              Cut
+                            </>
+                          )}
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Empty State when analyzing */}
+              {analyzingShorts && (
+                <div className="text-center py-8">
+                  <Loader2 className="w-8 h-8 animate-spin text-purple-400 mx-auto mb-3" />
+                  <p className="text-sm text-gray-400">
+                    Transcribing and analyzing video...
+                  </p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    This may take a minute
+                  </p>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -6575,6 +7043,88 @@ export default function StoryDetailsPage() {
                       Generate All Images
                     </>
                   )}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* AI Video Generation Drawer */}
+      {aiVideoDialogOpen && aiVideoDialogSceneIndex !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          {/* Background overlay */}
+          <div
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            onClick={() => setAiVideoDialogOpen(false)}
+          />
+
+          {/* Drawer content */}
+          <div className="relative bg-gray-900 rounded-2xl shadow-2xl border border-gray-700 max-w-md w-full max-h-[90vh] overflow-y-auto transform transition-all">
+            <div className="p-5">
+              {/* Header */}
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h2 className="text-xl font-semibold text-white">Generate AI Video</h2>
+                  <p className="text-sm text-gray-400 mt-1">
+                    Create a 10-second video for this scene
+                  </p>
+                </div>
+                <button
+                  onClick={() => setAiVideoDialogOpen(false)}
+                  className="text-gray-400 hover:text-white transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Scene Image Preview */}
+              <div className="mb-4 flex justify-center">
+                <div className={`relative bg-gray-800 rounded-lg border border-gray-700 overflow-hidden ${
+                  aspectRatio === "16:9" ? "w-48 aspect-[16/9]" :
+                  aspectRatio === "1:1" ? "w-32 aspect-[1/1]" :
+                  "w-32 aspect-[9/16]"
+                }`}>
+                  {scenes[aiVideoDialogSceneIndex]?.image_url && (
+                    <img
+                      src={scenes[aiVideoDialogSceneIndex].image_url}
+                      alt={`Scene ${aiVideoDialogSceneIndex + 1}`}
+                      className="absolute inset-0 w-full h-full object-cover"
+                    />
+                  )}
+                </div>
+              </div>
+
+              {/* Info */}
+              <div className="mb-4 text-sm text-gray-400 space-y-1">
+                <p>The video will typically take 60-90 seconds to generate.</p>
+                <p>The generated video will replace the current image for this scene.</p>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex gap-3">
+                <Button
+                  variant="outline"
+                  onClick={() => setAiVideoDialogOpen(false)}
+                  className="flex-1 border-gray-700 text-gray-300 hover:bg-gray-800"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={() => {
+                    setAiVideoDialogOpen(false);
+                    setCreditConfirmAction({
+                      title: "Generate AI Video",
+                      message: `Generate AI video for Scene ${aiVideoDialogSceneIndex + 1}`,
+                      credits: 5,
+                      onConfirm: () => generateVideoFromImage(aiVideoDialogSceneIndex)
+                    });
+                    setCreditConfirmOpen(true);
+                  }}
+                  className="flex-1 bg-orange-600 hover:bg-orange-700 text-white"
+                >
+                  <Sparkles className="w-4 h-4 mr-2" />
+                  Generate Video
                 </Button>
               </div>
             </div>

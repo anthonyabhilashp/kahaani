@@ -133,10 +133,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     tempVideoPath = videoFile.filepath;
     const duration = await getVideoDuration(tempVideoPath);
 
-    if (duration > 300) { // 5 minutes max
-      throw new Error("Video is too long. Maximum duration is 5 minutes.");
-    }
-
     logger.info(`[Scene ${scene_id}] ⏱️ Video duration: ${duration.toFixed(2)} seconds`);
 
     // 3️⃣ Calculate credits needed based on duration

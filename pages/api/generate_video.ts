@@ -11,7 +11,13 @@ import { getEffect } from "../../lib/videoEffects";
 import { generateEffectFrames, cleanupFrames } from "../../lib/frameGenerator";
 import { getUserCredits, deductCredits, refundCredits, CREDIT_COSTS } from "../../lib/credits";
 
-export const config = { api: { bodyParser: { sizeLimit: "4mb" } } };
+export const config = {
+  api: {
+    bodyParser: { sizeLimit: "4mb" },
+    responseLimit: false,
+  },
+  maxDuration: 300, // 5 minutes timeout for video generation
+};
 
 // --- Helper to update job progress ---
 async function updateJobProgress(jobId: string | null, progress: number) {
@@ -277,10 +283,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (sceneErr || !scenes?.length) throw new Error("No scenes found for this story");
     logger.info(`[${story_id}] 📚 Found ${scenes.length} scenes`);
 
+    // Log media URLs for debugging
+    scenes.forEach((s, i) => {
+      logger.info(`[${story_id}] 📋 Scene ${i + 1}: video_url=${s.video_url ? 'YES' : 'NO'}, image_url=${s.image_url ? 'YES' : 'NO'}`);
+    });
+
     await updateJobProgress(jobId, 15);
 
     // 2️⃣ Verify media (images or videos) exist in scenes
-    const scenesWithMedia = scenes.filter(s => s.image_url || (s as any).video_url);
+    const scenesWithMedia = scenes.filter(s => s.image_url || s.video_url);
     logger.info(`[${story_id}] 🎬 Found ${scenesWithMedia.length} scenes with media out of ${scenes.length} total`);
     if (!scenesWithMedia.length) throw new Error("No media (images or videos) found for this story");
 
@@ -297,11 +308,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const scene = scenes[index];
       const sceneFiles: any = { sceneIndex: index, duration: 5 }; // Default 5 seconds if no audio
 
-      // Download video (if user uploaded one) OR image (if AI generated)
-      if ((scene as any).video_url) {
-        // User uploaded video for this scene
+      // Download video or image
+      if (scene.video_url) {
+        // Video for this scene (uploaded or AI-generated)
         try {
-          const videoRes = await fetch((scene as any).video_url);
+          const videoRes = await fetch(scene.video_url);
           if (!videoRes.ok) {
             throw new Error(`HTTP ${videoRes.status}: ${videoRes.statusText}`);
           }
@@ -450,25 +461,57 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (scene.videoPath) {
         logger.info(`[${story_id}] 🎥 Scene ${scene.sceneIndex + 1}: Using uploaded video (${scene.duration.toFixed(2)}s)`);
 
+        // Get source video duration to check if we need to extend
+        const sourceVideoDuration = await new Promise<number>((resolve) => {
+          ffmpeg.ffprobe(scene.videoPath!, (err, metadata) => {
+            if (err || !metadata?.format?.duration) {
+              resolve(10); // Default to 10s if can't probe
+            } else {
+              resolve(metadata.format.duration);
+            }
+          });
+        });
+
+        const requiredDuration = scene.duration;
+        const needsExtension = sourceVideoDuration < requiredDuration;
+        const extensionDuration = needsExtension ? requiredDuration - sourceVideoDuration : 0;
+
+        if (needsExtension) {
+          logger.info(`[${story_id}] 📏 Source video is ${sourceVideoDuration.toFixed(2)}s, need ${requiredDuration.toFixed(2)}s - extending last frame by ${extensionDuration.toFixed(2)}s`);
+        }
+
+        // Build video filters
+        const videoFilters = [
+          `scale=${width}:${height}:force_original_aspect_ratio=decrease`,
+          `pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black`
+        ];
+
+        // Add tpad filter to extend with last frame if needed
+        if (needsExtension) {
+          videoFilters.push(`tpad=stop_mode=clone:stop_duration=${extensionDuration}`);
+        }
+
         // Trim/resize video to match story dimensions and duration
         await new Promise<void>((resolve, reject) => {
-          ffmpeg(scene.videoPath!)
+          const cmd = ffmpeg(scene.videoPath!)
             .setStartTime(0)
-            .setDuration(scene.duration)
-            .videoFilters([
-              `scale=${width}:${height}:force_original_aspect_ratio=decrease`,
-              `pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black`
-            ])
+            .videoFilters(videoFilters)
             .videoCodec('libx264')
             .noAudio() // Strip audio (already extracted separately during upload)
             .outputOptions([
               '-pix_fmt yuv420p',
               '-preset medium',
               '-crf 18',
-            ])
-            .save(clipPath)
+            ]);
+
+          // Only set duration if we're trimming (not extending)
+          if (!needsExtension) {
+            cmd.setDuration(scene.duration);
+          }
+
+          cmd.save(clipPath)
             .on('end', () => {
-              logger.info(`[${story_id}] ✅ Scene ${scene.sceneIndex + 1} video processed and trimmed to ${scene.duration.toFixed(2)}s`);
+              logger.info(`[${story_id}] ✅ Scene ${scene.sceneIndex + 1} video processed to ${scene.duration.toFixed(2)}s${needsExtension ? ' (extended)' : ''}`);
               resolve();
             })
             .on('error', (err: any) => {

@@ -4,7 +4,8 @@
 export const CREDIT_COSTS = {
   IMAGE_PER_SCENE: 1,          // 1 credit per image (per scene)
   AUDIO_PER_SCENE: 1,          // 1 credit per audio (per scene)
-  VIDEO_GENERATION: 0,         // Free - no credits for video generation
+  VIDEO_FROM_IMAGE: 5,         // 5 credits per AI video from image (Kling)
+  VIDEO_GENERATION: 0,         // Free - no credits for final video generation
   VIDEO_UPLOAD_BASE: 3,        // 3 credits per minute of video upload + transcription
 } as const;
 
@@ -26,4 +27,5 @@ export type TransactionType =
   | 'deduction_audio'
   | 'deduction_video'
   | 'deduction_video_upload'
+  | 'deduction_video_from_image'
   | 'admin_adjustment';
