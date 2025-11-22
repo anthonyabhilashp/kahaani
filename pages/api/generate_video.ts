@@ -439,16 +439,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     logger.info(`[${story_id}] 🎞️ Rendering video at ${width}x${height} (${selectedAspect}), font scale: ${fontSizeScalingFactor.toFixed(2)}x`);
 
-    // 8️⃣ Generate individual scene clips with precise timing and effects
-    const videoClips: string[] = [];
-    const audioClips: string[] = [];
+    // 8️⃣ Generate individual scene clips with precise timing and effects (PARALLEL)
+    const videoClips: string[] = new Array(mediaPaths.length);
+    const audioClips: string[] = new Array(mediaPaths.length);
     const frameDirsToCleanup: string[] = [];
+    let completedScenes = 0;
 
     await updateJobProgress(jobId, 35);
 
-    for (const scene of mediaPaths) {
+    // Helper function to process a single scene
+    const processScene = async (scene: typeof mediaPaths[0]) => {
       // Skip scenes without media (need either video or image)
-      if (!scene.videoPath && !scene.imagePath) continue;
+      if (!scene.videoPath && !scene.imagePath) return;
 
       const clipPath = path.join(tmpDir, `clip-${scene.sceneIndex}.mp4`);
 
@@ -520,11 +522,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             });
         });
 
-        videoClips.push(clipPath);
+        videoClips[scene.sceneIndex] = clipPath;
         if (scene.audioPath) {
-          audioClips.push(scene.audioPath);
+          audioClips[scene.sceneIndex] = scene.audioPath;
         }
-        continue; // Skip image processing for video clips
+
+        // Update progress
+        completedScenes++;
+        const sceneProgress = 35 + Math.floor(completedScenes / mediaPaths.length * 20);
+        await updateJobProgress(jobId, sceneProgress);
+
+        return; // Skip image processing for video clips
       }
 
       logger.info(`[${story_id}] 🎬 Scene ${scene.sceneIndex + 1}: Applying "${effect.name}" effect`);
@@ -656,7 +664,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // Skip scene if no image exists
         if (!scene.imagePath) {
           logger.warn(`[${story_id}] ⚠️ Scene ${scene.sceneIndex + 1} has no image - skipping video generation for this scene`);
-          continue;
+          return;
         }
 
         const videoFilter = `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black`;
@@ -739,17 +747,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
       }
 
-      videoClips.push(clipPath);
+      videoClips[scene.sceneIndex] = clipPath;
 
       // If scene has audio, add it to audio clips list
       if (scene.audioPath) {
-        audioClips.push(scene.audioPath);
+        audioClips[scene.sceneIndex] = scene.audioPath;
       }
 
       // Update progress for each scene processed (35-55% range)
-      const sceneProgress = 35 + Math.floor((scene.sceneIndex + 1) / mediaPaths.length * 20);
+      completedScenes++;
+      const sceneProgress = 35 + Math.floor(completedScenes / mediaPaths.length * 20);
       await updateJobProgress(jobId, sceneProgress);
+    };
+
+    // Process scenes in parallel (max 5 at a time)
+    logger.info(`[${story_id}] 🚀 Processing ${mediaPaths.length} scenes in parallel (max 5 concurrent)...`);
+    const batchSize = 5;
+    for (let i = 0; i < mediaPaths.length; i += batchSize) {
+      const batch = mediaPaths.slice(i, i + batchSize);
+      await Promise.all(batch.map(scene => processScene(scene)));
     }
+
+    // Filter out undefined values (scenes that were skipped)
+    const filteredVideoClips = videoClips.filter(c => c !== undefined);
+    const filteredAudioClips = audioClips.filter(c => c !== undefined);
+
+    logger.info(`[${story_id}] ✅ Generated ${filteredVideoClips.length} video clips in parallel`);
 
     await updateJobProgress(jobId, 55);
 
@@ -914,17 +937,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     await new Promise<void>((resolve, reject) => {
       // Use concat FILTER instead of concat demuxer to properly handle videos with different frame rates
-      logger.info(`[${story_id}] 🎬 Concatenating ${videoClips.length} video clips with concat filter...`);
+      logger.info(`[${story_id}] 🎬 Concatenating ${filteredVideoClips.length} video clips with concat filter...`);
 
       // Build FFmpeg command with each clip as a separate input
       let cmd = ffmpeg();
-      videoClips.forEach((clipPath) => {
+      filteredVideoClips.forEach((clipPath) => {
         cmd = cmd.input(clipPath);
       });
 
       // Build concat filter: [0:v][1:v]concat=n=2:v=1:a=0[concatv]
-      const concatInputs = videoClips.map((_, i) => `[${i}:v]`).join('');
-      const concatFilterStr = `${concatInputs}concat=n=${videoClips.length}:v=1:a=0[concatv]`;
+      const concatInputs = filteredVideoClips.map((_, i) => `[${i}:v]`).join('');
+      const concatFilterStr = `${concatInputs}concat=n=${filteredVideoClips.length}:v=1:a=0[concatv]`;
 
       // Add floating watermark (always enabled) - moves in smooth, pseudo-random pattern
       // Scale watermark font size to match preview (14px in preview -> scaled for video)

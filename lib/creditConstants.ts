@@ -17,7 +17,7 @@ export function calculateVideoUploadCost(durationInSeconds: number): number {
   return minutes * CREDIT_COSTS.VIDEO_UPLOAD_BASE;
 }
 
-export const NEW_USER_CREDITS = 15; // Free credits for new users (enough for one 5-scene story)
+export const NEW_USER_CREDITS = 30; // Free credits for new users (enough for one 5-scene story)
 
 export type TransactionType =
   | 'purchase'
