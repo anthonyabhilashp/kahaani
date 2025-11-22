@@ -49,6 +49,14 @@ export default function App({ Component, pageProps }: AppProps) {
         </>
       )}
 
+      {/* Ahrefs Analytics */}
+      <Script
+        src="https://analytics.ahrefs.com/analytics.js"
+        data-key="7Cena+E0qkEjHPjSxgB1zg"
+        strategy="afterInteractive"
+        async
+      />
+
       <AuthProvider>
         <Component {...pageProps} />
         <Toaster />

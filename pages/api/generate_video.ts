@@ -362,41 +362,82 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       logger.info(`[${story_id}] ⏱️ Scene ${index + 1} duration: ${sceneFiles.duration.toFixed(2)}s`);
 
 
-      // Download overlay if exists
+      // Get overlay if exists (prioritize local processed files)
       const overlayUrl = (scene.effects as any)?.overlay_url;
       const overlayId = (scene.effects as any)?.overlay_id;
       if (overlayUrl && overlayId) {
         try {
-          logger.info(`[${story_id}] 🎭 Downloading overlay for scene ${index + 1}...`);
-
-          // Fetch overlay metadata to get category
-          const { data: overlayData } = await supabaseAdmin
-            .from('overlay_effects')
-            .select('category')
-            .eq('id', overlayId)
-            .single();
-
-          // Construct aspect-ratio-specific overlay URL
           // Convert aspect_ratio from "9:16" to "9-16" for folder name
           const aspectFolder = (aspect_ratio || '9:16').replace(':', '-');
-          const fileName = overlayUrl.split('/').pop();
-          const baseUrl = overlayUrl.substring(0, overlayUrl.lastIndexOf('/'));
-          const aspectSpecificUrl = `${baseUrl}/${aspectFolder}/${fileName}`;
 
-          logger.info(`[${story_id}] 📐 Using ${aspectFolder} overlay variant`);
-          logger.info(`[${story_id}]    Original URL: ${overlayUrl}`);
-          logger.info(`[${story_id}]    Fetching from: ${aspectSpecificUrl}`);
+          // Extract overlay name from URL (remove extension and path)
+          const fileName = overlayUrl.split('/').pop() || '';
+          const overlayName = fileName.replace(/\.(webm|mp4)$/, '');
 
-          const overlayRes = await fetch(aspectSpecificUrl);
-          logger.info(`[${story_id}]    Response status: ${overlayRes.status} ${overlayRes.statusText}`);
-          const overlayBuffer = Buffer.from(await overlayRes.arrayBuffer());
-          const overlayPath = path.join(tmpDir, `scene-${index}-overlay.webm`);
-          fs.writeFileSync(overlayPath, overlayBuffer);
-          sceneFiles.overlayPath = overlayPath;
-          sceneFiles.overlayCategory = overlayData?.category || 'other';
-          logger.info(`[${story_id}] ✅ Overlay downloaded for scene ${index + 1} (${sceneFiles.overlayCategory})`);
+          // Check if local overlay exists
+          // Structure matches Supabase: 1:1 in root, 9:16 and 16:9 in subfolders
+          let localOverlayPath: string;
+          if (aspectFolder === '1-1') {
+            // 1:1 overlays are in root folder
+            localOverlayPath = path.join(process.cwd(), 'public', 'overlays', `${overlayName}.mp4`);
+          } else {
+            // 9:16 and 16:9 overlays are in aspect-specific subfolders
+            localOverlayPath = path.join(process.cwd(), 'public', 'overlays', aspectFolder, `${overlayName}.mp4`);
+          }
+
+          if (fs.existsSync(localOverlayPath)) {
+            // Use local overlay (fast!)
+            logger.info(`[${story_id}] 🎭 Using local overlay for scene ${index + 1}: ${overlayName}`);
+            sceneFiles.overlayPath = localOverlayPath;
+
+            // Fetch overlay metadata to get category
+            const { data: overlayData } = await supabaseAdmin
+              .from('overlay_effects')
+              .select('category')
+              .eq('id', overlayId)
+              .single();
+            sceneFiles.overlayCategory = overlayData?.category || 'other';
+            const pathDisplay = aspectFolder === '1-1' ? overlayName : `${aspectFolder}/${overlayName}`;
+            logger.info(`[${story_id}] ✅ Using local overlay: ${pathDisplay}.mp4 (${sceneFiles.overlayCategory})`);
+          } else {
+            // Fallback: Download from Supabase
+            logger.info(`[${story_id}] 🎭 Local overlay not found, downloading from Supabase for scene ${index + 1}...`);
+
+            // Fetch overlay metadata to get category
+            const { data: overlayData } = await supabaseAdmin
+              .from('overlay_effects')
+              .select('category')
+              .eq('id', overlayId)
+              .single();
+
+            // Construct aspect-ratio-specific overlay URL
+            // Note: Supabase only has 9-16 and 16-9 folders, not 1-1
+            const baseUrl = overlayUrl.substring(0, overlayUrl.lastIndexOf('/'));
+            let aspectSpecificUrl: string;
+
+            if (aspectFolder === '1-1') {
+              // For 1:1, use original URL (no aspect-specific folder in Supabase)
+              aspectSpecificUrl = overlayUrl;
+              logger.info(`[${story_id}] 📐 Using original overlay for 1:1 (no aspect folder in Supabase)`);
+            } else {
+              // For 9:16 and 16:9, use aspect-specific folder
+              aspectSpecificUrl = `${baseUrl}/${aspectFolder}/${fileName}`;
+              logger.info(`[${story_id}] 📐 Using ${aspectFolder} overlay variant`);
+            }
+
+            logger.info(`[${story_id}]    Fetching from: ${aspectSpecificUrl}`);
+
+            const overlayRes = await fetch(aspectSpecificUrl);
+            logger.info(`[${story_id}]    Response status: ${overlayRes.status} ${overlayRes.statusText}`);
+            const overlayBuffer = Buffer.from(await overlayRes.arrayBuffer());
+            const overlayPath = path.join(tmpDir, `scene-${index}-overlay.webm`);
+            fs.writeFileSync(overlayPath, overlayBuffer);
+            sceneFiles.overlayPath = overlayPath;
+            sceneFiles.overlayCategory = overlayData?.category || 'other';
+            logger.info(`[${story_id}] ✅ Overlay downloaded for scene ${index + 1} (${sceneFiles.overlayCategory})`);
+          }
         } catch (err: any) {
-          logger.warn(`[${story_id}] ⚠️ Failed to download overlay for scene ${index + 1}: ${err.message}`);
+          logger.warn(`[${story_id}] ⚠️ Failed to get overlay for scene ${index + 1}: ${err.message}`);
         }
       }
 
