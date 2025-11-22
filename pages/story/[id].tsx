@@ -5641,10 +5641,10 @@ export default function StoryDetailsPage() {
 
                     {/* Video Controls Overlay */}
                     <div className="absolute inset-0 opacity-100 transition-opacity duration-300">
-                      <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 via-transparent to-transparent pb-3 pt-16">
+                      <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/20 via-transparent to-transparent pb-0 pt-16">
                         {/* Progress Bar */}
                         {getTotalDuration() > 0 && (
-                          <div className="px-4 pb-3 group/seek">
+                          <div className="px-4 pb-0 group/seek">
                             <Slider
                               value={[totalProgress]}
                               max={getTotalDuration()}
@@ -5659,7 +5659,7 @@ export default function StoryDetailsPage() {
                         )}
 
                         {/* Control Bar */}
-                        <div className="flex items-center justify-between px-4">
+                        <div className="flex items-center justify-between px-4 pb-2">
                           <div className="flex items-center gap-3">
                             {/* Play/Pause */}
                             <button
