@@ -4,6 +4,10 @@ import { getUserLogger } from "../../lib/userLogger";
 import { getUserCredits, deductCredits, CREDIT_COSTS } from "../../lib/credits";
 import * as fal from "@fal-ai/serverless-client";
 import fetch from "node-fetch";
+import ffmpeg from "fluent-ffmpeg";
+import fs from "fs";
+import path from "path";
+import { tmpdir } from "os";
 
 export const config = {
   api: {
@@ -98,8 +102,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     logger.info(`[Scene ${scene_id}] Calling Kling API with duration: ${klingDuration}s (scene audio: ${sceneDuration.toFixed(2)}s)`);
     logger.info(`[Scene ${scene_id}] Prompt: ${motionPrompt.substring(0, 100)}...`);
 
-    // 6. Call Kling via fal.ai (using v1.6 standard for faster generation)
-    const result = await fal.subscribe("fal-ai/kling-video/v1.6/standard/image-to-video", {
+    // 6. Call Kling via fal.ai (configurable model via env var)
+    const model = process.env.VIDEO_FROM_IMAGE_MODEL || "fal-ai/kling-video/v1.6/standard/image-to-video";
+    logger.info(`[Scene ${scene_id}] Using model: ${model}`);
+    const result = await fal.subscribe(model, {
       input: {
         prompt: motionPrompt,
         image_url: scene.image_url.split('?')[0], // Remove cache busting params
@@ -122,19 +128,131 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const generatedVideoUrl = result.video.url;
     logger.info(`[Scene ${scene_id}] Video generated: ${generatedVideoUrl}`);
 
-    // 7. Download and upload to Supabase Storage
-    logger.info(`[Scene ${scene_id}] Downloading video for storage...`);
+    // 7. Download video from Kling
+    logger.info(`[Scene ${scene_id}] Downloading video for processing...`);
     const videoResponse = await fetch(generatedVideoUrl);
     if (!videoResponse.ok) {
       throw new Error(`Failed to download generated video: ${videoResponse.statusText}`);
     }
 
     const videoBuffer = await videoResponse.buffer();
+
+    // 7.5. Upscale AI-generated video to 4K
+    let finalVideoBuffer = videoBuffer;
+    const tempInputPath = path.join(tmpdir(), `kling-input-${scene_id}-${Date.now()}.mp4`);
+    const tempOutputPath = path.join(tmpdir(), `kling-output-${scene_id}-${Date.now()}.mp4`);
+
+    try {
+        // Save downloaded video to temp file
+        fs.writeFileSync(tempInputPath, videoBuffer);
+
+        // Check original video duration
+        const originalDuration = await new Promise<number>((resolve) => {
+          ffmpeg.ffprobe(tempInputPath, (err, metadata) => {
+            if (err || !metadata?.format?.duration) {
+              resolve(0);
+            } else {
+              resolve(metadata.format.duration);
+            }
+          });
+        });
+
+        logger.info(`[Scene ${scene_id}] Original Kling video: ${originalDuration.toFixed(2)}s`);
+        logger.info(`[Scene ${scene_id}] Upscaling AI video to 4K...`);
+
+        // Determine target 4K dimensions based on aspect ratio
+        const aspectRatioMap: { [key: string]: { width: number; height: number } } = {
+          "9:16": { width: 2160, height: 3840 },  // Portrait (4K)
+          "16:9": { width: 3840, height: 2160 },  // Landscape (4K)
+          "1:1": { width: 3840, height: 3840 }    // Square (4K)
+        };
+
+        const targetDimensions = aspectRatioMap[aspectRatio] || aspectRatioMap["9:16"];
+        const { width: targetWidth, height: targetHeight } = targetDimensions;
+
+        // Get upscaling quality setting
+        const quality = process.env.VIDEO_UPSCALE_QUALITY || "high";
+        const qualitySettings: { [key: string]: { filter: string; preset: string; crf: number } } = {
+          high: {
+            filter: `scale=${targetWidth}:${targetHeight}:flags=lanczos,unsharp=5:5:1.0:5:5:0.0`,
+            preset: 'slow',
+            crf: 18
+          },
+          medium: {
+            filter: `scale=${targetWidth}:${targetHeight}:flags=bicubic`,
+            preset: 'medium',
+            crf: 20
+          },
+          fast: {
+            filter: `scale=${targetWidth}:${targetHeight}:flags=bilinear`,
+            preset: 'fast',
+            crf: 22
+          }
+        };
+
+        const settings = qualitySettings[quality] || qualitySettings.high;
+        logger.info(`[Scene ${scene_id}] Using ${quality} quality upscaling to ${targetWidth}x${targetHeight}`);
+
+        // Upscale video using FFmpeg (Kling videos are video-only, no audio)
+        await new Promise<void>((resolve, reject) => {
+          ffmpeg(tempInputPath)
+            .videoFilters(settings.filter)
+            .videoCodec('libx264')
+            .noAudio() // Kling videos don't have audio tracks
+            .outputOptions([
+              '-pix_fmt yuv420p',
+              `-preset ${settings.preset}`,
+              `-crf ${settings.crf}`,
+              '-movflags +faststart'
+            ])
+            .save(tempOutputPath)
+            .on('end', () => {
+              logger.info(`[Scene ${scene_id}] ✅ Video upscaled to 4K successfully`);
+              resolve();
+            })
+            .on('error', (err: any) => {
+              logger.error(`[Scene ${scene_id}] ❌ Upscaling failed: ${err.message}`);
+              reject(err);
+            });
+        });
+
+        // Verify upscaled video duration
+        const upscaledDuration = await new Promise<number>((resolve) => {
+          ffmpeg.ffprobe(tempOutputPath, (err, metadata) => {
+            if (err || !metadata?.format?.duration) {
+              resolve(0);
+            } else {
+              resolve(metadata.format.duration);
+            }
+          });
+        });
+
+        logger.info(`[Scene ${scene_id}] Upscaled video: ${upscaledDuration.toFixed(2)}s (original: ${originalDuration.toFixed(2)}s)`);
+
+        // Read upscaled video
+        finalVideoBuffer = fs.readFileSync(tempOutputPath);
+
+        // Cleanup temp files
+        if (fs.existsSync(tempInputPath)) fs.unlinkSync(tempInputPath);
+        if (fs.existsSync(tempOutputPath)) fs.unlinkSync(tempOutputPath);
+
+        logger.info(`[Scene ${scene_id}] Using upscaled 4K video for upload`);
+    } catch (upscaleErr: any) {
+      logger.warn(`[Scene ${scene_id}] ⚠️ Upscaling failed, using original video: ${upscaleErr.message}`);
+      // Cleanup on error
+      if (fs.existsSync(tempInputPath)) fs.unlinkSync(tempInputPath);
+      if (fs.existsSync(tempOutputPath)) fs.unlinkSync(tempOutputPath);
+      // Continue with original video
+      finalVideoBuffer = videoBuffer;
+    }
+
+    // 8. Upload to Supabase Storage
+    logger.info(`[Scene ${scene_id}] Uploading video to Supabase...`);
     const fileName = `${user.id}/generated_videos/${scene_id}_${Date.now()}.mp4`;
 
     const { data: uploadData, error: uploadError } = await supabaseAdmin.storage
       .from("videos")
-      .upload(fileName, videoBuffer, {
+      .upload(fileName, finalVideoBuffer, {
         contentType: "video/mp4",
         upsert: true
       });

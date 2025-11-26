@@ -1,6 +1,21 @@
 import fs from "fs";
 import path from "path";
 
+const IST_OPTIONS: Intl.DateTimeFormatOptions = {
+  timeZone: "Asia/Kolkata",
+  hour12: false,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+};
+
+function getISTTimestamp(): string {
+  return `${new Date().toLocaleString("en-IN", IST_OPTIONS)} IST`;
+}
+
 export class JobLogger {
   private logPath: string;
   private stream: fs.WriteStream;
@@ -15,7 +30,7 @@ export class JobLogger {
   }
 
   private write(level: string, msg: string) {
-    const timestamp = new Date().toISOString();
+    const timestamp = getISTTimestamp();
     const line = `[${timestamp}] [${level}] ${msg}\n`;
     this.stream.write(line);
     console.log(line.trim());

@@ -14,6 +14,16 @@ import path from 'path';
 const LOGS_DIR = path.join(process.cwd(), 'logs');
 const MAX_LOG_SIZE = 3 * 1024 * 1024; // 3MB in bytes
 const MAX_ROTATED_FILES = 2; // Keep last 2 rotated logs (3 files total including current)
+const IST_OPTIONS: Intl.DateTimeFormatOptions = {
+  timeZone: "Asia/Kolkata",
+  hour12: false,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+};
 
 // Ensure logs directory exists
 if (!fs.existsSync(LOGS_DIR)) {
@@ -37,7 +47,7 @@ export class UserLogger {
       // Check if rotation is needed before writing
       this.checkAndRotate();
 
-      const timestamp = new Date().toISOString();
+      const timestamp = `${new Date().toLocaleString("en-IN", IST_OPTIONS)} IST`;
       const logEntry = `[${timestamp}] [${level}] ${message}\n`;
 
       // Append to log file (file-only, not console)

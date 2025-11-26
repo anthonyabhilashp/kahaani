@@ -8,8 +8,9 @@ import { getUserLogger } from "../../lib/userLogger";
 import { generateWordByWordASS, type WordTimestamp } from "../../lib/assSubtitles";
 import { updateStoryMetadata } from "../../lib/updateStoryMetadata";
 import { getEffect } from "../../lib/videoEffects";
-import { generateEffectFrames, cleanupFrames } from "../../lib/frameGenerator";
 import { getUserCredits, deductCredits, refundCredits, CREDIT_COSTS } from "../../lib/credits";
+import { v4 as uuidv4 } from "uuid";
+import { spawn } from "child_process";
 
 export const config = {
   api: {
@@ -104,6 +105,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const fontConfigFile = path.join(projectRoot, 'fonts.conf');
   process.env.FONTCONFIG_FILE = fontConfigFile;
 
+  const jobFolder = uuidv4();
+  let tmpDir = path.join(process.cwd(), "tmp", jobFolder);
+  let shouldCleanupTmp = false;
   let jobId: string | null = null;
 
   try {
@@ -200,6 +204,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     jobId = newJob.id;
     console.log(`✅ Created video generation job: ${jobId}`);
 
+    fs.mkdirSync(tmpDir, { recursive: true });
+
     await updateJobProgress(jobId, 5);
 
     // 💳 Credit check: Get user ID from story
@@ -268,9 +274,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    const tmpDir = path.join(process.cwd(), "tmp", story_id);
-    fs.mkdirSync(tmpDir, { recursive: true });
-
     await updateJobProgress(jobId, 10);
 
     // 1️⃣ Fetch scenes with images, videos, audio, word timestamps, and effects
@@ -290,27 +293,97 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     await updateJobProgress(jobId, 15);
 
+    const selectedAspect = aspect_ratio || "9:16";
+    const aspectFolder = selectedAspect.replace(":", "-");
+
+    // Preload overlay categories in a single query
+    const overlayIds = Array.from(
+      new Set(
+        scenes
+          .map((scene) => (scene.effects as any)?.overlay_id)
+          .filter((id): id is string => Boolean(id))
+      )
+    );
+
+    const overlayCategoryMap = new Map<string, string>();
+    if (overlayIds.length > 0) {
+      const { data: overlayRecords, error: overlayErr } = await supabaseAdmin
+        .from("overlay_effects")
+        .select("id, category")
+        .in("id", overlayIds);
+
+      if (overlayErr) {
+        logger.warn(`[${story_id}] ⚠️ Failed to preload overlay metadata: ${overlayErr.message}`);
+      } else if (overlayRecords) {
+        overlayRecords.forEach((record) => {
+          overlayCategoryMap.set(record.id, record.category || "other");
+        });
+      }
+    }
+
     // 2️⃣ Verify media (images or videos) exist in scenes
     const scenesWithMedia = scenes.filter(s => s.image_url || s.video_url);
     logger.info(`[${story_id}] 🎬 Found ${scenesWithMedia.length} scenes with media out of ${scenes.length} total`);
     if (!scenesWithMedia.length) throw new Error("No media (images or videos) found for this story");
 
-    // 3️⃣ Download all media files and get audio durations
-    const mediaPaths: Array<{
+    // 3️⃣ Download all media files and get audio durations (parallel batches)
+    type SceneMedia = {
       sceneIndex: number;
       duration: number;
       imagePath?: string;
       videoPath?: string;
       audioPath?: string;
-    }> = [];
+      overlayPath?: string;
+      overlayCategory?: string;
+    };
 
-    for (let index = 0; index < scenes.length; index++) {
-      const scene = scenes[index];
-      const sceneFiles: any = { sceneIndex: index, duration: 5 }; // Default 5 seconds if no audio
+    const mediaPathResults: SceneMedia[] = new Array(scenes.length);
+
+    const resolveLocalOverlay = (overlayUrl: string | null | undefined, overlayId: string | null | undefined) => {
+      if (!overlayUrl || !overlayId) return null;
+      const fileName = overlayUrl.split("/").pop() || "";
+      const overlayName = fileName.replace(/\.(webm|mp4)$/, "");
+      const overlaysDir = path.join(process.cwd(), "public", "overlays");
+      const candidates: string[] = [];
+
+      if (aspectFolder === "1-1") {
+        candidates.push(
+          path.join(overlaysDir, `${overlayName}.mp4`),
+          path.join(overlaysDir, `${overlayName}.webm`)
+        );
+      } else {
+        candidates.push(
+          path.join(overlaysDir, aspectFolder, `${overlayName}.mp4`),
+          path.join(overlaysDir, aspectFolder, `${overlayName}.webm`)
+        );
+      }
+
+      // Fallback to root overlays folder if aspect-specific file missing
+      candidates.push(
+        path.join(overlaysDir, `${overlayName}.mp4`),
+        path.join(overlaysDir, `${overlayName}.webm`)
+      );
+
+      for (const candidatePath of candidates) {
+        if (fs.existsSync(candidatePath)) {
+          const localPathDisplay = aspectFolder === "1-1" ? overlayName : `${aspectFolder}/${overlayName}`;
+          logger.info(`[${story_id}] ✅ Using local overlay: ${localPathDisplay} (${path.basename(candidatePath)})`);
+          return {
+            path: candidatePath,
+            category: overlayCategoryMap.get(overlayId) || "other"
+          };
+        }
+      }
+
+      logger.warn(`[${story_id}] ⚠️ Local overlay not found: ${overlayName} for aspect ${aspectFolder}`);
+      return null;
+    };
+
+    const downloadSceneMedia = async (scene: typeof scenes[number], index: number): Promise<SceneMedia> => {
+      const sceneFiles: SceneMedia = { sceneIndex: index, duration: (scene as any).duration || 5 };
 
       // Download video or image
       if (scene.video_url) {
-        // Video for this scene (uploaded or AI-generated)
         try {
           const videoRes = await fetch(scene.video_url);
           if (!videoRes.ok) {
@@ -324,10 +397,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         } catch (err: any) {
           logger.error(`[${story_id}] ❌ Failed to download video for scene ${index + 1}: ${err.message}`);
           logger.warn(`[${story_id}] ⚠️ Scene ${index + 1} will be skipped in video generation`);
-          // Don't set videoPath - scene will be skipped
         }
       } else if (scene.image_url) {
-        // AI-generated image for this scene
         try {
           const imgRes = await fetch(scene.image_url);
           if (!imgRes.ok) {
@@ -341,13 +412,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         } catch (err: any) {
           logger.error(`[${story_id}] ❌ Failed to download image for scene ${index + 1}: ${err.message}`);
           logger.warn(`[${story_id}] ⚠️ Scene ${index + 1} will be skipped in video generation`);
-          // Don't set imagePath - scene will be skipped
         }
       } else {
         logger.info(`[${story_id}] 📝 Scene ${index + 1} has no media - will be text-only`);
       }
 
-      // Download audio if exists
       if (scene.audio_url) {
         const audioRes = await fetch(scene.audio_url);
         const audioBuffer = Buffer.from(await audioRes.arrayBuffer());
@@ -357,92 +426,40 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         logger.info(`[${story_id}] 🎵 Scene ${index + 1} audio downloaded`);
       }
 
-      // Always use scene.duration from database (already set correctly during upload/audio generation)
-      sceneFiles.duration = (scene as any).duration || 5; // Default to 5s if not set
       logger.info(`[${story_id}] ⏱️ Scene ${index + 1} duration: ${sceneFiles.duration.toFixed(2)}s`);
 
-
-      // Get overlay if exists (prioritize local processed files)
       const overlayUrl = (scene.effects as any)?.overlay_url;
       const overlayId = (scene.effects as any)?.overlay_id;
-      if (overlayUrl && overlayId) {
-        try {
-          // Convert aspect_ratio from "9:16" to "9-16" for folder name
-          const aspectFolder = (aspect_ratio || '9:16').replace(':', '-');
-
-          // Extract overlay name from URL (remove extension and path)
-          const fileName = overlayUrl.split('/').pop() || '';
-          const overlayName = fileName.replace(/\.(webm|mp4)$/, '');
-
-          // Check if local overlay exists
-          // Structure matches Supabase: 1:1 in root, 9:16 and 16:9 in subfolders
-          let localOverlayPath: string;
-          if (aspectFolder === '1-1') {
-            // 1:1 overlays are in root folder
-            localOverlayPath = path.join(process.cwd(), 'public', 'overlays', `${overlayName}.mp4`);
-          } else {
-            // 9:16 and 16:9 overlays are in aspect-specific subfolders
-            localOverlayPath = path.join(process.cwd(), 'public', 'overlays', aspectFolder, `${overlayName}.mp4`);
-          }
-
-          if (fs.existsSync(localOverlayPath)) {
-            // Use local overlay (fast!)
-            logger.info(`[${story_id}] 🎭 Using local overlay for scene ${index + 1}: ${overlayName}`);
-            sceneFiles.overlayPath = localOverlayPath;
-
-            // Fetch overlay metadata to get category
-            const { data: overlayData } = await supabaseAdmin
-              .from('overlay_effects')
-              .select('category')
-              .eq('id', overlayId)
-              .single();
-            sceneFiles.overlayCategory = overlayData?.category || 'other';
-            const pathDisplay = aspectFolder === '1-1' ? overlayName : `${aspectFolder}/${overlayName}`;
-            logger.info(`[${story_id}] ✅ Using local overlay: ${pathDisplay}.mp4 (${sceneFiles.overlayCategory})`);
-          } else {
-            // Fallback: Download from Supabase
-            logger.info(`[${story_id}] 🎭 Local overlay not found, downloading from Supabase for scene ${index + 1}...`);
-
-            // Fetch overlay metadata to get category
-            const { data: overlayData } = await supabaseAdmin
-              .from('overlay_effects')
-              .select('category')
-              .eq('id', overlayId)
-              .single();
-
-            // Construct aspect-ratio-specific overlay URL
-            // Note: Supabase only has 9-16 and 16-9 folders, not 1-1
-            const baseUrl = overlayUrl.substring(0, overlayUrl.lastIndexOf('/'));
-            let aspectSpecificUrl: string;
-
-            if (aspectFolder === '1-1') {
-              // For 1:1, use original URL (no aspect-specific folder in Supabase)
-              aspectSpecificUrl = overlayUrl;
-              logger.info(`[${story_id}] 📐 Using original overlay for 1:1 (no aspect folder in Supabase)`);
-            } else {
-              // For 9:16 and 16:9, use aspect-specific folder
-              aspectSpecificUrl = `${baseUrl}/${aspectFolder}/${fileName}`;
-              logger.info(`[${story_id}] 📐 Using ${aspectFolder} overlay variant`);
-            }
-
-            logger.info(`[${story_id}]    Fetching from: ${aspectSpecificUrl}`);
-
-            const overlayRes = await fetch(aspectSpecificUrl);
-            logger.info(`[${story_id}]    Response status: ${overlayRes.status} ${overlayRes.statusText}`);
-            const overlayBuffer = Buffer.from(await overlayRes.arrayBuffer());
-            const overlayPath = path.join(tmpDir, `scene-${index}-overlay.webm`);
-            fs.writeFileSync(overlayPath, overlayBuffer);
-            sceneFiles.overlayPath = overlayPath;
-            sceneFiles.overlayCategory = overlayData?.category || 'other';
-            logger.info(`[${story_id}] ✅ Overlay downloaded for scene ${index + 1} (${sceneFiles.overlayCategory})`);
-          }
-        } catch (err: any) {
-          logger.warn(`[${story_id}] ⚠️ Failed to get overlay for scene ${index + 1}: ${err.message}`);
-        }
+      const overlayInfo = resolveLocalOverlay(overlayUrl, overlayId);
+      if (overlayInfo) {
+        sceneFiles.overlayPath = overlayInfo.path;
+        sceneFiles.overlayCategory = overlayInfo.category;
       }
 
-      mediaPaths.push(sceneFiles);
+      return sceneFiles;
+    };
+
+    const downloadConcurrency = 5;
+    const activeDownloads = new Set<Promise<void>>();
+    const downloadPromises: Promise<void>[] = [];
+
+    for (let index = 0; index < scenes.length; index++) {
+      const scene = scenes[index];
+      const downloadPromise = downloadSceneMedia(scene, index).then((sceneFiles) => {
+        mediaPathResults[index] = sceneFiles;
+      });
+      activeDownloads.add(downloadPromise);
+      downloadPromises.push(downloadPromise);
+      downloadPromise.finally(() => activeDownloads.delete(downloadPromise));
+
+      if (activeDownloads.size >= downloadConcurrency) {
+        await Promise.race(activeDownloads);
+      }
     }
+
+    await Promise.all(downloadPromises);
+
+    const mediaPaths = mediaPathResults.map((scene) => scene!);
 
     logger.info(`[${story_id}] 🖼️ Downloaded media for ${mediaPaths.length} scenes`);
     logger.info(`[${story_id}] ⏱️ Scene timing: ${mediaPaths.map(s => `Scene ${s.sceneIndex + 1}: ${s.duration.toFixed(2)}s`).join(', ')}`);
@@ -469,7 +486,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       "1:1": { width: 400, height: 400 }
     };
 
-    const selectedAspect = aspect_ratio || "9:16";
     const dimensions = aspectRatioMap[selectedAspect] || aspectRatioMap["9:16"];
     const previewDimensions = previewDimensionsMap[selectedAspect] || previewDimensionsMap["9:16"];
     const width = dimensions.width;
@@ -483,7 +499,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // 8️⃣ Generate individual scene clips with precise timing and effects (PARALLEL)
     const videoClips: string[] = new Array(mediaPaths.length);
     const audioClips: string[] = new Array(mediaPaths.length);
-    const frameDirsToCleanup: string[] = [];
     let completedScenes = 0;
 
     await updateJobProgress(jobId, 35);
@@ -494,6 +509,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (!scene.videoPath && !scene.imagePath) return;
 
       const clipPath = path.join(tmpDir, `clip-${scene.sceneIndex}.mp4`);
+      if (fs.existsSync(clipPath)) {
+        try {
+          fs.unlinkSync(clipPath);
+        } catch (err: any) {
+          logger.warn(`[${story_id}] ⚠️ Failed to remove stale clip ${clipPath}: ${err.message}`);
+        }
+      }
 
       // Get effect for this scene
       const sceneData = scenes[scene.sceneIndex];
@@ -542,6 +564,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             .videoCodec('libx264')
             .noAudio() // Strip audio (already extracted separately during upload)
             .outputOptions([
+              '-y',
               '-pix_fmt yuv420p',
               '-preset medium',
               '-crf 18',
@@ -578,127 +601,101 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       logger.info(`[${story_id}] 🎬 Scene ${scene.sceneIndex + 1}: Applying "${effect.name}" effect`);
 
-      // Use frame-by-frame rendering for smooth effects
+      // Use FFmpeg zoompan filter for motion effects
       if (effectId !== "none" && scene.imagePath) {
-        const framesDir = path.join(tmpDir, `frames-${scene.sceneIndex}`);
-        frameDirsToCleanup.push(framesDir);
+        const effectFilter = effect.getFilter(width, height, scene.duration);
+        logger.info(`[${story_id}] 🌀 Applying FFmpeg motion filter: ${effectFilter || "none"}`);
 
-        logger.info(`[${story_id}] 🖼️ Generating smooth frames at 30fps...`);
+        const baseFilter = effectFilter
+          ? `${effectFilter},setsar=1,format=gbrp`
+          : `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black,fps=30,setsar=1,format=gbrp`;
 
-        await generateEffectFrames({
-          imagePath: scene.imagePath,
-          outputDir: framesDir,
-          width,
-          height,
-          duration: scene.duration,
-          effectType: effectId,
-          fps: 30, // Smooth playback for particle overlays
-        });
+        const overlayInfo = (scene as any).overlayPath
+          ? {
+              path: (scene as any).overlayPath,
+              category: (scene as any).overlayCategory || "other",
+            }
+          : null;
 
-        logger.info(`[${story_id}] ✅ Frames generated, encoding video...`);
-
-        // If scene has overlay, apply it; otherwise just encode frames
-        if ((scene as any).overlayPath) {
-          // First, encode frames to a temporary video
-          const tempClipPath = path.join(tmpDir, `temp-clip-${scene.sceneIndex}.mp4`);
-
-          await new Promise<void>((resolve, reject) => {
-            ffmpeg()
-              .input(path.join(framesDir, "frame_%06d.png"))
-              .inputOptions(["-framerate 30"])
-              .videoCodec("libx264")
-              .noAudio()
-              .outputOptions([
-                "-pix_fmt yuv420p",
-                "-preset medium",
-                "-crf 15",
-              ])
-              .save(tempClipPath)
-              .on("end", () => resolve())
-              .on("error", (err: any) => reject(err));
-          });
-
-          logger.info(`[${story_id}] 🎭 Applying overlay to motion effect...`);
-
-          // Get blend settings based on overlay category
-          const overlayCategory = (scene as any).overlayCategory || 'other';
-          const blendSettings = getOverlayBlendSettings(overlayCategory);
+        if (overlayInfo) {
+          logger.info(`[${story_id}] 🎭 Applying overlay with FFmpeg zoompan: ${overlayInfo.path}`);
+          const blendSettings = getOverlayBlendSettings(overlayInfo.category);
           logger.info(`[${story_id}]    Using ${blendSettings.blendMode} mode with ${blendSettings.opacity} opacity`);
 
-          // Then apply overlay on top using proper alpha compositing
-          await new Promise<void>((resolve, reject) => {
-            logger.info(`[${story_id}] 🎭 Applying overlay: ${(scene as any).overlayPath}`);
-            logger.info(`[${story_id}]    Category: ${overlayCategory}`);
+          const compositeFilter =
+            `[0:v]${baseFilter}[bg];` +
+            `[1:v]fps=30,scale=${width}:${height}:flags=lanczos,setsar=1,format=gbrp[ov];` +
+            `[bg][ov]blend=all_mode=${blendSettings.blendMode}:all_opacity=${blendSettings.opacity}[blended];` +
+            `[blended]format=yuv420p[comp]`;
 
-            // Smart scaling strategy for all aspect ratios:
-            // Scale so smallest dimension fills frame, center the overlay, allow natural overflow
-            // This works for 9:16, 16:9, and 1:1 without extreme zoom or gaps
-            let filterComplex;
-            // Screen blend in RGB using gbrp format (no colorkey)
-            filterComplex = `[0:v]fps=30,scale=${width}:${height}:flags=lanczos,setsar=1,format=gbrp[bg];[1:v]fps=30,scale=${width}:${height}:flags=lanczos,setsar=1,format=gbrp[ov];[bg][ov]blend=all_mode=screen:all_opacity=1.0[comp];[comp]format=yuv420p`;
+          const args = [
+            "-i",
+            scene.imagePath!,
+            "-stream_loop",
+            "-1",
+            "-i",
+            overlayInfo.path,
+            "-y",
+            "-filter_complex",
+            compositeFilter,
+            "-map",
+            "[comp]",
+            "-an",
+            "-vcodec",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-color_primaries",
+            "bt709",
+            "-color_trc",
+            "bt709",
+            "-colorspace",
+            "bt709",
+            "-t",
+            `${scene.duration}`,
+            "-r",
+            "30",
+            "-preset",
+            "medium",
+            "-crf",
+            "15",
+            clipPath,
+          ];
 
-            logger.info(`[${story_id}]    Filter: ${filterComplex}`);
-
-            const cmd = ffmpeg()
-              .input(tempClipPath) // Input 0: motion effect video
-              .input((scene as any).overlayPath!) // Input 1: overlay
-              .inputOptions(["-stream_loop", "-1"]) // Loop overlay
-              .videoCodec("libx264")
-              .noAudio()
-              .complexFilter(filterComplex)
-              .outputOptions([
-                "-pix_fmt yuv420p",
-                "-color_primaries bt709",
-                "-color_trc bt709",
-                "-colorspace bt709",
-                `-t ${scene.duration}`,
-                "-r 30",
-                "-preset medium",
-                "-crf 15",
-              ])
-              .save(clipPath);
-
-            cmd.on("start", (cmdLine) => {
-              logger.info(`[${story_id}] 🚀 FFmpeg command: ${cmdLine}`);
-            });
-
-            cmd.on("end", () => {
-              logger.info(`[${story_id}] ✅ Overlay applied successfully`);
-              // Clean up temp file
-              fs.unlinkSync(tempClipPath);
-              resolve();
-            });
-
-            cmd.on("error", (err: any) => {
-              logger.error(`[${story_id}] ❌ Overlay failed: ${err.message}`);
-              reject(err);
-            });
-          });
+          await runFFmpegCommand(args, logger, story_id);
+          logger.info(`[${story_id}] ✅ Motion clip saved: ${clipPath}`);
         } else {
-          // No overlay - just encode frames
-          logger.info(`[${story_id}] ✅ Encoding video without overlay...`);
           await new Promise<void>((resolve, reject) => {
-            ffmpeg()
-              .input(path.join(framesDir, "frame_%06d.png"))
-              .inputOptions(["-framerate 30"])
-              .videoCodec("libx264")
+            const cmd = ffmpeg()
+              .input(scene.imagePath!)
+              .inputOptions(["-loop", "1", "-framerate", "15"]) // Loop image for duration
+              .videoFilters(baseFilter)
               .noAudio()
+              .videoCodec("libx264")
               .outputOptions([
-                "-pix_fmt yuv420p",
-                `-t ${scene.duration}`,
-                "-r 30",
-                "-preset medium",
-                "-crf 15",
+                "-y",
+                "-pix_fmt",
+                "yuv420p",
+                "-t",
+                `${scene.duration}`,
+                "-r",
+                "30",
+                "-preset",
+                "medium",
+                "-crf",
+                "15",
               ])
               .save(clipPath)
               .on("end", () => {
-                logger.info(`[${story_id}] ✅ Video clip saved: ${clipPath}`);
+                logger.info(`[${story_id}] ✅ Motion clip saved: ${clipPath}`);
                 resolve();
               })
-              .on("error", (err: any) => reject(err));
+              .on("error", (err: any) => {
+                logger.error(`[${story_id}] ❌ Motion effect failed: ${err.message}`);
+                reject(err);
+              });
           });
         }
-
       } else {
         // No motion effect - use static image with simple scaling
 
@@ -727,7 +724,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             // This works for 9:16, 16:9, and 1:1 without extreme zoom or gaps
             let filterComplex;
             // Screen blend in RGB using gbrp format (no colorkey)
-            filterComplex = `[0:v]${videoFilter},fps=30,setsar=1,format=gbrp[bg];[1:v]fps=30,scale=${width}:${height}:flags=lanczos,setsar=1,format=gbrp[ov];[bg][ov]blend=all_mode=screen:all_opacity=1.0[comp];[comp]format=yuv420p`;
+            filterComplex =
+              `[0:v]${videoFilter},fps=30,setsar=1,format=gbrp[bg];` +
+              `[1:v]fps=30,scale=${width}:${height}:flags=lanczos,setsar=1,format=gbrp[ov];` +
+              `[bg][ov]blend=all_mode=screen:all_opacity=1.0[blended];` +
+              `[blended]format=yuv420p`;
 
             logger.info(`[${story_id}]    Filter: ${filterComplex}`);
 
@@ -740,6 +741,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               .noAudio()
               .complexFilter(filterComplex)
               .outputOptions([
+                "-y",
                 "-pix_fmt yuv420p",
                 "-color_primaries bt709",
                 "-color_trc bt709",
@@ -770,10 +772,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           await new Promise<void>((resolve, reject) => {
             ffmpeg()
               .input(scene.imagePath!)
-              .inputOptions(["-loop 1", "-framerate 15"]) // Match effect clips framerate
+              .inputOptions(["-loop", "1", "-framerate", "15"]) // Loop image for duration
               .videoCodec("libx264")
               .noAudio()
               .outputOptions([
+                "-y",
                 "-pix_fmt yuv420p",
                 `-vf ${videoFilter}`,
                 `-t ${scene.duration}`,
@@ -816,17 +819,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     logger.info(`[${story_id}] ✅ Generated ${filteredVideoClips.length} video clips in parallel`);
 
     await updateJobProgress(jobId, 55);
-
-    // Cleanup frame directories
-    logger.info(`[${story_id}] 🧹 Cleaning up ${frameDirsToCleanup.length} frame directories...`);
-    for (const framesDir of frameDirsToCleanup) {
-      try {
-        cleanupFrames(framesDir);
-      } catch (err: any) {
-        logger.warn(`[${story_id}] ⚠️ Failed to cleanup ${framesDir}: ${err.message}`);
-      }
-    }
-
     await updateJobProgress(jobId, 60);
 
     // 9️⃣ Combine all video clips
@@ -1310,6 +1302,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         })
         .eq('id', jobId);
       logger.info(`[${story_id}] ✅ Video generation job ${jobId} marked as completed`);
+      shouldCleanupTmp = true;
     }
 
     // Track analytics event
@@ -1346,5 +1339,48 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // No refund needed since credits are only deducted after success
     res.status(500).json({ error: err.message });
+  } finally {
+    try {
+      if (tmpDir && fs.existsSync(tmpDir) && shouldCleanupTmp) {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+        console.log(`[${story_id}] 🧹 Cleaned up temp directory ${tmpDir}`);
+      }
+    } catch (cleanupErr: any) {
+      console.error(`[${story_id}] ⚠️ Failed to cleanup temp directory: ${cleanupErr.message}`);
+    }
   }
+}
+function runFFmpegCommand(args: string[], logger: ReturnType<typeof getUserLogger>, storyId: string) {
+  const finalArgs = [...args];
+  if (!finalArgs.includes("-hide_banner")) {
+    finalArgs.unshift("-hide_banner");
+  }
+  if (!finalArgs.includes("-loglevel")) {
+    finalArgs.unshift("error");
+    finalArgs.unshift("-loglevel");
+  }
+
+  return new Promise<void>((resolve, reject) => {
+    logger.info(`[${storyId}] 🚀 ffmpeg ${finalArgs.join(" ")}`);
+    const ff = spawn("ffmpeg", finalArgs, { stdio: ["ignore", "pipe", "pipe"] });
+
+    ff.stderr.on("data", (data) => {
+      const line = data.toString().trim();
+      if (line) {
+        logger.info(`[${storyId}] ffmpeg: ${line}`);
+      }
+    });
+
+    ff.on("close", (code) => {
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(new Error(`ffmpeg exited with code ${code}`));
+      }
+    });
+
+    ff.on("error", (err) => {
+      reject(err);
+    });
+  });
 }
