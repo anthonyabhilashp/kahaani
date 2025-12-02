@@ -6,20 +6,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  const { job_id } = req.query;
+  const { job_id, story_id } = req.query;
 
-  if (!job_id || typeof job_id !== "string") {
-    return res.status(400).json({ error: "job_id required" });
+  // Must provide either job_id or story_id
+  if ((!job_id || typeof job_id !== "string") && (!story_id || typeof story_id !== "string")) {
+    return res.status(400).json({ error: "job_id or story_id required" });
   }
 
   try {
-    const { data: job, error } = await supabaseAdmin
-      .from("video_generation_jobs")
-      .select("id, story_id, status, progress, error, completed_at")
-      .eq("id", job_id)
-      .single();
+    let query = supabaseAdmin.from("video_generation_jobs").select("*");
 
-    if (error || !job) {
+    if (job_id && typeof job_id === "string") {
+      // Query by job_id
+      query = query.eq("id", job_id).single();
+    } else if (story_id && typeof story_id === "string") {
+      // Query by story_id - get latest processing job
+      query = query.eq("story_id", story_id).eq("status", "processing").order("started_at", { ascending: false }).limit(1).maybeSingle();
+    }
+
+    const { data: job, error } = await query;
+
+    if (error) {
+      console.error("Error fetching job:", error);
+      return res.status(404).json({ error: "Job not found", details: error.message });
+    }
+
+    if (!job) {
       return res.status(404).json({ error: "Job not found" });
     }
 

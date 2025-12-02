@@ -29,6 +29,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const limit = parseInt(req.query.limit as string) || 10;
     const offset = parseInt(req.query.offset as string) || 0;
     const seriesId = req.query.series_id as string;
+    const storyType = req.query.story_type as string;
 
     // 🚀 OPTIMIZED: Use VIEW to get all data in ONE query
     // This replaces 3 queries per story with 1 query total
@@ -45,6 +46,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Filter by series if series_id is provided
     if (seriesId) {
       viewQuery = viewQuery.eq('series_id', seriesId);
+    }
+
+    // Filter by story_type if provided
+    if (storyType) {
+      viewQuery = viewQuery.eq('story_type', storyType);
     }
 
     const { data: rawData, error: queryError, count } = await viewQuery;
@@ -66,6 +72,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // Filter by series if series_id is provided
       if (seriesId) {
         query = query.eq('series_id', seriesId);
+      }
+
+      // Filter by story_type if provided
+      if (storyType) {
+        query = query.eq('story_type', storyType);
       }
 
       const { data: stories, error, count: fallbackCount } = await query;

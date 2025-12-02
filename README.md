@@ -108,3 +108,103 @@ The application follows a user-controlled, cost-conscious generation flow:
 - Check video dimensions in console when video loads
 - Button states are logged when they change
 - Generation errors are displayed as alerts
+
+## Docker Deployment
+
+### Production Deployment to VPS (Hostinger/Hetzner)
+
+**⚠️ IMPORTANT: Platform Architecture**
+
+Most VPS servers (including Hostinger) use AMD64 architecture, but Mac M1/M2/M3 uses ARM64. You MUST specify the platform when building Docker images to ensure compatibility.
+
+#### Quick Deploy Script
+
+Use the provided deployment script for easy deployment:
+
+```bash
+./deploy.sh
+```
+
+This script automatically:
+1. Builds Docker image for AMD64 platform
+2. Pushes to Docker Hub (anthonyabhilash/kahaani:latest)
+3. Displays deployment instructions for VPS
+
+#### Manual Deployment Steps
+
+**1. Build for AMD64 Platform (Critical!)**
+```bash
+# ALWAYS use --platform linux/amd64 flag for VPS deployment
+docker build --platform linux/amd64 -t anthonyabhilash/kahaani:latest .
+```
+
+**2. Push to Docker Hub**
+```bash
+docker push anthonyabhilash/kahaani:latest
+```
+
+**3. Deploy on VPS (Hostinger/Hetzner)**
+
+SSH into your server and run:
+
+```bash
+# Pull latest image
+docker pull anthonyabhilash/kahaani:latest
+
+# Stop and remove old container (if exists)
+docker stop kahaani && docker rm kahaani
+
+# Run new container
+docker run -d \
+  --name kahaani \
+  -p 3000:3000 \
+  --env-file .env \
+  --restart unless-stopped \
+  anthonyabhilash/kahaani:latest
+
+# Check logs
+docker logs -f kahaani
+```
+
+**4. Environment Variables**
+
+Create a `.env` file on your VPS with all variables from `.env.local`:
+
+```bash
+# Copy all environment variables from your local .env.local
+# Including:
+# - Supabase credentials
+# - API keys (OpenRouter, OpenAI, ElevenLabs, etc.)
+# - Model configurations
+# - Video dimensions
+```
+
+#### Troubleshooting
+
+**Container exits with "exec format error":**
+- **Cause**: Image was built for wrong architecture (ARM64 instead of AMD64)
+- **Fix**: Rebuild with `--platform linux/amd64` flag
+
+**Container restarts continuously:**
+```bash
+# Check logs for errors
+docker logs kahaani
+
+# Verify environment variables
+docker exec kahaani env | grep SUPABASE
+```
+
+**Port conflicts:**
+```bash
+# Check what's using port 3000
+lsof -i :3000
+
+# Use different port
+docker run -d --name kahaani -p 8080:3000 --env-file .env anthonyabhilash/kahaani:latest
+```
+
+#### Files Created for Deployment
+
+- `Dockerfile` - Multi-stage Docker build configuration
+- `.dockerignore` - Excludes unnecessary files from build
+- `deploy.sh` - Automated deployment script

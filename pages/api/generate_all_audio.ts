@@ -68,16 +68,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     userId = user.id;
     logger = getUserLogger(userId);
 
-    logger.info(`[${story_id}] 🎙️ Starting bulk audio generation for story: ${story_id}`);
-    logger.info(`[${story_id}] 📥 Received voice_id from request: ${voice_id}`);
-    logger.info(`[${story_id}] 👤 User: ${user.email} (${user.id})`);
+    if (logger) { logger.info(`[${story_id}] 🎙️ Starting bulk audio generation for story: ${story_id}`); }
+    if (logger) { logger.info(`[${story_id}] 📥 Received voice_id from request: ${voice_id}`); }
+    if (logger) { logger.info(`[${story_id}] 👤 User: ${user.email} (${user.id})`); }
 
     const voiceId = voice_id || "alloy";
-    logger.info(`[${story_id}] 🎤 Using voice_id: ${voiceId}`);
+    if (logger) { logger.info(`[${story_id}] 🎤 Using voice_id: ${voiceId}`); }
 
     // Map to OpenAI voice (supports legacy ElevenLabs IDs)
     const openaiVoice = VOICE_MAPPING[voiceId] || VOICE_MAPPING["default"];
-    logger.info(`[${story_id}] 🎤 Mapped to OpenAI voice: ${openaiVoice}`);
+    if (logger) { logger.info(`[${story_id}] 🎤 Mapped to OpenAI voice: ${openaiVoice}`); }
 
     // 1️⃣ Fetch all scenes for this story
     const { data: scenes, error: scenesErr } = await supabaseAdmin
@@ -89,17 +89,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (scenesErr) throw scenesErr;
     if (!scenes || scenes.length === 0) throw new Error("No scenes found for this story.");
 
-    logger.info(`[${story_id}] 📚 Found ${scenes.length} scenes to generate audio for`);
+    if (logger) { logger.info(`[${story_id}] 📚 Found ${scenes.length} scenes to generate audio for`); }
 
     // 💰 Check credits (will deduct AFTER successful generation)
     const creditsNeeded = scenes.length * CREDIT_COSTS.AUDIO_PER_SCENE;
-    logger.info(`[${story_id}] 💰 Credits needed: ${creditsNeeded} (${scenes.length} scenes × ${CREDIT_COSTS.AUDIO_PER_SCENE} - will charge after success)`);
+    if (logger) { logger.info(`[${story_id}] 💰 Credits needed: ${creditsNeeded} (${scenes.length} scenes × ${CREDIT_COSTS.AUDIO_PER_SCENE} - will charge after success)`); }
 
     const currentBalance = await getUserCredits(userId);
-    logger.info(`[${story_id}] 💳 Current balance: ${currentBalance} credits`);
+    if (logger) { logger.info(`[${story_id}] 💳 Current balance: ${currentBalance} credits`); }
 
     if (currentBalance < creditsNeeded) {
-      logger.error(`[${story_id}] ❌ Insufficient credits: need ${creditsNeeded}, have ${currentBalance}`);
+      if (logger) { logger.error(`[${story_id}] ❌ Insufficient credits: need ${creditsNeeded}, have ${currentBalance}`); }
       return res.status(402).json({
         error: `Insufficient credits. You need ${creditsNeeded} credits but have ${currentBalance}.`,
         creditsNeeded,
@@ -112,13 +112,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // 2️⃣ Generate audio for each scene
     for (let i = 0; i < scenes.length; i++) {
       const scene = scenes[i];
-      logger.info(`[${story_id}] \n🎬 Processing scene ${i + 1}/${scenes.length} (ID: ${scene.id})`);
-      logger.info(`[${story_id}] 📖 Scene text: "${scene.text.substring(0, 50)}..."`);
+      if (logger) { logger.info(`[${story_id}] \n🎬 Processing scene ${i + 1}/${scenes.length} (ID: ${scene.id})`); }
+      if (logger) { logger.info(`[${story_id}] 📖 Scene text: "${scene.text.substring(0, 50)}..."`); }
 
       try {
         // 3️⃣ Generate audio with OpenAI TTS
         const audioModel = process.env.AUDIO_MODEL || "tts-1-hd";
-        logger.info(`[${story_id}] 🧠 Generating TTS with OpenAI voice: ${openaiVoice} (model: ${audioModel})`);
+        if (logger) { logger.info(`[${story_id}] 🧠 Generating TTS with OpenAI voice: ${openaiVoice} (model: ${audioModel})`); }
         const ttsRes = await fetch(OPENAI_TTS_API, {
           method: "POST",
           headers: {
@@ -150,10 +150,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // 6️⃣ Get duration
         const info = await ffprobeAsync(audioPath);
         const duration = info.format?.duration || 0;
-        logger.info(`[${story_id}] ⏱ Audio duration: ${duration.toFixed(2)} seconds`);
+        if (logger) { logger.info(`[${story_id}] ⏱ Audio duration: ${duration.toFixed(2)} seconds`); }
 
         // 7️⃣ Generate word-level timestamps using forced alignment
-        logger.info(`[${story_id}] 🔍 Generating word-level timestamps with forced alignment...`);
+        if (logger) { logger.info(`[${story_id}] 🔍 Generating word-level timestamps with forced alignment...`); }
         let wordTimestamps = null;
         try {
           const alignmentResult = await Echogarden.align(audioPath, scene.text, {
@@ -167,14 +167,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             end: entry.endTime
           }));
 
-          logger.info(`[${story_id}] ✅ Generated ${wordTimestamps.length} word timestamps`);
+          if (logger) { logger.info(`[${story_id}] ✅ Generated ${wordTimestamps.length} word timestamps`); }
         } catch (alignErr: any) {
-          logger.error(`[${story_id}] ⚠️ Word alignment failed for scene ${scene.id}, continuing without timestamps: ${alignErr instanceof Error ? alignErr.message : String(alignErr)}`);
+          if (logger) { logger.error(`[${story_id}] ⚠️ Word alignment failed for scene ${scene.id}, continuing without timestamps: ${alignErr instanceof Error ? alignErr.message : String(alignErr)}`); }
         }
 
         // 8️⃣ Delete old audio files for this scene (all versions)
         const oldFilePattern = `scene-${scene.id}`;
-        logger.info(`[${story_id}] 🗑️ Removing any existing audio files for scene: ${oldFilePattern}*`);
+        if (logger) { logger.info(`[${story_id}] 🗑️ Removing any existing audio files for scene: ${oldFilePattern}*`); }
 
         // List and delete all files matching this scene
         const { data: existingFiles } = await supabaseAdmin.storage
@@ -188,14 +188,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
           if (filesToDelete.length > 0) {
             await supabaseAdmin.storage.from("audio").remove(filesToDelete);
-            logger.info(`[${story_id}] 🗑️ Deleted ${filesToDelete.length} old file(s)`);
+            if (logger) { logger.info(`[${story_id}] 🗑️ Deleted ${filesToDelete.length} old file(s)`); }
           }
         }
 
         // 9️⃣ Upload new audio to Supabase with timestamp to prevent caching
         const timestamp = Date.now();
         const fileName = `scene-${scene.id}-${timestamp}.mp3`;
-        logger.info(`[${story_id}] ☁️ Uploading new audio file: ${fileName}`);
+        if (logger) { logger.info(`[${story_id}] ☁️ Uploading new audio file: ${fileName}`); }
         const { error: uploadErr } = await supabaseAdmin.storage
           .from("audio")
           .upload(fileName, fs.readFileSync(audioPath), {
@@ -221,7 +221,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         if (updateErr) throw updateErr;
 
-        logger.info(`[${story_id}] ✅ Audio generated and saved for scene ${scene.id}`);
+        if (logger) { logger.info(`[${story_id}] ✅ Audio generated and saved for scene ${scene.id}`); }
 
         updatedScenes.push({
           id: scene.id,
@@ -233,7 +233,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         });
 
       } catch (sceneErr: any) {
-        logger.error(`[${story_id}] ❌ Failed to generate audio for scene ${scene.id}: ${sceneErr instanceof Error ? sceneErr.message : String(sceneErr)}`);
+        if (logger) { logger.error(`[${story_id}] ❌ Failed to generate audio for scene ${scene.id}: ${sceneErr instanceof Error ? sceneErr.message : String(sceneErr)}`); }
         // Continue with next scene instead of failing completely
         updatedScenes.push({
           id: scene.id,
@@ -243,13 +243,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    logger.info(`[${story_id}] \n✅ Bulk audio generation completed. ${updatedScenes.filter(s => !('error' in s)).length}/${scenes.length} scenes successful`);
+    if (logger) { logger.info(`[${story_id}] \n✅ Bulk audio generation completed. ${updatedScenes.filter(s => !('error' in s)).length}/${scenes.length} scenes successful`); }
 
     // 💳 Deduct credits ONLY for successful scenes
     const successfulCount = updatedScenes.filter(s => !('error' in s)).length;
     if (successfulCount > 0 && userId) {
       const chargeAmount = successfulCount * CREDIT_COSTS.AUDIO_PER_SCENE;
-      logger.info(`[${story_id}] 💳 Deducting ${chargeAmount} credits for ${successfulCount} successful scenes...`);
+      if (logger) { logger.info(`[${story_id}] 💳 Deducting ${chargeAmount} credits for ${successfulCount} successful scenes...`); }
 
       const deductResult = await deductCredits(
         userId,
@@ -260,18 +260,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       );
 
       if (deductResult.success) {
-        logger.info(`[${story_id}] ✅ Deducted ${chargeAmount} credits. New balance: ${deductResult.newBalance}`);
+        if (logger) { logger.info(`[${story_id}] ✅ Deducted ${chargeAmount} credits. New balance: ${deductResult.newBalance}`); }
       } else {
-        logger.error(`[${story_id}] ⚠️ Failed to deduct credits: ${deductResult.error}`);
+        if (logger) { logger.error(`[${story_id}] ⚠️ Failed to deduct credits: ${deductResult.error}`); }
         // Audio was generated successfully, so we don't fail the request
         // Admin can manually adjust credits if needed
       }
     }
 
     // Update story metadata (duration and completion status)
-    logger.info(`[${story_id}] 📊 Updating story metadata...`);
+    if (logger) { logger.info(`[${story_id}] 📊 Updating story metadata...`); }
     await updateStoryMetadata(story_id);
-    logger.info(`[${story_id}] ✅ Story metadata updated`);
+    if (logger) { logger.info(`[${story_id}] ✅ Story metadata updated`); }
 
     res.status(200).json({
       story_id,
@@ -282,7 +282,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   } catch (err: any) {
     if (logger) {
-      logger.error(`❌ Error during bulk audio generation: ${err instanceof Error ? err.message : String(err)}`);
+      if (logger) { logger.error(`❌ Error during bulk audio generation: ${err instanceof Error ? err.message : String(err)}`); }
     } else {
       console.error(`❌ Error during bulk audio generation: ${err instanceof Error ? err.message : String(err)}`);
     }

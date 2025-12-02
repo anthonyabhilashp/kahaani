@@ -33,10 +33,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ error: "scene_id is required" });
   }
 
-  const logger = getUserLogger(story_id || 'video_from_image');
+  let logger: ReturnType<typeof getUserLogger> | null = null;
 
   try {
-    // 1. Authenticate user
+    // 1. Authenticate user FIRST to use their ID for logging
     const authHeader = req.headers.authorization;
     if (!authHeader) {
       return res.status(401).json({ error: "Unauthorized - Please log in" });
@@ -49,7 +49,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(401).json({ error: "Unauthorized - Invalid session" });
     }
 
-    logger.info(`[Scene ${scene_id}] Starting video generation for user ${user.id}`);
+    // Create logger with user ID (creates logs/{user_id}.log)
+    logger = getUserLogger(user.id);
+
+    if (logger) { logger.info(`[Scene ${scene_id}] Starting video generation for story ${story_id}`); }
 
     // 2. Get scene data (including duration for proper video length)
     const { data: scene, error: sceneError } = await supabaseAdmin
@@ -70,7 +73,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const creditsNeeded = CREDIT_COSTS.VIDEO_FROM_IMAGE;
     const currentBalance = await getUserCredits(user.id);
 
-    logger.info(`[Scene ${scene_id}] Credits needed: ${creditsNeeded}, Current balance: ${currentBalance}`);
+    if (logger) { logger.info(`[Scene ${scene_id}] Credits needed: ${creditsNeeded}, Current balance: ${currentBalance}`); }
 
     if (currentBalance < creditsNeeded) {
       return res.status(402).json({
@@ -99,12 +102,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const sceneDuration = scene.duration || 10;
     const klingDuration = sceneDuration <= 5 ? "5" : "10";
 
-    logger.info(`[Scene ${scene_id}] Calling Kling API with duration: ${klingDuration}s (scene audio: ${sceneDuration.toFixed(2)}s)`);
-    logger.info(`[Scene ${scene_id}] Prompt: ${motionPrompt.substring(0, 100)}...`);
+    if (logger) { logger.info(`[Scene ${scene_id}] Calling Kling API with duration: ${klingDuration}s (scene audio: ${sceneDuration.toFixed(2)}s)`); }
+    if (logger) { logger.info(`[Scene ${scene_id}] Prompt: ${motionPrompt.substring(0, 100)}...`); }
 
     // 6. Call Kling via fal.ai (configurable model via env var)
     const model = process.env.VIDEO_FROM_IMAGE_MODEL || "fal-ai/kling-video/v1.6/standard/image-to-video";
-    logger.info(`[Scene ${scene_id}] Using model: ${model}`);
+    if (logger) { logger.info(`[Scene ${scene_id}] Using model: ${model}`); }
     const result = await fal.subscribe(model, {
       input: {
         prompt: motionPrompt,
@@ -114,22 +117,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       },
       logs: true,
       onQueueUpdate: (update) => {
-        if (update.status === "IN_PROGRESS") {
-          logger.info(`[Scene ${scene_id}] Kling generation in progress...`);
+        if (update.status === "IN_PROGRESS" && logger) {
+          if (logger) { logger.info(`[Scene ${scene_id}] Kling generation in progress...`); }
         }
       },
     }) as any;
 
     if (!result?.video?.url) {
-      logger.error(`[Scene ${scene_id}] Kling API returned no video URL`);
+      if (logger) { logger.error(`[Scene ${scene_id}] Kling API returned no video URL`); }
       throw new Error("Video generation failed - no video returned");
     }
 
     const generatedVideoUrl = result.video.url;
-    logger.info(`[Scene ${scene_id}] Video generated: ${generatedVideoUrl}`);
+    if (logger) { logger.info(`[Scene ${scene_id}] Video generated: ${generatedVideoUrl}`); }
 
     // 7. Download video from Kling
-    logger.info(`[Scene ${scene_id}] Downloading video for processing...`);
+    if (logger) { logger.info(`[Scene ${scene_id}] Downloading video for processing...`); }
     const videoResponse = await fetch(generatedVideoUrl);
     if (!videoResponse.ok) {
       throw new Error(`Failed to download generated video: ${videoResponse.statusText}`);
@@ -157,8 +160,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           });
         });
 
-        logger.info(`[Scene ${scene_id}] Original Kling video: ${originalDuration.toFixed(2)}s`);
-        logger.info(`[Scene ${scene_id}] Upscaling AI video to 4K...`);
+        if (logger) { logger.info(`[Scene ${scene_id}] Original Kling video: ${originalDuration.toFixed(2)}s`); }
+        if (logger) { logger.info(`[Scene ${scene_id}] Upscaling AI video to 4K...`); }
 
         // Determine target 4K dimensions based on aspect ratio
         const aspectRatioMap: { [key: string]: { width: number; height: number } } = {
@@ -191,7 +194,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         };
 
         const settings = qualitySettings[quality] || qualitySettings.high;
-        logger.info(`[Scene ${scene_id}] Using ${quality} quality upscaling to ${targetWidth}x${targetHeight}`);
+        if (logger) { logger.info(`[Scene ${scene_id}] Using ${quality} quality upscaling to ${targetWidth}x${targetHeight}`); }
 
         // Upscale video using FFmpeg (Kling videos are video-only, no audio)
         await new Promise<void>((resolve, reject) => {
@@ -207,11 +210,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             ])
             .save(tempOutputPath)
             .on('end', () => {
-              logger.info(`[Scene ${scene_id}] ✅ Video upscaled to 4K successfully`);
+              if (logger) { logger.info(`[Scene ${scene_id}] ✅ Video upscaled to 4K successfully`); }
               resolve();
             })
             .on('error', (err: any) => {
-              logger.error(`[Scene ${scene_id}] ❌ Upscaling failed: ${err.message}`);
+              if (logger) { logger.error(`[Scene ${scene_id}] ❌ Upscaling failed: ${err.message}`); }
               reject(err);
             });
         });
@@ -227,7 +230,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           });
         });
 
-        logger.info(`[Scene ${scene_id}] Upscaled video: ${upscaledDuration.toFixed(2)}s (original: ${originalDuration.toFixed(2)}s)`);
+        if (logger) { logger.info(`[Scene ${scene_id}] Upscaled video: ${upscaledDuration.toFixed(2)}s (original: ${originalDuration.toFixed(2)}s)`); }
 
         // Read upscaled video
         finalVideoBuffer = fs.readFileSync(tempOutputPath);
@@ -236,9 +239,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (fs.existsSync(tempInputPath)) fs.unlinkSync(tempInputPath);
         if (fs.existsSync(tempOutputPath)) fs.unlinkSync(tempOutputPath);
 
-        logger.info(`[Scene ${scene_id}] Using upscaled 4K video for upload`);
+        if (logger) { logger.info(`[Scene ${scene_id}] Using upscaled 4K video for upload`); }
     } catch (upscaleErr: any) {
-      logger.warn(`[Scene ${scene_id}] ⚠️ Upscaling failed, using original video: ${upscaleErr.message}`);
+      if (logger) { logger.warn(`[Scene ${scene_id}] ⚠️ Upscaling failed, using original video: ${upscaleErr.message}`); }
       // Cleanup on error
       if (fs.existsSync(tempInputPath)) fs.unlinkSync(tempInputPath);
       if (fs.existsSync(tempOutputPath)) fs.unlinkSync(tempOutputPath);
@@ -247,7 +250,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // 8. Upload to Supabase Storage
-    logger.info(`[Scene ${scene_id}] Uploading video to Supabase...`);
+    if (logger) { logger.info(`[Scene ${scene_id}] Uploading video to Supabase...`); }
     const fileName = `${user.id}/generated_videos/${scene_id}_${Date.now()}.mp4`;
 
     const { data: uploadData, error: uploadError } = await supabaseAdmin.storage
@@ -258,7 +261,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
 
     if (uploadError) {
-      logger.error(`[Scene ${scene_id}] Upload error: ${uploadError.message}`);
+      if (logger) { logger.error(`[Scene ${scene_id}] Upload error: ${uploadError.message}`); }
       throw new Error(`Failed to upload video: ${uploadError.message}`);
     }
 
@@ -267,7 +270,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .from("videos")
       .getPublicUrl(fileName);
 
-    logger.info(`[Scene ${scene_id}] Video uploaded to: ${publicUrl}`);
+    if (logger) { logger.info(`[Scene ${scene_id}] Video uploaded to: ${publicUrl}`); }
 
     // 8. Update scene with video URL (replaces image)
     const { error: updateError } = await supabaseAdmin
@@ -278,7 +281,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .eq("id", scene_id);
 
     if (updateError) {
-      logger.error(`[Scene ${scene_id}] Failed to update scene: ${updateError.message}`);
+      if (logger) { logger.error(`[Scene ${scene_id}] Failed to update scene: ${updateError.message}`); }
       throw new Error(`Failed to update scene: ${updateError.message}`);
     }
 
@@ -292,11 +295,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     );
 
     if (!deductResult.success) {
-      logger.warn(`[Scene ${scene_id}] Failed to deduct credits: ${deductResult.error}`);
+      if (logger) { logger.warn(`[Scene ${scene_id}] Failed to deduct credits: ${deductResult.error}`); }
       // Don't fail the request, video was already generated
     }
 
-    logger.info(`[Scene ${scene_id}] Video generation complete, deducted ${creditsNeeded} credits`);
+    if (logger) { logger.info(`[Scene ${scene_id}] Video generation complete, deducted ${creditsNeeded} credits`); }
 
     // 10. Track analytics
     await supabaseAdmin.from("analytics_events").insert({
@@ -318,7 +321,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
 
   } catch (err: any) {
-    logger.error(`[Scene ${scene_id}] Error: ${err.message}`);
+    if (logger) { logger.error(`[Scene ${scene_id}] Error: ${err.message}`); }
 
     return res.status(500).json({
       error: err.message || "Failed to generate video from image"

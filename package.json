@@ -25,6 +25,7 @@
     "npm": ">=10.0.0"
   },
   "dependencies": {
+    "@danielxceron/youtube-transcript": "^1.2.3",
     "@fal-ai/serverless-client": "^0.15.0",
     "@lemonsqueezy/lemonsqueezy.js": "^4.0.0",
     "@radix-ui/react-alert-dialog": "^1.1.15",

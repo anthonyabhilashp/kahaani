@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Plus, Loader2, PlayCircle, Clock, Film, Image as ImageIcon, Video, User, LogOut, Trash2, MoreHorizontal, Smartphone, Square, Monitor, Coins, List, ArrowLeft, ArrowRight, FileText, Menu, X, Sparkles, Volume2, Info, Play, StopCircle, HelpCircle, Search, ChevronRight, MessageCircle } from "lucide-react";
+import { Plus, Loader2, PlayCircle, Clock, Film, Image as ImageIcon, Video, User, LogOut, Trash2, MoreHorizontal, Smartphone, Square, Monitor, Coins, List, ArrowLeft, ArrowRight, FileText, Menu, X, Sparkles, Volume2, Info, Play, StopCircle, HelpCircle, Search, ChevronRight, MessageCircle, Scissors, Upload, Youtube } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   DropdownMenu,
@@ -37,6 +37,7 @@ type Story = {
   video_url: string | null;
   video_created_at: string | null;
   series_id: string | null;
+  story_type?: string | null;
 };
 
 type Series = {
@@ -229,7 +230,7 @@ export default function Dashboard() {
   const [selectedSeriesForCreate, setSelectedSeriesForCreate] = useState<string | null>(null);
   const [newPrompt, setNewPrompt] = useState("");
   const [creating, setCreating] = useState(false);
-  const [selectedCategory, setSelectedCategory] = useState("faceless-videos");
+  const [selectedCategory, setSelectedCategory] = useState<"faceless-videos" | "series" | "cut-shorts">("faceless-videos");
   const [sceneCount, setSceneCount] = useState(5);
   const [aspectRatio, setAspectRatio] = useState<'9:16' | '16:9' | '1:1'>('9:16');
   const [showCreditWarning, setShowCreditWarning] = useState(false);
@@ -250,6 +251,14 @@ export default function Dashboard() {
   const [newSeriesDescription, setNewSeriesDescription] = useState("");
   const [hasCharacterConsistency, setHasCharacterConsistency] = useState(false);
   const [creatingSeries, setCreatingSeries] = useState(false);
+
+  // Cut Shorts dialog states
+  const [uploadDialogOpen, setUploadDialogOpen] = useState(false);
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
+  const [uploadingCutShort, setUploadingCutShort] = useState(false);
+  const [youtubeUrl, setYoutubeUrl] = useState("");
+  const [generatingShorts, setGeneratingShorts] = useState(false);
+  const [shortsProgress, setShortsProgress] = useState("");
   const [selectedSeriesView, setSelectedSeriesView] = useState<Series | null>(null); // Track selected series to view its stories
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false); // Track mobile sidebar state
   const [showCreditsPage, setShowCreditsPage] = useState(false); // Track credits page view
@@ -385,7 +394,7 @@ export default function Dashboard() {
     }
   }, [deleteDialogOpen]);
 
-  async function fetchStories(reset = true, seriesId: string | null = null) {
+  async function fetchStories(reset = true, seriesId: string | null = null, storyType: string | null = null) {
     if (reset) {
       setLoading(true);
       setStoriesOffset(0);
@@ -402,10 +411,13 @@ export default function Dashboard() {
       const offset = reset ? 0 : storiesOffset;
       const limit = 10;
 
-      // Build URL with series filter if provided
+      // Build URL with series and story_type filters if provided
       let url = `/api/get_stories?limit=${limit}&offset=${offset}`;
       if (seriesId) {
         url += `&series_id=${seriesId}`;
+      }
+      if (storyType) {
+        url += `&story_type=${storyType}`;
       }
 
       const res = await fetch(url, {
@@ -848,6 +860,218 @@ export default function Dashboard() {
     }
   }
 
+  // Handle video upload for Cut Shorts
+  async function handleVideoUpload(file: File) {
+    if (!user) return;
+
+    setUploadingCutShort(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error("Not authenticated");
+
+      const createRes = await fetch("/api/generate_scenes", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${session.access_token}`
+        },
+        body: JSON.stringify({
+          prompt: file.name,
+          title: file.name.replace(/\.[^/.]+$/, ""),
+          sceneCount: 1,
+          voice_id: "alloy",
+          aspect_ratio: "9:16",
+          isBlank: true,
+          story_type: "cut_shorts"
+        })
+      });
+
+      if (!createRes.ok) throw new Error("Failed to create story");
+      const createData = await createRes.json();
+      const storyId = createData.story_id;
+
+      const { data: scenes } = await supabase
+        .from("scenes")
+        .select("id")
+        .eq("story_id", storyId)
+        .single();
+
+      if (!scenes) throw new Error("Scene not found");
+
+      const formData = new FormData();
+      formData.append("video", file);
+      formData.append("scene_id", scenes.id);
+
+      const uploadRes = await fetch("/api/upload-scene-video", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${session.access_token}`
+        },
+        body: formData
+      });
+
+      if (!uploadRes.ok) {
+        const error = await uploadRes.json();
+        throw new Error(error.error || "Failed to upload video");
+      }
+
+      const uploadData = await uploadRes.json();
+      const videoUrl = uploadData.video_url;
+
+      toast({
+        title: "Success",
+        description: "Video uploaded successfully. Click 'Analyze Shorts' to generate suggestions."
+      });
+
+      setUploadDialogOpen(false);
+    } catch (err: any) {
+      console.error("Error uploading video:", err);
+      toast({
+        title: "Error",
+        description: err.message || "Failed to upload video",
+        variant: "destructive"
+      });
+    } finally {
+      setUploadingCutShort(false);
+    }
+  }
+
+  // Handle YouTube import for Cut Shorts
+  async function handleYouTubeImport() {
+    if (!user || !youtubeUrl.trim()) return;
+
+    setUploadingCutShort(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error("Not authenticated");
+
+      const createRes = await fetch("/api/generate_scenes", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${session.access_token}`
+        },
+        body: JSON.stringify({
+          prompt: youtubeUrl,
+          title: "YouTube Import",
+          sceneCount: 1,
+          voice_id: "alloy",
+          aspect_ratio: "9:16",
+          isBlank: true,
+          story_type: "cut_shorts"
+        })
+      });
+
+      if (!createRes.ok) throw new Error("Failed to create story");
+      const createData = await createRes.json();
+      const storyId = createData.story_id;
+
+      const { data: scenes } = await supabase
+        .from("scenes")
+        .select("id")
+        .eq("story_id", storyId)
+        .single();
+
+      if (!scenes) throw new Error("Scene not found");
+
+      const importRes = await fetch("/api/import-youtube-video", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${session.access_token}`
+        },
+        body: JSON.stringify({
+          scene_id: scenes.id,
+          youtube_url: youtubeUrl
+        })
+      });
+
+      if (!importRes.ok) {
+        const error = await importRes.json();
+        throw new Error(error.error || "Failed to import video");
+      }
+
+      const importData = await importRes.json();
+      const videoUrl = importData.video_url;
+
+      toast({
+        title: "Success",
+        description: "YouTube video imported successfully. Click 'Analyze Shorts' to generate suggestions."
+      });
+
+      setImportDialogOpen(false);
+      setYoutubeUrl("");
+    } catch (err: any) {
+      console.error("Error importing YouTube video:", err);
+      toast({
+        title: "Error",
+        description: err.message || "Failed to import video",
+        variant: "destructive"
+      });
+    } finally {
+      setUploadingCutShort(false);
+    }
+  }
+
+  // Analyze video to get AI suggestions for shorts
+  async function analyzeVideoForShorts(storyId: string, sceneId: string) {
+    setGeneratingShorts(true);
+    setShortsProgress("Analyzing video for viral moments...");
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error("Not authenticated");
+
+      // Analyze video to get AI suggestions
+      const analyzeRes = await fetch("/api/analyze_shorts", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${session.access_token}`
+        },
+        body: JSON.stringify({
+          story_id: storyId,
+          scene_id: sceneId
+        })
+      });
+
+      if (!analyzeRes.ok) {
+        const error = await analyzeRes.json();
+        throw new Error(error.error || "Failed to analyze video");
+      }
+
+      const analyzeData = await analyzeRes.json();
+      const suggestions = analyzeData.shorts || [];
+
+      if (suggestions.length === 0) {
+        toast({
+          title: "Analysis complete",
+          description: "AI couldn't identify good short segments in this video",
+          variant: "destructive"
+        });
+      } else {
+        toast({
+          title: "Analysis complete!",
+          description: `Found ${suggestions.length} potential shorts. View them in the story detail page.`
+        });
+      }
+
+      // Refresh the Cut Shorts grid
+      fetchStories(true, null, 'cut_shorts');
+
+    } catch (err: any) {
+      console.error("Error analyzing video:", err);
+      toast({
+        title: "Error",
+        description: err.message || "Failed to analyze video",
+        variant: "destructive"
+      });
+    } finally {
+      setGeneratingShorts(false);
+      setShortsProgress("");
+    }
+  }
+
   function openCreateStoryDialog(seriesId: string | null = null) {
     setSelectedSeriesForCreate(seriesId);
     setShowCreateStoryForm(true);
@@ -884,8 +1108,16 @@ export default function Dashboard() {
 
   // Stable callbacks for StoryCard
   const handleStoryNavigate = React.useCallback((storyId: string) => {
-    router.push(`/story/${storyId}`);
-  }, [router]);
+    // Find the story to check its type
+    const story = stories.find(s => s.id === storyId);
+
+    // Route to appropriate page based on story type
+    if (story?.story_type === 'cut_shorts') {
+      router.push(`/shorts/${storyId}`);
+    } else {
+      router.push(`/story/${storyId}`);
+    }
+  }, [router, stories]);
 
   const handleStoryDelete = React.useCallback((e: React.MouseEvent, storyId: string) => {
     handleDeleteClick(e, storyId);
@@ -1320,6 +1552,26 @@ export default function Dashboard() {
                   <Film className="w-5 h-5" />
                   <span className="font-medium">Series</span>
                 </button>
+
+                <button
+                  onClick={() => {
+                    setSelectedCategory("cut-shorts");
+                    setSelectedSeriesView(null);
+                    setShowCreditsPage(false);
+                    setShowHelpPage(false);
+                    setShowCreateStoryForm(false);
+                    setMobileMenuOpen(false);
+                    fetchStories(true, null, 'cut_shorts');
+                  }}
+                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors mt-1 ${
+                    selectedCategory === "cut-shorts"
+                      ? "bg-orange-600 text-white"
+                      : "text-gray-400 hover:bg-gray-900 hover:text-white"
+                  }`}
+                >
+                  <Scissors className="w-5 h-5" />
+                  <span className="font-medium">Cut Shorts</span>
+                </button>
               </div>
             </nav>
 
@@ -1466,6 +1718,26 @@ export default function Dashboard() {
             >
               <Film className="w-5 h-5" />
               <span className="font-semibold">Series</span>
+            </button>
+
+            <button
+              onClick={() => {
+                setSelectedCategory("cut-shorts");
+                setSelectedSeriesView(null);
+                setShowCreditsPage(false);
+                setShowHelpPage(false);
+                setShowCreateStoryForm(false);
+                setMobileMenuOpen(false);
+                fetchStories(true, null, 'cut_shorts');
+              }}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all mt-2 ${
+                selectedCategory === "cut-shorts"
+                  ? "bg-orange-600 text-white"
+                  : "text-gray-400 hover:bg-gray-900 hover:text-white"
+              }`}
+            >
+              <Scissors className="w-5 h-5" />
+              <span className="font-semibold">Cut Shorts</span>
             </button>
           </div>
         </nav>
@@ -1687,7 +1959,7 @@ export default function Dashboard() {
               </div>
             ) : (
               <h1 className="text-3xl font-bold text-white">
-                {showHelpPage ? "Help & Support" : selectedCategory === "series" ? "Series" : "Stories"}
+                {showHelpPage ? "Help & Support" : selectedCategory === "series" ? "Series" : selectedCategory === "cut-shorts" ? "Cut Shorts" : "Stories"}
               </h1>
             )}
             {/* Desktop Create Buttons - Hidden on mobile, credits page, help page, and create form */}
@@ -1777,8 +2049,29 @@ export default function Dashboard() {
                 </Dialog>
               )}
 
+              {/* Cut Shorts Buttons */}
+              {selectedCategory === "cut-shorts" && (
+                <>
+                  <Button
+                    onClick={() => setImportDialogOpen(true)}
+                    variant="outline"
+                    className="border-gray-700 hover:border-orange-600"
+                  >
+                    <Youtube className="w-4 h-4 mr-2" />
+                    Import YouTube
+                  </Button>
+                  <Button
+                    onClick={() => setUploadDialogOpen(true)}
+                    className="bg-orange-600 hover:bg-orange-700"
+                  >
+                    <Upload className="w-4 h-4 mr-2" />
+                    Upload Video
+                  </Button>
+                </>
+              )}
+
               {/* Only show New Story button on Stories tab */}
-              {selectedCategory !== "series" && (
+              {selectedCategory !== "series" && selectedCategory !== "cut-shorts" && (
               <Button
                 data-tour="create-story-button"
                 className="bg-orange-600 hover:bg-orange-700"
@@ -1976,25 +2269,6 @@ export default function Dashboard() {
             <Loader2 className="animate-spin h-8 w-8 text-orange-500 mr-3" />
             <span className="text-gray-400 text-lg">Loading...</span>
           </div>
-        ) : stories.length === 0 ? (
-          <div className="text-center py-20">
-            <div className="mb-6 flex justify-center">
-              <div className="w-24 h-24 rounded-full bg-orange-900/20 flex items-center justify-center">
-                <Film className="w-12 h-12 text-orange-400" />
-              </div>
-            </div>
-            <h3 className="text-2xl font-semibold text-white mb-4">No stories yet</h3>
-            <p className="text-gray-400 mb-8 max-w-md mx-auto">
-              Ready to create your first story?
-            </p>
-            <Button onClick={() => {
-              const seriesId = (router.query.seriesId as string) || null;
-              console.log('✅ Create First Story clicked - seriesId from URL:', seriesId);
-              openCreateStoryDialog(seriesId);
-            }} className="bg-orange-600 hover:bg-orange-700">
-              <Plus className="w-4 h-4 mr-2" /> Create First Story
-            </Button>
-          </div>
         ) : selectedCategory === "series" ? (
           selectedSeriesView ? (
             // Viewing stories from a specific series
@@ -2101,6 +2375,85 @@ export default function Dashboard() {
               </div>
             </>
           )
+        ) : selectedCategory === "cut-shorts" ? (
+          // Cut Shorts View
+          <>
+            {generatingShorts ? (
+              <div className="text-center py-20">
+                <div className="mb-6 flex justify-center">
+                  <Loader2 className="w-16 h-16 text-orange-500 animate-spin" />
+                </div>
+                <h3 className="text-2xl font-semibold text-white mb-4">Analyzing Video...</h3>
+                <p className="text-gray-400 mb-4 max-w-md mx-auto">
+                  {shortsProgress}
+                </p>
+                <p className="text-sm text-gray-500">
+                  This may take a minute. Please don't close this page.
+                </p>
+              </div>
+            ) : stories.length === 0 ? (
+              <div className="text-center py-20">
+                <div className="mb-6 flex justify-center">
+                  <div className="w-24 h-24 rounded-full bg-orange-900/20 flex items-center justify-center">
+                    <Scissors className="w-12 h-12 text-orange-400" />
+                  </div>
+                </div>
+                <h3 className="text-2xl font-semibold text-white mb-4">No Source Videos Yet</h3>
+                <p className="text-gray-400 mb-8 max-w-md mx-auto">
+                  Upload a video or import from YouTube to start cutting shorts
+                </p>
+                <div className="flex gap-3 justify-center">
+                  <Button
+                    onClick={() => setUploadDialogOpen(true)}
+                    className="bg-orange-600 hover:bg-orange-700"
+                  >
+                    <Upload className="w-4 h-4 mr-2" />
+                    Upload Video
+                  </Button>
+                  <Button
+                    onClick={() => setImportDialogOpen(true)}
+                    variant="outline"
+                    className="border-gray-700 hover:border-orange-600"
+                  >
+                    <Youtube className="w-4 h-4 mr-2" />
+                    Import YouTube
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <>
+                {/* Cut Shorts Grid */}
+                <StoryGrid
+                  stories={stories}
+                  showEpisodeBadge={false}
+                  totalStories={totalStories}
+                  seriesMap={seriesMap}
+                  onDelete={handleStoryDelete}
+                  onNavigate={handleStoryNavigate}
+                />
+                {/* Load More button */}
+                {hasMoreStories && stories.length > 0 && (
+                  <div className="flex justify-center mt-8">
+                    <Button
+                      onClick={loadMoreStories}
+                      disabled={loadingMoreStories}
+                      variant="outline"
+                      className="bg-gray-800 border-gray-700 text-white hover:bg-gray-700 hover:text-white"
+                    >
+                      {loadingMoreStories ? (
+                        <>
+                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                          Loading...
+                        </>
+                      ) : (
+                        `Load More (${totalStories - stories.length} remaining)`
+                      )}
+                    </Button>
+                  </div>
+                )}
+              </>
+            )}
+          </>
         ) : (
           <>
 
@@ -2391,6 +2744,85 @@ export default function Dashboard() {
                   </>
                 ) : (
                   'Remove from Series'
+                )}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Upload Dialog for Cut Shorts */}
+      <Dialog open={uploadDialogOpen} onOpenChange={setUploadDialogOpen}>
+        <DialogContent className="bg-gray-900 border-gray-800 text-white">
+          <DialogHeader>
+            <DialogTitle>Upload Video</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-gray-400">
+              Upload a video file to cut into shorts. Supported formats: MP4, MOV, AVI
+            </p>
+            <Input
+              type="file"
+              accept="video/*"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) handleVideoUpload(file);
+              }}
+              disabled={uploadingCutShort}
+              className="bg-gray-800 border-gray-700"
+            />
+            {uploadingCutShort && (
+              <div className="flex items-center gap-2 text-sm text-gray-400">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Uploading and transcribing...
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Import YouTube Dialog for Cut Shorts */}
+      <Dialog open={importDialogOpen} onOpenChange={setImportDialogOpen}>
+        <DialogContent className="bg-gray-900 border-gray-800 text-white">
+          <DialogHeader>
+            <DialogTitle>Import from YouTube</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-gray-400">
+              Enter a YouTube URL to import and cut into shorts
+            </p>
+            <Input
+              type="text"
+              placeholder="https://www.youtube.com/watch?v=..."
+              value={youtubeUrl}
+              onChange={(e) => setYoutubeUrl(e.target.value)}
+              disabled={uploadingCutShort}
+              className="bg-gray-800 border-gray-700"
+            />
+            <div className="flex justify-end gap-2">
+              <Button
+                variant="outline"
+                onClick={() => setImportDialogOpen(false)}
+                disabled={uploadingCutShort}
+                className="border-gray-700"
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={handleYouTubeImport}
+                disabled={uploadingCutShort || !youtubeUrl.trim()}
+                className="bg-orange-600 hover:bg-orange-700"
+              >
+                {uploadingCutShort ? (
+                  <>
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    Importing...
+                  </>
+                ) : (
+                  <>
+                    <Youtube className="w-4 h-4 mr-2" />
+                    Import
+                  </>
                 )}
               </Button>
             </div>

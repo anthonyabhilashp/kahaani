@@ -3,7 +3,9 @@ nixPkgs = ["nodejs_20", "ffmpeg-full", "fontconfig"]
 
 [phases.install]
 cmds = [
-  "npm ci"
+  "npm ci",
+  # Install/upgrade yt-dlp for YouTube video downloads
+  "pip install -U yt-dlp"
   # Fonts are downloaded via postinstall hook (scripts/setup-fonts.sh)
   # This runs automatically after npm ci and works the same locally and on Railway
 ]

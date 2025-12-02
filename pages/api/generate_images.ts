@@ -35,8 +35,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const userId = user.id;
     logger = getUserLogger(userId);
 
-    logger.info(`[${story_id}] 🎨 Starting image generation`);
-    logger.info(`[${story_id}] User: ${user.email}`);
+    if (logger) { logger.info(`[${story_id}] 🎨 Starting image generation`); }
+    if (logger) { logger.info(`[${story_id}] User: ${user.email}`); }
 
     // 🚨 CHECK IF IMAGE GENERATION IS ALREADY IN PROGRESS FOR THIS STORY
     const { data: existingJob } = await supabaseAdmin
@@ -53,7 +53,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       if (jobAge > fiveMinutes) {
         // Job is stale - mark as failed and allow new generation
-        logger.warn(`[${story_id}] ⚠️ Stale job detected (${Math.floor(jobAge / 60000)} minutes old), marking as failed`);
+        if (logger) { logger.warn(`[${story_id}] ⚠️ Stale job detected (${Math.floor(jobAge / 60000)} minutes old), marking as failed`); }
         await supabaseAdmin
           .from('image_generation_jobs')
           .update({
@@ -63,12 +63,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           })
           .eq('id', existingJob.id);
 
-        logger.info(`[${story_id}] ✅ Cleared stale job, proceeding with new generation`);
+        if (logger) { logger.info(`[${story_id}] ✅ Cleared stale job, proceeding with new generation`); }
       } else {
         // Job is recent - still processing
         const ageMinutes = Math.floor(jobAge / 60000);
         const ageSeconds = Math.floor((jobAge % 60000) / 1000);
-        logger.warn(`[${story_id}] ❌ Image generation already in progress (started ${ageMinutes}m ${ageSeconds}s ago)`);
+        if (logger) { logger.warn(`[${story_id}] ❌ Image generation already in progress (started ${ageMinutes}m ${ageSeconds}s ago)`); }
         return res.status(409).json({
           error: `Image generation already in progress for this story (started ${ageMinutes}m ${ageSeconds}s ago). Please wait or clear the stuck job.`,
           job_id: existingJob.id
@@ -91,7 +91,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     jobId = newJob.id;
-    logger.info(`[${story_id}] ✅ Created image generation job: ${jobId}`);
+    if (logger) { logger.info(`[${story_id}] ✅ Created image generation job: ${jobId}`); }
 
     // Get story metadata (title, aspect ratio, series_id, reference_image_url, character_library)
     const { data: story, error: storyErr } = await supabaseAdmin
@@ -105,7 +105,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const storyAspectRatio = story.aspect_ratio || "9:16";
-    logger.info(`[${story_id}] 📐 Story aspect ratio: ${storyAspectRatio}`);
+    if (logger) { logger.info(`[${story_id}] 📐 Story aspect ratio: ${storyAspectRatio}`); }
 
     // 1️⃣ Fetch story scenes first to calculate credit cost
     const { data: scenes, error: sceneErr } = await supabaseAdmin
@@ -115,18 +115,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .order("order", { ascending: true });
 
     if (sceneErr || !scenes?.length) throw new Error("No scenes found");
-    logger.info(`[${story_id}] 📚 Found ${scenes.length} scenes to generate images for`);
+    if (logger) { logger.info(`[${story_id}] 📚 Found ${scenes.length} scenes to generate images for`); }
 
     // 💳 Check credits (will deduct AFTER successful generation)
     const creditsNeeded = scenes.length * CREDIT_COSTS.IMAGE_PER_SCENE;
-    logger.info(`[${story_id}] 💳 Credits needed: ${creditsNeeded} (${scenes.length} scenes × ${CREDIT_COSTS.IMAGE_PER_SCENE} credit per image - will charge after success)`);
+    if (logger) { logger.info(`[${story_id}] 💳 Credits needed: ${creditsNeeded} (${scenes.length} scenes × ${CREDIT_COSTS.IMAGE_PER_SCENE} credit per image - will charge after success)`); }
 
     // 💳 Check credit balance
     const currentBalance = await getUserCredits(userId);
-    logger.info(`[${story_id}] 💰 Current balance: ${currentBalance} credits`);
+    if (logger) { logger.info(`[${story_id}] 💰 Current balance: ${currentBalance} credits`); }
 
     if (currentBalance < creditsNeeded) {
-      logger.warn(`[${story_id}] ❌ Insufficient credits: need ${creditsNeeded}, have ${currentBalance}`);
+      if (logger) { logger.warn(`[${story_id}] ❌ Insufficient credits: need ${creditsNeeded}, have ${currentBalance}`); }
       return res.status(402).json({
         error: `Insufficient credits. You need ${creditsNeeded} credits for ${scenes.length} images (1 per scene), but you only have ${currentBalance}.`,
         required_credits: creditsNeeded,
@@ -152,7 +152,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (story.series_id) {
       isSeriesStory = true;
-      logger.info(`[${story_id}] 📺 Story belongs to series: ${story.series_id}`);
+      if (logger) { logger.info(`[${story_id}] 📺 Story belongs to series: ${story.series_id}`); }
 
       // Load series settings
       const { data: series, error: seriesErr } = await supabaseAdmin
@@ -168,12 +168,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           // Check if this story already has character library and reference
           if (story.character_library && story.reference_image_url) {
             skipLibraryGeneration = true;
-            logger.info(`[${story_id}] 📦 Story already has character library and reference - skipping regeneration`);
-            logger.info(`[${story_id}]    👥 ${story.character_library.characters?.length || 0} characters`);
-            logger.info(`[${story_id}]    🖼️ Reference: ${story.reference_image_url}`);
+            if (logger) { logger.info(`[${story_id}] 📦 Story already has character library and reference - skipping regeneration`); }
+            if (logger) { logger.info(`[${story_id}]    👥 ${story.character_library.characters?.length || 0} characters`); }
+            if (logger) { logger.info(`[${story_id}]    🖼️ Reference: ${story.reference_image_url}`); }
           } else {
             // Load from latest story in series
-            logger.info(`[${story_id}] 🔍 Loading character library from latest story in series...`);
+            if (logger) { logger.info(`[${story_id}] 🔍 Loading character library from latest story in series...`); }
 
             const { data: latestStory, error: latestErr } = await supabaseAdmin
               .from("stories")
@@ -189,27 +189,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               seriesLibrary = latestStory.character_library || { characters: [], environments: [], props: [] };
               seriesReferenceImageUrl = latestStory.reference_image_url;
 
-              logger.info(`[${story_id}] 📚 Loaded from latest story (created: ${latestStory.created_at}):`);
-              logger.info(`[${story_id}]    👥 ${seriesLibrary.characters?.length || 0} existing characters`);
-              logger.info(`[${story_id}]    🖼️ Reference image: ${seriesReferenceImageUrl ? 'exists' : 'none'}`);
+              if (logger) { logger.info(`[${story_id}] 📚 Loaded from latest story (created: ${latestStory.created_at}):`); }
+              if (logger) { logger.info(`[${story_id}]    👥 ${seriesLibrary.characters?.length || 0} existing characters`); }
+              if (logger) { logger.info(`[${story_id}]    🖼️ Reference image: ${seriesReferenceImageUrl ? 'exists' : 'none'}`); }
               if (seriesReferenceImageUrl) {
-                logger.info(`[${story_id}]    📎 Reference URL: ${seriesReferenceImageUrl}`);
+                if (logger) { logger.info(`[${story_id}]    📎 Reference URL: ${seriesReferenceImageUrl}`); }
               }
             } else {
-              logger.info(`[${story_id}] 🆕 First story in series - starting fresh`);
+              if (logger) { logger.info(`[${story_id}] 🆕 First story in series - starting fresh`); }
             }
           }
         } else {
-          logger.info(`[${story_id}] ⚠️ Character consistency disabled for this series - each story is independent`);
+          if (logger) { logger.info(`[${story_id}] ⚠️ Character consistency disabled for this series - each story is independent`); }
         }
       }
     } else {
-      logger.info(`[${story_id}] 📖 Standalone story - will generate reference for within-story consistency`);
+      if (logger) { logger.info(`[${story_id}] 📖 Standalone story - will generate reference for within-story consistency`); }
 
       // Check if standalone story already has library and reference
       if (story.character_library && story.reference_image_url) {
         skipLibraryGeneration = true;
-        logger.info(`[${story_id}] 📦 Story already has character library and reference - skipping regeneration`);
+        if (logger) { logger.info(`[${story_id}] 📦 Story already has character library and reference - skipping regeneration`); }
       }
     }
 
@@ -219,20 +219,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       characters = story.character_library?.characters || [];
       environments = story.character_library?.environments || [];
       props = story.character_library?.props || [];
-      logger.info(`[${story_id}] ✅ Using existing character library from story`);
-      logger.info(`[${story_id}]    👥 ${characters.length} characters`);
-      logger.info(`[${story_id}]    🌍 ${environments.length} environments`);
-      logger.info(`[${story_id}]    🎯 ${props.length} props`);
+      if (logger) { logger.info(`[${story_id}] ✅ Using existing character library from story`); }
+      if (logger) { logger.info(`[${story_id}]    👥 ${characters.length} characters`); }
+      if (logger) { logger.info(`[${story_id}]    🌍 ${environments.length} environments`); }
+      if (logger) { logger.info(`[${story_id}]    🎯 ${props.length} props`); }
 
       // Use scene text directly as visual descriptions (no LLM call needed)
       visualDescriptions = scenes.map(s => s.text);
-      logger.info(`[${story_id}] ✅ Using scene text as visual descriptions (${visualDescriptions.length} scenes)`);
+      if (logger) { logger.info(`[${story_id}] ✅ Using scene text as visual descriptions (${visualDescriptions.length} scenes)`); }
     } else {
       // Extract via LLM (with instructions if provided)
-      logger.info(`[${story_id}] 🧠 Step 1: Extracting all story elements (characters, environments, props)...`);
-      logger.info(`[${story_id}] 🎨 Target style: ${finalStyle}`);
+      if (logger) { logger.info(`[${story_id}] 🧠 Step 1: Extracting all story elements (characters, environments, props)...`); }
+      if (logger) { logger.info(`[${story_id}] 🎨 Target style: ${finalStyle}`); }
       if (instructions && instructions.trim()) {
-        logger.info(`[${story_id}] 📝 Additional Instructions will be incorporated: "${instructions}"`);
+        if (logger) { logger.info(`[${story_id}] 📝 Additional Instructions will be incorporated: "${instructions}"`); }
       }
 
       // Build prompt for all scenes
@@ -313,7 +313,7 @@ Return exactly ${scenes.length} visual descriptions in the visual_descriptions a
 
       for (let attempt = 1; attempt <= maxRetries && !descGenerationSuccess; attempt++) {
       try {
-        logger.info(`[${story_id}] 🔄 Attempt ${attempt}/${maxRetries}: Generating visual descriptions...`);
+        if (logger) { logger.info(`[${story_id}] 🔄 Attempt ${attempt}/${maxRetries}: Generating visual descriptions...`); }
 
         const descResp = await fetch(OPENROUTER_URL, {
           method: "POST",
@@ -336,7 +336,7 @@ Return exactly ${scenes.length} visual descriptions in the visual_descriptions a
         const descData = await descResp.json() as any;
         const descRaw = descData?.choices?.[0]?.message?.content || "";
 
-        logger.info(`[${story_id}] 📦 Raw elements response (first 500 chars): ${descRaw.substring(0, 500)}`);
+        if (logger) { logger.info(`[${story_id}] 📦 Raw elements response (first 500 chars): ${descRaw.substring(0, 500)}`); }
 
         if (!descRaw || descRaw.trim() === "") {
           throw new Error("Empty response from LLM");
@@ -351,7 +351,7 @@ Return exactly ${scenes.length} visual descriptions in the visual_descriptions a
 
         // 🔧 Handle array response (LLM sometimes returns [{...}] instead of {...})
         if (Array.isArray(descParsed) && descParsed.length > 0) {
-          logger.warn(`[${story_id}] ⚠️ LLM returned array format, extracting first element...`);
+          if (logger) { logger.warn(`[${story_id}] ⚠️ LLM returned array format, extracting first element...`); }
           descParsed = descParsed[0];
         }
 
@@ -360,24 +360,24 @@ Return exactly ${scenes.length} visual descriptions in the visual_descriptions a
         environments = descParsed.environments || [];
         props = descParsed.props || [];
 
-        logger.info(`[${story_id}] ✅ ${isSeriesStory && seriesLibrary?.characters?.length > 0 ? 'Updated character library' : 'Extracted story elements'}:`);
-        logger.info(`[${story_id}]    👥 Characters: ${characters.length}`);
+        if (logger) { logger.info(`[${story_id}] ✅ ${isSeriesStory && seriesLibrary?.characters?.length > 0 ? 'Updated character library' : 'Extracted story elements'}:`); }
+        if (logger) { logger.info(`[${story_id}]    👥 Characters: ${characters.length}`); }
         characters.forEach((c: any) => logger.info(`[${story_id}]       - ${c.name}: ${c.description.substring(0, 100)}...`));
-        logger.info(`[${story_id}]    🌍 Environments: ${environments.length}`);
+        if (logger) { logger.info(`[${story_id}]    🌍 Environments: ${environments.length}`); }
         environments.forEach((e: any) => logger.info(`[${story_id}]       - ${e.name}: ${e.description.substring(0, 100)}...`));
-        logger.info(`[${story_id}]    🎯 Props: ${props.length}`);
+        if (logger) { logger.info(`[${story_id}]    🎯 Props: ${props.length}`); }
         props.forEach((p: any) => logger.info(`[${story_id}]       - ${p.name}: ${p.description.substring(0, 100)}...`));
 
         if (isSeriesStory) {
           if (seriesLibrary?.characters?.length > 0) {
-            logger.info(`[${story_id}] ✅ Character library updated by LLM (previous: ${seriesLibrary.characters.length}, current: ${characters.length})`);
+            if (logger) { logger.info(`[${story_id}] ✅ Character library updated by LLM (previous: ${seriesLibrary.characters.length}, current: ${characters.length})`); }
           } else {
-            logger.info(`[${story_id}] ✨ First episode in series - creating initial character library`);
+            if (logger) { logger.info(`[${story_id}] ✨ First episode in series - creating initial character library`); }
           }
         }
 
         const rawDescriptions = descParsed.visual_descriptions || [];
-        logger.info(`[${story_id}] 📝 Raw descriptions type: ${typeof rawDescriptions}, length: ${rawDescriptions.length}`);
+        if (logger) { logger.info(`[${story_id}] 📝 Raw descriptions type: ${typeof rawDescriptions}, length: ${rawDescriptions.length}`); }
 
         if (!rawDescriptions || rawDescriptions.length === 0) {
           throw new Error("No visual descriptions returned from LLM");
@@ -397,14 +397,14 @@ Return exactly ${scenes.length} visual descriptions in the visual_descriptions a
           return String(desc);
         });
 
-        logger.info(`[${story_id}] ✅ Generated ${visualDescriptions.length} visual descriptions from LLM`);
+        if (logger) { logger.info(`[${story_id}] ✅ Generated ${visualDescriptions.length} visual descriptions from LLM`); }
         descGenerationSuccess = true;
       } catch (err: any) {
         lastError = err.message || "Unknown error";
-        logger.error(`❌ Attempt ${attempt}/${maxRetries} failed: ${lastError}`);
+        if (logger) { logger.error(`❌ Attempt ${attempt}/${maxRetries} failed: ${lastError}`); }
 
         if (attempt < maxRetries) {
-          logger.warn(`[${story_id}] ⏳ Retrying visual descriptions generation...`);
+          if (logger) { logger.warn(`[${story_id}] ⏳ Retrying visual descriptions generation...`); }
           await new Promise(resolve => setTimeout(resolve, 1000)); // 1 second delay
         }
       }
@@ -413,7 +413,7 @@ Return exactly ${scenes.length} visual descriptions in the visual_descriptions a
       // 🚨 If visual descriptions failed after all retries, stop here
       if (!descGenerationSuccess) {
         const errorMsg = `Failed to generate visual descriptions after ${maxRetries} attempts. Last error: ${lastError}. Please try again.`;
-        logger.error(`❌ ${errorMsg}`);
+        if (logger) { logger.error(`❌ ${errorMsg}`); }
         throw new Error(errorMsg);
       }
     } // End of else block for extraction
@@ -430,21 +430,21 @@ Return exactly ${scenes.length} visual descriptions in the visual_descriptions a
         }
         return `Additional Instructions: ${instructions.trim()}\n\nScene Description: ${desc}`;
       });
-      logger.info(`[${story_id}] ✅ Prepended additional instructions to scene descriptions`);
+      if (logger) { logger.info(`[${story_id}] ✅ Prepended additional instructions to scene descriptions`); }
     }
 
     // Log each scene with its visual description
-    logger.info(`[${story_id}] \n📋 Scene → Visual Description Mapping:`);
+    if (logger) { logger.info(`[${story_id}] \n📋 Scene → Visual Description Mapping:`); }
     scenes.forEach((scene, i) => {
-      logger.info(`[${story_id}] \n🎬 Scene ${i + 1}:`);
-      logger.info(`[${story_id}]    Text: "${scene.text}"`);
-      logger.info(`[${story_id}]    Visual Description: "${visualDescriptions[i]}"`);
+      if (logger) { logger.info(`[${story_id}] \n🎬 Scene ${i + 1}:`); }
+      if (logger) { logger.info(`[${story_id}]    Text: "${scene.text}"`); }
+      if (logger) { logger.info(`[${story_id}]    Visual Description: "${visualDescriptions[i]}"`); }
     });
 
     // 2️⃣ Clean up old image files from storage if they exist
     const oldImageUrls = scenes.filter(s => s.image_url).map(s => s.image_url);
     if (oldImageUrls.length) {
-      logger.info(`[${story_id}] 🧹 Cleaning up ${oldImageUrls.length} old images from storage...`);
+      if (logger) { logger.info(`[${story_id}] 🧹 Cleaning up ${oldImageUrls.length} old images from storage...`); }
       const paths = oldImageUrls.map((url) => url.split("/images/")[1]);
       if (paths.length) {
         const { error: delErr } = await supabaseAdmin.storage
@@ -480,8 +480,8 @@ Return exactly ${scenes.length} visual descriptions in the visual_descriptions a
     }
 
     const imageSize = `${videoWidth}x${videoHeight}`;
-    logger.info(`[${story_id}] 📐 Story aspect ratio: ${aspect}, using ${imageSize}`);
-    logger.info(`[${story_id}] 🧠 Using ${provider} model: ${model}`);
+    if (logger) { logger.info(`[${story_id}] 📐 Story aspect ratio: ${aspect}, using ${imageSize}`); }
+    if (logger) { logger.info(`[${story_id}] 🧠 Using ${provider} model: ${model}`); }
 
     // 🔄 Generate master reference image (MANDATORY if characters exist - for within-story consistency)
     let referenceImageUrl: string | null = null;
@@ -489,23 +489,23 @@ Return exactly ${scenes.length} visual descriptions in the visual_descriptions a
     if (skipLibraryGeneration) {
       // Use existing reference image from story
       referenceImageUrl = story.reference_image_url;
-      logger.info(`[${story_id}] ✅ Using existing reference image: ${referenceImageUrl}`);
+      if (logger) { logger.info(`[${story_id}] ✅ Using existing reference image: ${referenceImageUrl}`); }
     } else if (characters.length > 0) {
-      logger.info(`[${story_id}] \n🎨 Step 2: Generating master reference image with all story elements...`);
+      if (logger) { logger.info(`[${story_id}] \n🎨 Step 2: Generating master reference image with all story elements...`); }
 
       // Check if series has existing reference to build upon
       const hasSeriesReference = isSeriesStory && seriesReferenceImageUrl;
 
       if (hasSeriesReference) {
-        logger.info(`[${story_id}] 🔗 Using series reference as base`);
-        logger.info(`[${story_id}]    📎 Reference URL: ${seriesReferenceImageUrl}`);
+        if (logger) { logger.info(`[${story_id}] 🔗 Using series reference as base`); }
+        if (logger) { logger.info(`[${story_id}]    📎 Reference URL: ${seriesReferenceImageUrl}`); }
       }
 
       // Log what we're passing to Gemini
-      logger.info(`[${story_id}] 📋 Elements being sent to Gemini for reference image:`);
-      logger.info(`[${story_id}]    👥 ${characters.length} characters: ${characters.map((c: any) => c.name).join(', ')}`);
-      logger.info(`[${story_id}]    🌍 ${environments.length} environments: ${environments.map((e: any) => e.name).join(', ')}`);
-      logger.info(`[${story_id}]    🎯 ${props.length} props: ${props.map((p: any) => p.name).join(', ')}`);
+      if (logger) { logger.info(`[${story_id}] 📋 Elements being sent to Gemini for reference image:`); }
+      if (logger) { logger.info(`[${story_id}]    👥 ${characters.length} characters: ${characters.map((c: any) => c.name).join(', ')}`); }
+      if (logger) { logger.info(`[${story_id}]    🌍 ${environments.length} environments: ${environments.map((e: any) => e.name).join(', ')}`); }
+      if (logger) { logger.info(`[${story_id}]    🎯 ${props.length} props: ${props.map((p: any) => p.name).join(', ')}`); }
 
       const referencePrompt = hasSeriesReference
         ? `Generate a reference sheet image showing all characters, environments, and props from this JSON:
@@ -528,16 +528,16 @@ Background: Clean/neutral${extraNotes ? `\n${extraNotes}` : ''}`;
 
       for (let attempt = 1; attempt <= maxRetries && !refImageSuccess; attempt++) {
         try {
-          logger.info(`[${story_id}] 🔄 Attempt ${attempt}/${maxRetries}: Generating reference image...`);
-          logger.info(`[${story_id}] 📝 Reference prompt (first 800 chars): ${referencePrompt.substring(0, 800)}...`);
+          if (logger) { logger.info(`[${story_id}] 🔄 Attempt ${attempt}/${maxRetries}: Generating reference image...`); }
+          if (logger) { logger.info(`[${story_id}] 📝 Reference prompt (first 800 chars): ${referencePrompt.substring(0, 800)}...`); }
 
           // Build messages array - include series reference if exists
           const refMessages: any[] = [];
 
           if (hasSeriesReference) {
             // Pass existing reference as visual input
-            logger.info(`[${story_id}] 📸 Passing reference image to LLM:`);
-            logger.info(`[${story_id}]    📎 Reference URL: ${seriesReferenceImageUrl}`);
+            if (logger) { logger.info(`[${story_id}] 📸 Passing reference image to LLM:`); }
+            if (logger) { logger.info(`[${story_id}]    📎 Reference URL: ${seriesReferenceImageUrl}`); }
             refMessages.push({
               role: "user",
               content: [
@@ -601,11 +601,11 @@ Background: Clean/neutral${extraNotes ? `\n${extraNotes}` : ''}`;
             throw new Error("No reference image returned from API");
           }
 
-          logger.info(`[${story_id}] ✅ Master reference image generated successfully!`);
-          logger.info(`[${story_id}] 📸 Reference image data URI: ${referenceImageUrl.substring(0, 100)}...`);
+          if (logger) { logger.info(`[${story_id}] ✅ Master reference image generated successfully!`); }
+          if (logger) { logger.info(`[${story_id}] 📸 Reference image data URI: ${referenceImageUrl.substring(0, 100)}...`); }
 
           // 📤 Upload new reference image to Supabase Storage
-          logger.info(`[${story_id}] 📤 Uploading new reference image to Supabase Storage...`);
+          if (logger) { logger.info(`[${story_id}] 📤 Uploading new reference image to Supabase Storage...`); }
           const refBuffer = Buffer.from(await (await fetch(referenceImageUrl)).arrayBuffer());
           const refFileName = `reference-${story_id}-${Date.now()}.png`;
 
@@ -618,7 +618,7 @@ Background: Clean/neutral${extraNotes ? `\n${extraNotes}` : ''}`;
             });
 
           if (refUploadErr) {
-            logger.error(`[${story_id}] ⚠️ Failed to upload reference image: ${refUploadErr.message}`);
+            if (logger) { logger.error(`[${story_id}] ⚠️ Failed to upload reference image: ${refUploadErr.message}`); }
             throw refUploadErr;
           }
 
@@ -628,7 +628,7 @@ Background: Clean/neutral${extraNotes ? `\n${extraNotes}` : ''}`;
             .getPublicUrl(refFileName);
 
           const referenceImageStorageUrl = urlData.publicUrl;
-          logger.info(`[${story_id}] ✅ Reference image uploaded: ${referenceImageStorageUrl}`);
+          if (logger) { logger.info(`[${story_id}] ✅ Reference image uploaded: ${referenceImageStorageUrl}`); }
 
           refImageSuccess = true;
 
@@ -651,30 +651,30 @@ Background: Clean/neutral${extraNotes ? `\n${extraNotes}` : ''}`;
               .eq("id", story_id);
 
             if (storyUpdateErr) {
-              logger.error(`[${story_id}] ⚠️ Failed to update story: ${storyUpdateErr.message}`);
+              if (logger) { logger.error(`[${story_id}] ⚠️ Failed to update story: ${storyUpdateErr.message}`); }
             } else {
-              logger.info(`[${story_id}] ✅ Story updated successfully!`);
-              logger.info(`[${story_id}]    👥 ${characters.length} characters saved`);
-              logger.info(`[${story_id}]    🌍 ${environments.length} environments saved`);
-              logger.info(`[${story_id}]    🎯 ${props.length} props saved`);
-              logger.info(`[${story_id}]    🖼️ Reference image URL saved`);
+              if (logger) { logger.info(`[${story_id}] ✅ Story updated successfully!`); }
+              if (logger) { logger.info(`[${story_id}]    👥 ${characters.length} characters saved`); }
+              if (logger) { logger.info(`[${story_id}]    🌍 ${environments.length} environments saved`); }
+              if (logger) { logger.info(`[${story_id}]    🎯 ${props.length} props saved`); }
+              if (logger) { logger.info(`[${story_id}]    🖼️ Reference image URL saved`); }
 
               // 📦 Keep old reference images - each episode preserves its own reference
               // Don't delete for series with consistency - each episode has its own character sheet
               if (hasCharacterConsistency) {
-                logger.info(`[${story_id}] 📦 Keeping all previous reference images (series consistency enabled)`);
+                if (logger) { logger.info(`[${story_id}] 📦 Keeping all previous reference images (series consistency enabled)`); }
               }
             }
           } catch (storyUpdateErr: any) {
-            logger.error(`[${story_id}] ⚠️ Error saving to story: ${storyUpdateErr.message}`);
+            if (logger) { logger.error(`[${story_id}] ⚠️ Error saving to story: ${storyUpdateErr.message}`); }
             // Don't fail the whole process if story save fails
           }
         } catch (err: any) {
           refLastError = err.message || "Unknown error";
-          logger.error(`[${story_id}] ❌ Attempt ${attempt}/${maxRetries} failed: ${refLastError}`);
+          if (logger) { logger.error(`[${story_id}] ❌ Attempt ${attempt}/${maxRetries} failed: ${refLastError}`); }
 
           if (attempt < maxRetries) {
-            logger.warn(`[${story_id}] ⏳ Retrying reference image generation...`);
+            if (logger) { logger.warn(`[${story_id}] ⏳ Retrying reference image generation...`); }
             await new Promise(resolve => setTimeout(resolve, 1000)); // 1 second delay
           }
         }
@@ -683,17 +683,17 @@ Background: Clean/neutral${extraNotes ? `\n${extraNotes}` : ''}`;
       // 🚨 If reference image failed after all retries, stop here
       if (!refImageSuccess) {
         const errorMsg = `Failed to generate reference image after ${maxRetries} attempts. Last error: ${refLastError}. Please try again.`;
-        logger.error(`❌ ${errorMsg}`);
+        if (logger) { logger.error(`❌ ${errorMsg}`); }
         throw new Error(errorMsg);
       }
     } else {
-      logger.warn(`[${story_id}] ⚠️ No characters extracted, skipping reference image generation`);
+      if (logger) { logger.warn(`[${story_id}] ⚠️ No characters extracted, skipping reference image generation`); }
     }
 
     // 4️⃣ Generate images individually (one API call per scene)
     // This ensures we know exactly which image belongs to which scene
-    logger.info(`[${story_id}] 🚀 Generating ${scenes.length} images individually (one per scene)...`);
-    logger.info(`[${story_id}] 📝 Using model: ${model}`);
+    if (logger) { logger.info(`[${story_id}] 🚀 Generating ${scenes.length} images individually (one per scene)...`); }
+    if (logger) { logger.info(`[${story_id}] 📝 Using model: ${model}`); }
 
     // Build the complete story context (used for ALL scenes to maintain continuity)
     const fullStoryContext = scenes.map((scene, i) =>
@@ -705,7 +705,7 @@ Visual Description: ${visualDescriptions[i]}`
     const images: string[] = [];
 
     // Generate all scenes in parallel for speed
-    logger.info(`[${story_id}] ⚡ Generating all ${scenes.length} images in parallel...`);
+    if (logger) { logger.info(`[${story_id}] ⚡ Generating all ${scenes.length} images in parallel...`); }
 
     // Helper function to retry API calls with simple retry logic
     const retryWithDelay = async (fn: () => Promise<any>, maxRetries = 3) => {
@@ -723,7 +723,7 @@ Visual Description: ${visualDescriptions[i]}`
             throw error; // Don't retry non-network errors or if max retries reached
           }
 
-          logger.warn(`[${story_id}] ⚠️ Attempt ${attempt} failed, retrying...`);
+          if (logger) { logger.warn(`[${story_id}] ⚠️ Attempt ${attempt} failed, retrying...`); }
           await new Promise(resolve => setTimeout(resolve, 1000)); // 1 second delay
         }
       }
@@ -732,7 +732,7 @@ Visual Description: ${visualDescriptions[i]}`
     const generateImage = async (i: number) => {
       const scene = scenes[i];
       const sceneDescription = visualDescriptions[i];
-      logger.info(`[${story_id}] 📸 Starting image ${i + 1}/${scenes.length} for: "${scene.text.substring(0, 50)}..."`);
+      if (logger) { logger.info(`[${story_id}] 📸 Starting image ${i + 1}/${scenes.length} for: "${scene.text.substring(0, 50)}..."`); }
 
       // Build character reference context
       const characterContext = characters.length > 0 ? `\n\nCHARACTER REFERENCE (maintain these exact designs):
@@ -773,8 +773,8 @@ Generate one beautiful image for Scene ${i + 1} in "${finalStyle}" style${refere
 
       // Add reference image first if available
       if (referenceImageUrl) {
-        logger.info(`[${story_id}] 📸 Scene ${i + 1}: Using reference image for character consistency`);
-        logger.info(`[${story_id}]    📎 Reference URL: ${referenceImageUrl.substring(0, 100)}...`);
+        if (logger) { logger.info(`[${story_id}] 📸 Scene ${i + 1}: Using reference image for character consistency`); }
+        if (logger) { logger.info(`[${story_id}]    📎 Reference URL: ${referenceImageUrl.substring(0, 100)}...`); }
         messages.push({
           role: "user",
           content: [
@@ -817,7 +817,7 @@ Generate one beautiful image for Scene ${i + 1} in "${finalStyle}" style${refere
         const responseText = await resp.text();
 
         if (!resp.ok) {
-          logger.error(`[${story_id}] ❌ API error for scene ${i + 1}: ${responseText.substring(0, 300)}`);
+          if (logger) { logger.error(`[${story_id}] ❌ API error for scene ${i + 1}: ${responseText.substring(0, 300)}`); }
           throw new Error(`Image generation failed for scene ${i + 1} (${resp.status}): ${responseText.substring(0, 100)}`);
         }
 
@@ -825,7 +825,7 @@ Generate one beautiful image for Scene ${i + 1} in "${finalStyle}" style${refere
         try {
           data = JSON.parse(responseText);
         } catch (parseErr) {
-          logger.error(`[${story_id}] ❌ Failed to parse response for scene ${i + 1}: ${responseText.substring(0, 300)}`);
+          if (logger) { logger.error(`[${story_id}] ❌ Failed to parse response for scene ${i + 1}: ${responseText.substring(0, 300)}`); }
           throw new Error(`Invalid JSON response for scene ${i + 1}`);
         }
 
@@ -847,14 +847,14 @@ Generate one beautiful image for Scene ${i + 1} in "${finalStyle}" style${refere
         }
 
         if (!imageUrl) {
-          logger.error(`[${story_id}] ❌ No image returned for scene ${i + 1}`);
+          if (logger) { logger.error(`[${story_id}] ❌ No image returned for scene ${i + 1}`); }
           throw new Error(`No image generated for scene ${i + 1}`);
         }
 
         return imageUrl;
       }, 3); // 3 retries with 1 second delay
 
-      logger.info(`[${story_id}] ✅ Scene ${i + 1} image generated successfully`);
+      if (logger) { logger.info(`[${story_id}] ✅ Scene ${i + 1} image generated successfully`); }
       return { index: i, imageUrl: result };
     };
 
@@ -871,7 +871,7 @@ Generate one beautiful image for Scene ${i + 1} in "${finalStyle}" style${refere
         successfulResults.push(result.value);
       } else {
         failedScenes.push(index);
-        logger.error(`[${story_id}] ❌ Scene ${index + 1} failed after retries: ${result.reason?.message || result.reason}`);
+        if (logger) { logger.error(`[${story_id}] ❌ Scene ${index + 1} failed after retries: ${result.reason?.message || result.reason}`); }
       }
     });
 
@@ -885,10 +885,10 @@ Generate one beautiful image for Scene ${i + 1} in "${finalStyle}" style${refere
     images.push(...sortedImages);
 
     if (failedScenes.length > 0) {
-      logger.warn(`[${story_id}] ⚠️ ${failedScenes.length} scene(s) failed: ${failedScenes.map(i => i + 1).join(', ')}`);
-      logger.info(`[${story_id}] ✅ Successfully generated ${images.length} images out of ${scenes.length} scenes`);
+      if (logger) { logger.warn(`[${story_id}] ⚠️ ${failedScenes.length} scene(s) failed: ${failedScenes.map(i => i + 1).join(', ')}`); }
+      if (logger) { logger.info(`[${story_id}] ✅ Successfully generated ${images.length} images out of ${scenes.length} scenes`); }
     } else {
-      logger.info(`[${story_id}] \n🖼️ Successfully generated ${images.length} unique images for ${scenes.length} scenes`);
+      if (logger) { logger.info(`[${story_id}] \n🖼️ Successfully generated ${images.length} unique images for ${scenes.length} scenes`); }
     }
 
     // 5️⃣ Save new images (only for successful scenes)
@@ -921,7 +921,7 @@ Generate one beautiful image for Scene ${i + 1} in "${finalStyle}" style${refere
 
         if (filesToDelete.length > 0) {
           await supabaseAdmin.storage.from("images").remove(filesToDelete);
-          logger.info(`[${story_id}] 🗑️ Deleted ${filesToDelete.length} old image(s) for scene ${i + 1}`);
+          if (logger) { logger.info(`[${story_id}] 🗑️ Deleted ${filesToDelete.length} old image(s) for scene ${i + 1}`); }
         }
       }
 
@@ -963,24 +963,24 @@ Generate one beautiful image for Scene ${i + 1} in "${finalStyle}" style${refere
           image_url: publicUrl,
           image_generated_at: imageGeneratedAt
         });
-        logger.info(`[${story_id}] ✅ Updated scene ${i + 1} with image → ${publicUrl}`);
+        if (logger) { logger.info(`[${story_id}] ✅ Updated scene ${i + 1} with image → ${publicUrl}`); }
       } catch (saveErr: any) {
-        logger.error(`[${story_id}] ❌ Failed to save image for scene ${i + 1}: ${saveErr.message}`);
+        if (logger) { logger.error(`[${story_id}] ❌ Failed to save image for scene ${i + 1}: ${saveErr.message}`); }
         // Continue with other scenes even if one fails to save
       }
     }
 
-    logger.info(`[${story_id}] 📸 Updated ${uploads.length} scenes with image URLs`);
+    if (logger) { logger.info(`[${story_id}] 📸 Updated ${uploads.length} scenes with image URLs`); }
 
     if (failedScenes.length > 0) {
-      logger.warn(`[${story_id}] ⚠️ Warning: ${failedScenes.length} scene(s) could not generate images: ${failedScenes.map(i => i + 1).join(', ')}`);
+      if (logger) { logger.warn(`[${story_id}] ⚠️ Warning: ${failedScenes.length} scene(s) could not generate images: ${failedScenes.map(i => i + 1).join(', ')}`); }
     }
 
     // Save image_instructions and default_image_style to story
     const instructionsToSave = (instructions && instructions.trim()) ? instructions.trim() : null;
     const styleToSave = finalStyle || null;
 
-    logger.info(`[${story_id}] 💾 Saving to story: image_instructions="${instructionsToSave}", default_image_style="${styleToSave}"`);
+    if (logger) { logger.info(`[${story_id}] 💾 Saving to story: image_instructions="${instructionsToSave}", default_image_style="${styleToSave}"`); }
 
     const { error: storyUpdateErr } = await supabaseAdmin
       .from("stories")
@@ -991,24 +991,24 @@ Generate one beautiful image for Scene ${i + 1} in "${finalStyle}" style${refere
       .eq("id", story_id);
 
     if (storyUpdateErr) {
-      logger.error(`[${story_id}] ❌ Failed to save: ${storyUpdateErr.message}`);
+      if (logger) { logger.error(`[${story_id}] ❌ Failed to save: ${storyUpdateErr.message}`); }
     } else {
-      logger.info(`[${story_id}] ✅ Saved successfully`);
+      if (logger) { logger.info(`[${story_id}] ✅ Saved successfully`); }
     }
 
     // Log extracted story elements for reference (not saved to DB)
     if (characters.length > 0 || environments.length > 0 || props.length > 0) {
-      logger.info(`[${story_id}] 📋 Extracted story elements (for this generation only):`);
-      logger.info(`[${story_id}]    👥 ${characters.length} characters`);
-      logger.info(`[${story_id}]    🌍 ${environments.length} environments`);
-      logger.info(`[${story_id}]    🎯 ${props.length} props`);
+      if (logger) { logger.info(`[${story_id}] 📋 Extracted story elements (for this generation only):`); }
+      if (logger) { logger.info(`[${story_id}]    👥 ${characters.length} characters`); }
+      if (logger) { logger.info(`[${story_id}]    🌍 ${environments.length} environments`); }
+      if (logger) { logger.info(`[${story_id}]    🎯 ${props.length} props`); }
     }
 
     // 💳 Deduct credits ONLY for successful images
     const successfulCount = uploads.length;
     if (successfulCount > 0 && userId) {
       const chargeAmount = successfulCount * CREDIT_COSTS.IMAGE_PER_SCENE;
-      logger.info(`[${story_id}] 💳 Deducting ${chargeAmount} credits for ${successfulCount} successful images...`);
+      if (logger) { logger.info(`[${story_id}] 💳 Deducting ${chargeAmount} credits for ${successfulCount} successful images...`); }
 
       const deductResult = await deductCredits(
         userId,
@@ -1019,18 +1019,18 @@ Generate one beautiful image for Scene ${i + 1} in "${finalStyle}" style${refere
       );
 
       if (deductResult.success) {
-        logger.info(`[${story_id}] ✅ Deducted ${chargeAmount} credits. New balance: ${deductResult.newBalance}`);
+        if (logger) { logger.info(`[${story_id}] ✅ Deducted ${chargeAmount} credits. New balance: ${deductResult.newBalance}`); }
       } else {
-        logger.error(`[${story_id}] ⚠️ Failed to deduct credits: ${deductResult.error}`);
+        if (logger) { logger.error(`[${story_id}] ⚠️ Failed to deduct credits: ${deductResult.error}`); }
         // Images were generated successfully, so we don't fail the request
         // Admin can manually adjust credits if needed
       }
     }
 
     // Update story metadata (completion status)
-    logger.info(`[${story_id}] 📊 Updating story metadata...`);
+    if (logger) { logger.info(`[${story_id}] 📊 Updating story metadata...`); }
     await updateStoryMetadata(story_id);
-    logger.info(`[${story_id}] ✅ Story metadata updated`);
+    if (logger) { logger.info(`[${story_id}] ✅ Story metadata updated`); }
 
     // 🆗 MARK JOB AS COMPLETED
     if (jobId) {
@@ -1041,7 +1041,7 @@ Generate one beautiful image for Scene ${i + 1} in "${finalStyle}" style${refere
           completed_at: new Date().toISOString()
         })
         .eq('id', jobId);
-      logger.info(`[${story_id}] ✅ Image generation job completed: ${jobId}`);
+      if (logger) { logger.info(`[${story_id}] ✅ Image generation job completed: ${jobId}`); }
     }
 
     res.status(200).json({

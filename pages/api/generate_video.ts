@@ -204,11 +204,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     jobId = newJob.id;
     console.log(`✅ Created video generation job: ${jobId}`);
 
-    fs.mkdirSync(tmpDir, { recursive: true });
-
-    await updateJobProgress(jobId, 5);
-
-    // 💳 Credit check: Get user ID from story
+    // 💳 Credit check: Get user ID from story (do this BEFORE returning)
     const { data: story, error: storyError } = await supabaseAdmin
       .from("stories")
       .select("user_id, title")
@@ -216,14 +212,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .single();
 
     if (storyError || !story) {
-      throw new Error("Story not found");
+      await supabaseAdmin
+        .from('video_generation_jobs')
+        .update({ status: 'failed', completed_at: new Date().toISOString(), error: 'Story not found' })
+        .eq('id', jobId);
+      return res.status(404).json({ error: "Story not found" });
     }
 
     // 🚨 Validate user_id exists
     if (!story.user_id) {
       console.error(`❌ Story ${story_id} has no user_id - cannot check credits`);
-
-      // Mark job as failed
       await supabaseAdmin
         .from('video_generation_jobs')
         .update({
@@ -232,46 +230,99 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           error: 'Story has no user association - please recreate the story'
         })
         .eq('id', jobId);
-
       return res.status(400).json({
         error: `This story has no user association. Please create a new story while logged in.`,
       });
     }
 
-    // At this point, we know userId is not null
     const userId: string = story.user_id;
-    const logger = getUserLogger(userId);
 
-    logger.info(`[${story_id}] 🎬 Starting video generation (Job ID: ${jobId})`);
-    logger.info(`[${story_id}] 📐 Aspect ratio: ${aspect_ratio || '9:16'}`);
-    if (background_music?.enabled) {
-      logger.info(`[${story_id}] 🎵 Background music enabled at ${background_music.volume}% volume`);
-    }
-    logger.info(`[${story_id}] 👤 User ID: ${story.user_id}`);
-
-    // 💳 Check credit balance (will deduct AFTER successful generation)
+    // 💳 Check credit balance BEFORE starting (but deduct AFTER success)
     const currentBalance = await getUserCredits(userId);
-    logger.info(`[${story_id}] 💰 Current balance: ${currentBalance} credits`);
-    logger.info(`[${story_id}] 💳 Credits needed: ${CREDIT_COSTS.VIDEO_GENERATION} (will charge after success)`);
-
     if (currentBalance < CREDIT_COSTS.VIDEO_GENERATION) {
-      logger.warn(`[${story_id}] ❌ Insufficient credits: need ${CREDIT_COSTS.VIDEO_GENERATION}, have ${currentBalance}`);
-
-      // Mark job as failed before returning
       await supabaseAdmin
         .from('video_generation_jobs')
-        .update({
-          status: 'failed',
-          completed_at: new Date().toISOString(),
-          error: 'Insufficient credits'
-        })
+        .update({ status: 'failed', completed_at: new Date().toISOString(), error: 'Insufficient credits' })
         .eq('id', jobId);
-
       return res.status(402).json({
         error: `Insufficient credits. You need ${CREDIT_COSTS.VIDEO_GENERATION} credit for video generation, but you only have ${currentBalance}.`,
         required_credits: CREDIT_COSTS.VIDEO_GENERATION,
         current_balance: currentBalance
       });
+    }
+
+    // ✅ RETURN IMMEDIATELY - Video generation will continue in background
+    res.status(202).json({
+      message: "Video generation started",
+      job_id: jobId,
+      story_id: story_id
+    });
+
+    // 🚀 RUN VIDEO GENERATION IN BACKGROUND (after response is sent)
+    setImmediate(async () => {
+      await runVideoGeneration({
+        jobId: jobId!,
+        storyId: story_id,
+        aspectRatio: aspect_ratio,
+        captions,
+        backgroundMusic: background_music,
+        userId,
+        storyTitle: story.title
+      });
+    });
+
+    return; // Exit handler - background job continues
+
+  } catch (err: any) {
+    console.error(`[${story_id}] Error starting video generation:`, err);
+    if (jobId) {
+      await supabaseAdmin
+        .from('video_generation_jobs')
+        .update({ status: 'failed', completed_at: new Date().toISOString(), error: err.message || 'Unknown error' })
+        .eq('id', jobId);
+    }
+    // Only send response if not already sent
+    if (!res.headersSent) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+}
+
+// ============================================================================
+// BACKGROUND VIDEO GENERATION FUNCTION
+// ============================================================================
+
+interface VideoGenParams {
+  jobId: string;
+  storyId: string;
+  aspectRatio: string;
+  captions: any;
+  backgroundMusic: any;
+  userId: string;
+  storyTitle: string;
+}
+
+async function runVideoGeneration(params: VideoGenParams) {
+  const { jobId, storyId: story_id, aspectRatio: aspect_ratio, captions, backgroundMusic: background_music, userId, storyTitle } = params;
+
+  // Configure fontconfig to use project fonts directory
+  const projectRoot = path.resolve(process.cwd());
+  const fontConfigFile = path.join(projectRoot, 'fonts.conf');
+  process.env.FONTCONFIG_FILE = fontConfigFile;
+
+  const tmpDir = path.join(process.cwd(), "tmp", jobId);
+
+  try {
+    fs.mkdirSync(tmpDir, { recursive: true });
+
+    await updateJobProgress(jobId, 5);
+
+    const logger = getUserLogger(userId);
+
+    logger.info(`[${story_id}] 🎬 Starting background video generation (Job ID: ${jobId})`);
+    logger.info(`[${story_id}] 📐 Aspect ratio: ${aspect_ratio || '9:16'}`);
+    if (background_music?.enabled) {
+      logger.info(`[${story_id}] 🎵 Background music enabled at ${background_music.volume}% volume`);
     }
 
     await updateJobProgress(jobId, 10);
@@ -1276,7 +1327,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         userId,
         CREDIT_COSTS.VIDEO_GENERATION,
         'deduction_video',
-        `Video generation for story: ${story.title || story_id}`,
+        `Video generation for story: ${storyTitle || story_id}`,
         story_id
       );
 
@@ -1291,23 +1342,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       logger.info(`[${story_id}] ✅ Video generation is currently free (0 credits)`);
     }
 
-    // ✅ MARK JOB AS COMPLETED
-    if (jobId) {
-      await supabaseAdmin
-        .from('video_generation_jobs')
-        .update({
-          status: 'completed',
-          progress: 100,
-          completed_at: new Date().toISOString()
-        })
-        .eq('id', jobId);
+    // ✅ MARK JOB AS COMPLETED with video URL
+    const { error: updateError } = await supabaseAdmin
+      .from('video_generation_jobs')
+      .update({
+        status: 'completed',
+        progress: 100,
+        completed_at: new Date().toISOString(),
+        video_url: publicUrl,
+        duration: totalDuration
+      })
+      .eq('id', jobId);
+
+    if (updateError) {
+      logger.error(`[${story_id}] ❌ Failed to mark job as completed: ${updateError.message}`);
+    } else {
       logger.info(`[${story_id}] ✅ Video generation job ${jobId} marked as completed`);
-      shouldCleanupTmp = true;
     }
 
     // Track analytics event
     await supabaseAdmin.from("analytics_events").insert({
-      user_id: story.user_id,
+      user_id: userId,
       event_name: 'video_generated',
       event_data: {
         story_id,
@@ -1316,38 +1371,40 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     });
 
-    res.status(200).json({ story_id, video_url: publicUrl, duration: totalDuration, is_valid: true, job_id: jobId });
-  } catch (err: any) {
-    console.error(`[${story_id}] Error generating video:`, err);
-
-    // ❌ MARK JOB AS FAILED
-    if (jobId) {
-      try {
-        await supabaseAdmin
-          .from('video_generation_jobs')
-          .update({
-            status: 'failed',
-            completed_at: new Date().toISOString(),
-            error: err.message || 'Unknown error'
-          })
-          .eq('id', jobId);
-        console.log(`❌ Video generation job ${jobId} marked as failed`);
-      } catch (updateErr) {
-        console.error("Failed to update job status:", updateErr);
-      }
-    }
-
-    // No refund needed since credits are only deducted after success
-    res.status(500).json({ error: err.message });
-  } finally {
+    // Cleanup temp directory
     try {
-      if (tmpDir && fs.existsSync(tmpDir) && shouldCleanupTmp) {
+      if (fs.existsSync(tmpDir)) {
         fs.rmSync(tmpDir, { recursive: true, force: true });
-        console.log(`[${story_id}] 🧹 Cleaned up temp directory ${tmpDir}`);
+        logger.info(`[${story_id}] 🧹 Cleaned up temp directory ${tmpDir}`);
       }
     } catch (cleanupErr: any) {
       console.error(`[${story_id}] ⚠️ Failed to cleanup temp directory: ${cleanupErr.message}`);
     }
+
+  } catch (err: any) {
+    console.error(`[${story_id}] Error generating video:`, err);
+
+    // ❌ MARK JOB AS FAILED
+    try {
+      await supabaseAdmin
+        .from('video_generation_jobs')
+        .update({
+          status: 'failed',
+          completed_at: new Date().toISOString(),
+          error: err.message || 'Unknown error'
+        })
+        .eq('id', jobId);
+      console.log(`❌ Video generation job ${jobId} marked as failed`);
+    } catch (updateErr) {
+      console.error("Failed to update job status:", updateErr);
+    }
+
+    // Cleanup temp directory on error
+    try {
+      if (fs.existsSync(tmpDir)) {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    } catch {}
   }
 }
 function runFFmpegCommand(args: string[], logger: ReturnType<typeof getUserLogger>, storyId: string) {

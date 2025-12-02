@@ -31,7 +31,7 @@ export const config = { api: { bodyParser: { sizeLimit: "4mb" } } };
 
 // --- Handler ---
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const { prompt, title, story_id, sceneCount = 5, manualScenes, isManual = false, voice_id, aspect_ratio, isBlank = false } = req.body;
+  const { prompt, title, story_id, sceneCount = 5, manualScenes, isManual = false, voice_id, aspect_ratio, isBlank = false, story_type = 'regular' } = req.body;
   if (!prompt) return res.status(400).json({ error: "Prompt required" });
 
   let logger: any = null;
@@ -57,7 +57,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const rateLimit = checkRateLimit(user.id, RateLimits.STORY_GENERATION);
     if (!rateLimit.allowed) {
       const retryAfter = Math.ceil((rateLimit.resetTime - Date.now()) / 1000);
-      logger.warn(`Rate limit exceeded - retry after ${retryAfter}s`);
+      if (logger) { logger.warn(`Rate limit exceeded - retry after ${retryAfter}s`); }
       return res.status(429).json({
         error: "Too many requests. Please wait before creating another story.",
         retry_after: retryAfter
@@ -65,9 +65,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     let storyId = story_id || uuidv4();
-    logger.info(`[${storyId}] Starting scene generation`);
-    logger.info(`[${storyId}] User: ${user.email}`);
-    logger.info(`[${storyId}] Voice: ${voice_id || 'alloy'}, Aspect: ${aspect_ratio || '9:16'}`);
+    if (logger) { logger.info(`[${storyId}] Starting scene generation`); }
+    if (logger) { logger.info(`[${storyId}] User: ${user.email}`); }
+    if (logger) { logger.info(`[${storyId}] Voice: ${voice_id || 'alloy'}, Aspect: ${aspect_ratio || '9:16'}`); }
     if (isBlank) {
       logger.log(`📄 Creating blank story`);
     }
@@ -80,7 +80,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         prompt,
         user_id: user.id,  // 🔑 Ensure user_id is set (fixes old stories without user_id)
         voice_id: voice_id || 'alloy',
-        aspect_ratio: aspect_ratio || '9:16'
+        aspect_ratio: aspect_ratio || '9:16',
+        story_type: story_type || 'regular'
       }).eq("id", storyId);
     } else {
       logger.log(`🆕 Creating new story for: "${prompt}"`);
@@ -93,7 +94,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           status: isBlank ? "complete" : "processing",  // Blank stories are complete immediately
           user_id: user.id,  // 🔑 Link story to authenticated user
           voice_id: voice_id || 'alloy',
-          aspect_ratio: aspect_ratio || '9:16'
+          aspect_ratio: aspect_ratio || '9:16',
+          story_type: story_type || 'regular'
         }]);
       if (storyErr) throw storyErr;
     }
@@ -179,7 +181,7 @@ User request: ${prompt}
           logger.log(`📝 Generated title: "${parsed.title}"`);
         }
       } catch {
-        logger.error("⚠️ Model returned invalid JSON, fallback to single scene");
+        if (logger) { logger.error("⚠️ Model returned invalid JSON, fallback to single scene"); }
         scenes = [{ text: prompt }];
       }
     }

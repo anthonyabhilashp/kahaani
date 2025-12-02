@@ -4,7 +4,7 @@
 
 @layer base {
   body {
-    @apply text-gray-800 bg-[#f9fafb];
+    @apply text-white bg-black;
   }
   video {
     @apply rounded-xl shadow-lg;

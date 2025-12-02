@@ -47,6 +47,11 @@ async function transcribeWithEchogarden(audioPath: string): Promise<{
   const recognitionResult = await Echogarden.recognize(audioPath, {
     engine: 'whisper',
     language: 'en',
+    whisper: {
+      model: 'small',           // Better quality than tiny/base (less hallucination)
+      temperature: 0.0,          // Reduce randomness/hallucination
+      prompt: undefined,         // No initial prompt (avoid biasing)
+    }
   });
 
   // Extract word timestamps from wordTimeline
@@ -114,14 +119,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: "video file is required" });
     }
 
-    logger.info(`[Scene ${scene_id}] 📤 Starting video upload for scene`);
-    logger.info(`[Scene ${scene_id}] User: ${user.email}`);
-    logger.info(`[Scene ${scene_id}] File: ${videoFile.originalFilename}, Size: ${(videoFile.size / 1024 / 1024).toFixed(2)}MB`);
+    if (logger) { logger.info(`[Scene ${scene_id}] 📤 Starting video upload for scene`); }
+    if (logger) { logger.info(`[Scene ${scene_id}] User: ${user.email}`); }
+    if (logger) { logger.info(`[Scene ${scene_id}] File: ${videoFile.originalFilename}, Size: ${(videoFile.size / 1024 / 1024).toFixed(2)}MB`); }
 
-    // 1️⃣ Fetch scene data
+    // 1️⃣ Fetch scene data with story type
     const { data: scene, error: sceneErr } = await supabaseAdmin
       .from("scenes")
-      .select("id, story_id, text")
+      .select("id, story_id, text, stories!inner(story_type)")
       .eq("id", scene_id)
       .single();
 
@@ -129,21 +134,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       throw new Error("Scene not found");
     }
 
+    const storyType = (scene as any).stories?.story_type;
+    const isCutShorts = storyType === 'cut_shorts';
+    if (logger) { logger.info(`[Scene ${scene_id}] Story type: ${storyType}, Skip transcription: ${isCutShorts}`); }
+
     // 2️⃣ Get video duration first (needed for credit calculation)
     tempVideoPath = videoFile.filepath;
     const duration = await getVideoDuration(tempVideoPath);
 
-    logger.info(`[Scene ${scene_id}] ⏱️ Video duration: ${duration.toFixed(2)} seconds`);
+    if (logger) { logger.info(`[Scene ${scene_id}] ⏱️ Video duration: ${duration.toFixed(2)} seconds`); }
 
     // 3️⃣ Calculate credits needed based on duration
     const creditsNeeded = calculateVideoUploadCost(duration);
-    logger.info(`[Scene ${scene_id}] 💳 Credits needed: ${creditsNeeded} (${Math.ceil(duration / 60)} min @ 3 credits/min, will charge after success)`);
+    if (logger) { logger.info(`[Scene ${scene_id}] 💳 Credits needed: ${creditsNeeded} (${Math.ceil(duration / 60)} min @ 3 credits/min, will charge after success)`); }
 
     const currentBalance = await getUserCredits(userId);
-    logger.info(`[Scene ${scene_id}] 💰 Current balance: ${currentBalance} credits`);
+    if (logger) { logger.info(`[Scene ${scene_id}] 💰 Current balance: ${currentBalance} credits`); }
 
     if (currentBalance < creditsNeeded) {
-      logger.warn(`[Scene ${scene_id}] ❌ Insufficient credits: need ${creditsNeeded}, have ${currentBalance}`);
+      if (logger) { logger.warn(`[Scene ${scene_id}] ❌ Insufficient credits: need ${creditsNeeded}, have ${currentBalance}`); }
       return res.status(402).json({
         error: `Insufficient credits. You need ${creditsNeeded} credits for uploading and transcribing a ${Math.ceil(duration / 60)} minute video (3 credits per minute), but you only have ${currentBalance}.`,
         required_credits: creditsNeeded,
@@ -157,7 +166,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     videoOnlyPath = path.join(tmpdir(), `scene-video-only-${scene_id}-${Date.now()}.mp4`);
-    logger.info(`[Scene ${scene_id}] 🎬 Creating video-only file (removing audio track)...`);
+    if (logger) { logger.info(`[Scene ${scene_id}] 🎬 Creating video-only file (removing audio track)...`); }
 
     await new Promise<void>((resolve, reject) => {
       ffmpeg(tempVideoPath!)
@@ -165,11 +174,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .videoCodec('copy') // Copy video as-is (fast, no re-encoding)
         .output(videoOnlyPath!)
         .on('end', () => {
-          logger.info(`[Scene ${scene_id}] ✅ Video-only file created`);
+          if (logger) { logger.info(`[Scene ${scene_id}] ✅ Video-only file created`); }
           resolve();
         })
         .on('error', (err) => {
-          logger.error(`[Scene ${scene_id}] ❌ Failed to create video-only file: ${err.message}`);
+          if (logger) { logger.error(`[Scene ${scene_id}] ❌ Failed to create video-only file: ${err.message}`); }
           reject(err);
         })
         .run();
@@ -177,9 +186,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // 5️⃣ Upload video-only file to Supabase Storage
     const videoBuffer = fs.readFileSync(videoOnlyPath);
-    const videoFileName = `scene-video-${scene_id}-${Date.now()}.mp4`;
+    const videoFileName = `${userId}/video-${scene_id}-${Date.now()}.mp4`;
 
-    logger.info(`[Scene ${scene_id}] ☁️ Uploading video-only file to Supabase Storage...`);
+    if (logger) { logger.info(`[Scene ${scene_id}] ☁️ Uploading video-only file to Supabase Storage...`); }
     const { error: uploadError } = await supabaseAdmin.storage
       .from("videos")
       .upload(videoFileName, videoBuffer, {
@@ -188,16 +197,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
 
     if (uploadError) {
-      logger.error(`[Scene ${scene_id}] ❌ Video upload error: ${uploadError.message}`);
+      if (logger) { logger.error(`[Scene ${scene_id}] ❌ Video upload error: ${uploadError.message}`); }
       throw uploadError;
     }
 
     const videoUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/videos/${videoFileName}`;
-    logger.info(`[Scene ${scene_id}] ✅ Video-only file uploaded: ${videoUrl}`);
+    if (logger) { logger.info(`[Scene ${scene_id}] ✅ Video-only file uploaded: ${videoUrl}`); }
 
     // 5.5️⃣ Extract best frame as thumbnail using FFmpeg thumbnail filter
     thumbnailPath = path.join(tmpdir(), `scene-thumbnail-${scene_id}-${Date.now()}.jpg`);
-    logger.info(`[Scene ${scene_id}] 📸 Extracting best frame as thumbnail...`);
+    if (logger) { logger.info(`[Scene ${scene_id}] 📸 Extracting best frame as thumbnail...`); }
 
     await new Promise<void>((resolve, reject) => {
       ffmpeg(tempVideoPath!)
@@ -207,11 +216,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         ])
         .output(thumbnailPath!)
         .on('end', () => {
-          logger.info(`[Scene ${scene_id}] ✅ Best frame thumbnail extracted`);
+          if (logger) { logger.info(`[Scene ${scene_id}] ✅ Best frame thumbnail extracted`); }
           resolve();
         })
         .on('error', (err) => {
-          logger.error(`[Scene ${scene_id}] ❌ Failed to extract thumbnail: ${err.message}`);
+          if (logger) { logger.error(`[Scene ${scene_id}] ❌ Failed to extract thumbnail: ${err.message}`); }
           reject(err);
         })
         .run();
@@ -219,9 +228,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Upload thumbnail to Supabase Storage
     const thumbnailBuffer = fs.readFileSync(thumbnailPath);
-    const thumbnailFileName = `scene-thumbnail-${scene_id}-${Date.now()}.jpg`;
+    const thumbnailFileName = `${userId}/thumbnail-${scene_id}-${Date.now()}.jpg`;
 
-    logger.info(`[Scene ${scene_id}] ☁️ Uploading thumbnail to Supabase Storage...`);
+    if (logger) { logger.info(`[Scene ${scene_id}] ☁️ Uploading thumbnail to Supabase Storage...`); }
     const { error: thumbnailUploadError } = await supabaseAdmin.storage
       .from("images")
       .upload(thumbnailFileName, thumbnailBuffer, {
@@ -230,7 +239,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
 
     if (thumbnailUploadError) {
-      logger.error(`[Scene ${scene_id}] ❌ Thumbnail upload error: ${thumbnailUploadError.message}`);
+      if (logger) { logger.error(`[Scene ${scene_id}] ❌ Thumbnail upload error: ${thumbnailUploadError.message}`); }
       // Don't fail the whole upload if thumbnail fails
     }
 
@@ -239,7 +248,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       : `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/images/${thumbnailFileName}`;
 
     if (thumbnailUrl) {
-      logger.info(`[Scene ${scene_id}] ✅ Thumbnail uploaded: ${thumbnailUrl}`);
+      if (logger) { logger.info(`[Scene ${scene_id}] ✅ Thumbnail uploaded: ${thumbnailUrl}`); }
     }
 
     // Cleanup thumbnail temp file
@@ -249,21 +258,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // 6️⃣ Extract audio from video
     tempAudioPath = path.join(tmpdir(), `scene-audio-${scene_id}-${Date.now()}.mp3`);
-    logger.info(`[Scene ${scene_id}] 🎵 Extracting audio from video...`);
+    if (logger) { logger.info(`[Scene ${scene_id}] 🎵 Extracting audio from video...`); }
     await extractAudio(tempVideoPath, tempAudioPath);
-    logger.info(`[Scene ${scene_id}] ✅ Audio extracted`);
+    if (logger) { logger.info(`[Scene ${scene_id}] ✅ Audio extracted`); }
 
-    // 6️⃣ Recognize speech with Echogarden
-    logger.info(`[Scene ${scene_id}] 🎙️ Recognizing speech with Echogarden (local Whisper engine)...`);
-    const { text, word_timestamps } = await transcribeWithEchogarden(tempAudioPath);
-    logger.info(`[Scene ${scene_id}] ✅ Recognition complete: "${text.substring(0, 100)}..."`);
-    logger.info(`[Scene ${scene_id}] 📝 Generated ${word_timestamps.length} word timestamps`);
+    // 6️⃣ Recognize speech with Echogarden (skip for cut_shorts - transcribe on-demand during analysis)
+    let text = '';
+    let word_timestamps: Array<{ word: string; start: number; end: number }> = [];
+
+    if (!isCutShorts) {
+      if (logger) { logger.info(`[Scene ${scene_id}] 🎙️ Recognizing speech with Echogarden (local Whisper engine)...`); }
+      const transcription = await transcribeWithEchogarden(tempAudioPath);
+      text = transcription.text;
+      word_timestamps = transcription.word_timestamps;
+      if (logger) { logger.info(`[Scene ${scene_id}] ✅ Recognition complete: "${text.substring(0, 100)}..."`); }
+      if (logger) { logger.info(`[Scene ${scene_id}] 📝 Generated ${word_timestamps.length} word timestamps`); }
+    } else {
+      if (logger) { logger.info(`[Scene ${scene_id}] ⏭️ Skipping transcription (cut_shorts - will transcribe on-demand during analysis)`); }
+    }
 
     // 7️⃣ Upload audio to Supabase Storage
     const audioBuffer = fs.readFileSync(tempAudioPath);
     const audioFileName = `scene-${scene_id}-${Date.now()}.mp3`;
 
-    logger.info(`[Scene ${scene_id}] ☁️ Uploading audio to Supabase Storage...`);
+    if (logger) { logger.info(`[Scene ${scene_id}] ☁️ Uploading audio to Supabase Storage...`); }
     const { error: audioUploadError } = await supabaseAdmin.storage
       .from("audio")
       .upload(audioFileName, audioBuffer, {
@@ -272,15 +290,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
 
     if (audioUploadError) {
-      logger.error(`[Scene ${scene_id}] ❌ Audio upload error: ${audioUploadError.message}`);
+      if (logger) { logger.error(`[Scene ${scene_id}] ❌ Audio upload error: ${audioUploadError.message}`); }
       throw audioUploadError;
     }
 
     const audioUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/audio/${audioFileName}`;
-    logger.info(`[Scene ${scene_id}] ✅ Audio uploaded: ${audioUrl}`);
+    if (logger) { logger.info(`[Scene ${scene_id}] ✅ Audio uploaded: ${audioUrl}`); }
 
     // 8️⃣ Update scene with video, audio, transcript, word timestamps, and thumbnail
-    logger.info(`[Scene ${scene_id}] 💾 Updating scene in database...`);
+    if (logger) { logger.info(`[Scene ${scene_id}] 💾 Updating scene in database...`); }
     const updateData: any = {
       video_url: videoUrl,
       audio_url: audioUrl,
@@ -301,14 +319,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .eq("id", scene_id);
 
     if (updateError) {
-      logger.error(`[Scene ${scene_id}] ❌ Database update error: ${updateError.message}`);
+      if (logger) { logger.error(`[Scene ${scene_id}] ❌ Database update error: ${updateError.message}`); }
       throw updateError;
     }
 
-    logger.info(`[Scene ${scene_id}] ✅ Scene updated successfully`);
+    if (logger) { logger.info(`[Scene ${scene_id}] ✅ Scene updated successfully`); }
 
     // 9️⃣ Deduct credits AFTER successful upload and transcription
-    logger.info(`[Scene ${scene_id}] 💳 Deducting ${creditsNeeded} credit after successful upload...`);
+    if (logger) { logger.info(`[Scene ${scene_id}] 💳 Deducting ${creditsNeeded} credit after successful upload...`); }
     const deductResult = await deductCredits(
       userId,
       creditsNeeded,
@@ -318,11 +336,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     );
 
     if (!deductResult.success) {
-      logger.error(`[Scene ${scene_id}] ⚠️ Failed to deduct credits: ${deductResult.error}`);
+      if (logger) { logger.error(`[Scene ${scene_id}] ⚠️ Failed to deduct credits: ${deductResult.error}`); }
       // Video was uploaded successfully, so we don't fail the request
       // Admin can manually adjust credits if needed
     } else {
-      logger.info(`[Scene ${scene_id}] ✅ Deducted ${creditsNeeded} credits. New balance: ${deductResult.newBalance}`);
+      if (logger) { logger.info(`[Scene ${scene_id}] ✅ Deducted ${creditsNeeded} credits. New balance: ${deductResult.newBalance}`); }
     }
 
     // 🧹 Cleanup temp files
@@ -336,7 +354,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       fs.unlinkSync(tempAudioPath);
     }
 
-    logger.info(`[Scene ${scene_id}] 🎉 Video upload complete!`);
+    if (logger) { logger.info(`[Scene ${scene_id}] 🎉 Video upload complete!`); }
 
     return res.status(200).json({
       success: true,
@@ -350,7 +368,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   } catch (err: any) {
     if (logger) {
-      logger.error(`❌ Error uploading scene video: ${err.message}`);
+      if (logger) { logger.error(`❌ Error uploading scene video: ${err.message}`); }
     } else {
       console.error(`❌ Error uploading scene video: ${err.message}`);
     }

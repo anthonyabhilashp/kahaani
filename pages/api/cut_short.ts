@@ -74,12 +74,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ error: 'Short duration must be between 5 and 120 seconds' });
   }
 
-  const logger = getUserLogger(story_id || 'shorts_cut');
-  const tempDir = path.join(tmpdir(), `cut_${Date.now()}`);
+  let logger: ReturnType<typeof getUserLogger> | null = null;
+  let tempDir = '';
   const shortId = uuidv4();
 
   try {
-    // 🔐 Get authenticated user
+    // 🔐 Get authenticated user FIRST to use their ID for logging
     const authHeader = req.headers.authorization;
     if (!authHeader) {
       return res.status(401).json({ error: "Unauthorized - Please log in" });
@@ -91,6 +91,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (authError || !user) {
       return res.status(401).json({ error: "Unauthorized - Invalid session" });
     }
+
+    // Create logger with user ID (creates logs/{user_id}.log)
+    logger = getUserLogger(user.id);
+    tempDir = path.join(tmpdir(), `cut_${Date.now()}`);
 
     logger.info(`✂️ Cutting short: ${start.toFixed(1)}s - ${end.toFixed(1)}s (${duration.toFixed(1)}s)`);
 
@@ -117,7 +121,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     logger.info(`✅ Short generated: ${(fileStats.size / 1024 / 1024).toFixed(2)} MB`);
 
     // Upload to Supabase Storage
-    const fileName = `${user.id}/shorts/${shortId}.mp4`;
+    const fileName = `${user.id}/short-${shortId}-${Date.now()}.mp4`;
     const fileBuffer = fs.readFileSync(outputPath);
 
     const { data: uploadData, error: uploadError } = await supabaseAdmin.storage
@@ -137,6 +141,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .getPublicUrl(fileName);
 
     logger.info(`📤 Uploaded short to: ${publicUrl}`);
+
+    // Save short to database
+    const { error: insertError } = await supabaseAdmin
+      .from('shorts')
+      .insert({
+        id: shortId,
+        user_id: user.id,
+        story_id: story_id,
+        scene_id: scene_id,
+        title: title || `Short ${start.toFixed(1)}s-${end.toFixed(1)}s`,
+        video_url: publicUrl,
+        start_time: start,
+        end_time: end,
+        duration: duration
+      });
+
+    if (insertError) {
+      logger.error(`⚠️ Failed to save short to database: ${insertError.message}`);
+      // Don't fail the request since video was uploaded successfully
+    }
 
     // Cleanup temp files
     try {
@@ -169,7 +193,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
 
   } catch (err: any) {
-    logger.error(`❌ Error cutting short: ${err.message}`);
+    if (logger) {
+      logger.error(`❌ Error cutting short: ${err.message}`);
+    }
 
     // Cleanup temp files on error
     try {

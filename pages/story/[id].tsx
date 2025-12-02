@@ -592,6 +592,13 @@ export default function StoryDetailsPage() {
       const data = await res.json();
       console.log("📊 Story data received:", data);
 
+      // Redirect cut_shorts to dedicated shorts page
+      if (data.story?.story_type === 'cut_shorts') {
+        console.log("🔀 Redirecting to /shorts page");
+        router.push(`/shorts/${id}`);
+        return;
+      }
+
       // Add cache-busting timestamp to all images and audio to force browser to reload
       // Use timestamp + random to ensure uniqueness even if fetched multiple times in same millisecond
       const timestamp = Date.now();
@@ -665,6 +672,22 @@ export default function StoryDetailsPage() {
         const ratio = data.story.aspect_ratio as "9:16" | "16:9" | "1:1";
         setAspectRatio(ratio);
         console.log("📐 Loaded aspect ratio from database:", ratio);
+      }
+
+      // Check for active video generation job
+      try {
+        const jobRes = await fetch(`/api/video_job_status?story_id=${id}`);
+        if (jobRes.ok) {
+          const jobData = await jobRes.json();
+          if (jobData.status === 'processing') {
+            console.log("🎬 Found active video job, resuming polling:", jobData.id);
+            setGeneratingVideo(true);
+            setVideoProgress(jobData.progress || 0);
+            pollVideoJobStatus(jobData.id);
+          }
+        }
+      } catch (err) {
+        console.error("Error checking for active video job:", err);
       }
 
       // Load voices if not already loaded (for story voice selector)
@@ -2358,20 +2381,8 @@ export default function StoryDetailsPage() {
     setGeneratingVideo(true);
     setVideoProgress(0);
 
-    // Simulate progress based on estimated time (video generation takes ~20-40 seconds)
-    const startTime = Date.now();
-    const estimatedDuration = 30000; // 30 seconds estimate
-
-    const progressInterval = setInterval(() => {
-      const elapsed = Date.now() - startTime;
-      const estimatedProgress = Math.min(95, Math.floor((elapsed / estimatedDuration) * 100));
-      setVideoProgress(estimatedProgress);
-    }, 500); // Update every 500ms
-
-    videoProgressIntervalRef.current = progressInterval;
-
     try {
-      console.log("🎬 Starting SERVER-SIDE video generation for story:", id);
+      console.log("🎬 Starting video generation for story:", id);
 
       const headers = await getAuthHeaders();
       const res = await fetch("/api/generate_video", {
@@ -2406,10 +2417,10 @@ export default function StoryDetailsPage() {
 
         // Handle stuck job error (409 Conflict)
         if (res.status === 409 && errorData.error?.includes('already in progress')) {
-          // Show dialog and return early - don't throw error
           console.log("ℹ️ Stuck job detected - showing dialog");
           setStuckJobDialogOpen(true);
-          return; // Exit early without throwing
+          setGeneratingVideo(false);
+          return;
         }
 
         // Handle server busy error (429 Too Many Requests)
@@ -2420,48 +2431,87 @@ export default function StoryDetailsPage() {
             description: errorData.error || "The server is currently processing multiple videos. Please try again in a minute.",
             variant: "destructive",
           });
-          return; // Exit early without throwing
+          setGeneratingVideo(false);
+          return;
         }
 
         throw new Error(errorData.error || `Server error: ${res.status}`);
       }
 
       const data = await res.json();
-      console.log("✅ Server-side video generation completed:", data);
+      console.log("✅ Video generation job started:", data);
 
-      // Clear progress interval and set to 100%
-      if (videoProgressIntervalRef.current) {
-        clearInterval(videoProgressIntervalRef.current);
-        videoProgressIntervalRef.current = null;
+      // Start polling for job status
+      if (data.job_id) {
+        pollVideoJobStatus(data.job_id);
+      } else {
+        throw new Error("No job_id returned from server");
       }
-      setVideoProgress(100);
-
-      // Update video state
-      setVideo({
-        video_url: data.video_url,
-        is_valid: data.is_valid,
-        duration: data.duration
-      });
-
-      // Store video info and show success dialog
-      setGeneratedVideoUrl(data.video_url);
-      setGeneratedVideoDuration(data.duration);
-      setVideoSuccessDialogOpen(true);
-
-      // Show success toast
-      toast({ description: `🎬 Video generated successfully! Duration: ${Math.floor(data.duration)}s` });
     } catch (err) {
       console.error("❌ Video generation error:", err);
-      toast({ description: `Failed to generate video: ${err instanceof Error ? err.message : 'Unknown error'}`, variant: "destructive" });
-    } finally {
-      // Clean up progress interval
-      if (videoProgressIntervalRef.current) {
-        clearInterval(videoProgressIntervalRef.current);
-        videoProgressIntervalRef.current = null;
-      }
+      toast({ description: `Failed to start video generation: ${err instanceof Error ? err.message : 'Unknown error'}`, variant: "destructive" });
       setGeneratingVideo(false);
       setVideoProgress(0);
     }
+  };
+
+  // Poll for video job status
+  const pollVideoJobStatus = async (jobId: string) => {
+    const pollInterval = 3000; // Poll every 3 seconds
+
+    const poll = async () => {
+      try {
+        const res = await fetch(`/api/video_job_status?job_id=${jobId}`);
+        if (!res.ok) {
+          throw new Error("Failed to get job status");
+        }
+
+        const job = await res.json();
+        console.log("📊 Job status:", job.status, "Progress:", job.progress);
+
+        // Update progress
+        setVideoProgress(job.progress || 0);
+
+        if (job.status === 'completed') {
+          // Job completed successfully
+          console.log("✅ Video generation completed:", job);
+
+          setVideoProgress(100);
+          setVideo({
+            video_url: job.video_url,
+            is_valid: true,
+            duration: job.duration
+          });
+
+          setGeneratedVideoUrl(job.video_url);
+          setGeneratedVideoDuration(job.duration);
+          setVideoSuccessDialogOpen(true);
+
+          toast({ description: `🎬 Video generated successfully! Duration: ${Math.floor(job.duration)}s` });
+
+          setGeneratingVideo(false);
+          setVideoProgress(0);
+        } else if (job.status === 'failed') {
+          // Job failed
+          console.error("❌ Video generation failed:", job.error);
+          toast({ description: `Video generation failed: ${job.error || 'Unknown error'}`, variant: "destructive" });
+
+          setGeneratingVideo(false);
+          setVideoProgress(0);
+        } else {
+          // Still processing - continue polling
+          setTimeout(poll, pollInterval);
+        }
+      } catch (err) {
+        console.error("❌ Error polling job status:", err);
+        toast({ description: "Lost connection to server. Please check if video was generated.", variant: "destructive" });
+        setGeneratingVideo(false);
+        setVideoProgress(0);
+      }
+    };
+
+    // Start polling
+    poll();
   };
 
   const clearStuckJob = async () => {

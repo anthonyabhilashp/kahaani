@@ -1,0 +1,10 @@
+services:
+  kahaani:
+    image: anthonyabhilash/kahaani:latest
+    platform: linux/amd64
+    container_name: kahaani_app
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    restart: unless-stopped

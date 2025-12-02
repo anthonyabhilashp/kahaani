@@ -80,13 +80,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const userId = user.id;
     logger = getUserLogger(userId);
 
-    logger.info(`[${scene.story_id}] 🎙️ Starting audio generation for scene: ${scene_id}`);
-    logger.info(`[${scene.story_id}] User: ${user.email}`);
-    logger.info(`[${scene.story_id}] 🎤 Received voice_id from request: ${voice_id}`);
+    if (logger) { logger.info(`[${scene.story_id}] 🎙️ Starting audio generation for scene: ${scene_id}`); }
+    if (logger) { logger.info(`[${scene.story_id}] User: ${user.email}`); }
+    if (logger) { logger.info(`[${scene.story_id}] 🎤 Received voice_id from request: ${voice_id}`); }
 
     const voiceId = voice_id || "alloy"; // Default to OpenAI's Alloy voice
-    logger.info(`[${scene.story_id}] 🎤 Using voice_id (after default): ${voiceId}`);
-    logger.info(`[${scene.story_id}] 📖 Scene text length: ${sceneText.length} chars`);
+    if (logger) { logger.info(`[${scene.story_id}] 🎤 Using voice_id (after default): ${voiceId}`); }
+    if (logger) { logger.info(`[${scene.story_id}] 📖 Scene text length: ${sceneText.length} chars`); }
 
     // Fetch story for title (for logging)
     const { data: story, error: storyError } = await supabaseAdmin
@@ -101,14 +101,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // 💳 Check credit balance (will deduct AFTER successful generation)
     const creditsNeeded = CREDIT_COSTS.AUDIO_PER_SCENE;
-    logger.info(`[${scene.story_id}] 💳 Credits needed: ${creditsNeeded} (1 credit per audio - will charge after success)`);
+    if (logger) { logger.info(`[${scene.story_id}] 💳 Credits needed: ${creditsNeeded} (1 credit per audio - will charge after success)`); }
 
     // Check credit balance
     const currentBalance = await getUserCredits(userId);
-    logger.info(`[${scene.story_id}] 💰 Current balance: ${currentBalance} credits`);
+    if (logger) { logger.info(`[${scene.story_id}] 💰 Current balance: ${currentBalance} credits`); }
 
     if (currentBalance < creditsNeeded) {
-      logger.warn(`[${scene.story_id}] ❌ Insufficient credits: need ${creditsNeeded}, have ${currentBalance}`);
+      if (logger) { logger.warn(`[${scene.story_id}] ❌ Insufficient credits: need ${creditsNeeded}, have ${currentBalance}`); }
       return res.status(402).json({
         error: `Insufficient credits. You need ${creditsNeeded} credit for audio generation, but you only have ${currentBalance}.`,
         required_credits: creditsNeeded,
@@ -118,7 +118,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Map voice ID to OpenAI voice name
     const openaiVoice = VOICE_MAPPING[voiceId] || VOICE_MAPPING["default"];
-    logger.info(`[${scene.story_id}] 🎤 Mapped voice to OpenAI: ${openaiVoice}`);
+    if (logger) { logger.info(`[${scene.story_id}] 🎤 Mapped voice to OpenAI: ${openaiVoice}`); }
 
     // Calculate TTS speed to match video duration (if video exists)
     let ttsSpeed = 1.0;
@@ -136,14 +136,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // Clamp speed to OpenAI's supported range (0.25 - 4.0)
       ttsSpeed = Math.max(0.25, Math.min(4.0, ttsSpeed));
 
-      logger.info(`[${scene.story_id}] 🎯 Video duration detected: ${targetDuration.toFixed(2)}s`);
-      logger.info(`[${scene.story_id}] 📊 Word count: ${wordCount}, Natural duration: ${naturalDuration.toFixed(2)}s`);
-      logger.info(`[${scene.story_id}] ⚡ Adjusted TTS speed: ${ttsSpeed.toFixed(2)}x to match video`);
+      if (logger) { logger.info(`[${scene.story_id}] 🎯 Video duration detected: ${targetDuration.toFixed(2)}s`); }
+      if (logger) { logger.info(`[${scene.story_id}] 📊 Word count: ${wordCount}, Natural duration: ${naturalDuration.toFixed(2)}s`); }
+      if (logger) { logger.info(`[${scene.story_id}] ⚡ Adjusted TTS speed: ${ttsSpeed.toFixed(2)}x to match video`); }
     }
 
     // 2️⃣ Generate audio with OpenAI TTS
     const audioModel = process.env.AUDIO_MODEL || "tts-1-hd";
-    logger.info(`[${scene.story_id}] 🧠 Generating TTS with OpenAI voice: ${openaiVoice} (model: ${audioModel})`);
+    if (logger) { logger.info(`[${scene.story_id}] 🧠 Generating TTS with OpenAI voice: ${openaiVoice} (model: ${audioModel})`); }
     const ttsRes = await fetch(OPENAI_TTS_API, {
       method: "POST",
       headers: {
@@ -161,12 +161,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (!ttsRes.ok) {
       const errorText = await ttsRes.text();
-      logger.error(`[${scene.story_id}] ❌ OpenAI TTS error: ${errorText}`);
+      if (logger) { logger.error(`[${scene.story_id}] ❌ OpenAI TTS error: ${errorText}`); }
       throw new Error(`OpenAI TTS failed: ${errorText}`);
     }
 
     const audioBuffer = Buffer.from(await ttsRes.arrayBuffer());
-    logger.info(`[${scene.story_id}] ✅ Audio generated successfully`);
+    if (logger) { logger.info(`[${scene.story_id}] ✅ Audio generated successfully`); }
 
     // 3️⃣ Save locally
     const tempDir = path.join(process.cwd(), "tmp", scene_id);
@@ -177,14 +177,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // 4️⃣ Get duration
     const info = await ffprobeAsync(audioPath);
     let duration = info.format?.duration || 0;
-    logger.info(`[${scene.story_id}] ⏱ Audio duration: ${duration.toFixed(2)} seconds`);
+    if (logger) { logger.info(`[${scene.story_id}] ⏱ Audio duration: ${duration.toFixed(2)} seconds`); }
 
     // 4.5️⃣ Adjust audio to match video duration exactly using FFmpeg (if video exists)
     if (targetDuration && Math.abs(duration - targetDuration) > 0.5) {
-      logger.info(`[${scene.story_id}] 🔧 Fine-tuning audio duration to match video exactly...`);
+      if (logger) { logger.info(`[${scene.story_id}] 🔧 Fine-tuning audio duration to match video exactly...`); }
 
       const tempoFactor = duration / targetDuration; // Speed up/slow down
-      logger.info(`[${scene.story_id}] 📐 Tempo adjustment factor: ${tempoFactor.toFixed(3)}x`);
+      if (logger) { logger.info(`[${scene.story_id}] 📐 Tempo adjustment factor: ${tempoFactor.toFixed(3)}x`); }
 
       const adjustedAudioPath = path.join(tempDir, `scene-${scene_id}-adjusted.mp3`);
 
@@ -207,11 +207,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           .audioFilters(filterComplex)
           .output(adjustedAudioPath)
           .on('end', () => {
-            logger.info(`[${scene.story_id}] ✅ Audio duration adjusted successfully`);
+            if (logger) { logger.info(`[${scene.story_id}] ✅ Audio duration adjusted successfully`); }
             resolve();
           })
           .on('error', (err) => {
-            logger.error(`[${scene.story_id}] ❌ FFmpeg adjustment error: ${err.message}`);
+            if (logger) { logger.error(`[${scene.story_id}] ❌ FFmpeg adjustment error: ${err.message}`); }
             reject(err);
           })
           .run();
@@ -224,11 +224,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // Get new duration
       const adjustedInfo = await ffprobeAsync(audioPath);
       duration = adjustedInfo.format?.duration || targetDuration;
-      logger.info(`[${scene.story_id}] ⏱ Final audio duration: ${duration.toFixed(2)} seconds (target: ${targetDuration.toFixed(2)}s)`);
+      if (logger) { logger.info(`[${scene.story_id}] ⏱ Final audio duration: ${duration.toFixed(2)} seconds (target: ${targetDuration.toFixed(2)}s)`); }
     }
 
     // 5️⃣ Generate word-level timestamps using forced alignment
-    logger.info(`[${scene.story_id}] 🔍 Generating word-level timestamps with forced alignment...`);
+    if (logger) { logger.info(`[${scene.story_id}] 🔍 Generating word-level timestamps with forced alignment...`); }
     let wordTimestamps = null;
     try {
       const alignmentResult = await Echogarden.align(audioPath, sceneText, {
@@ -243,15 +243,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         end: entry.endTime
       }));
 
-      logger.info(`[${scene.story_id}] ✅ Generated ${wordTimestamps.length} word timestamps`);
+      if (logger) { logger.info(`[${scene.story_id}] ✅ Generated ${wordTimestamps.length} word timestamps`); }
     } catch (alignErr: any) {
-      logger.warn(`[${scene.story_id}] ⚠️ Word alignment failed, continuing without timestamps: ${alignErr.message}`);
+      if (logger) { logger.warn(`[${scene.story_id}] ⚠️ Word alignment failed, continuing without timestamps: ${alignErr.message}`); }
       // Continue without timestamps rather than failing completely
     }
 
     // 6️⃣ Delete old audio files for this scene (all versions)
     const oldFilePattern = `scene-${scene_id}`;
-    logger.info(`[${scene.story_id}] 🗑️ Removing any existing audio files for scene: ${oldFilePattern}*`);
+    if (logger) { logger.info(`[${scene.story_id}] 🗑️ Removing any existing audio files for scene: ${oldFilePattern}*`); }
 
     // List and delete all files matching this scene
     const { data: existingFiles } = await supabaseAdmin.storage
@@ -265,14 +265,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       if (filesToDelete.length > 0) {
         await supabaseAdmin.storage.from("audio").remove(filesToDelete);
-        logger.info(`[${scene.story_id}] 🗑️ Deleted ${filesToDelete.length} old file(s)`);
+        if (logger) { logger.info(`[${scene.story_id}] 🗑️ Deleted ${filesToDelete.length} old file(s)`); }
       }
     }
 
     // 7️⃣ Upload new audio to Supabase with timestamp to prevent caching
     const timestamp = Date.now();
     const fileName = `scene-${scene_id}-${timestamp}.mp3`;
-    logger.info(`[${scene.story_id}] ☁️ Uploading new audio file: ${fileName}`);
+    if (logger) { logger.info(`[${scene.story_id}] ☁️ Uploading new audio file: ${fileName}`); }
     const { error: uploadErr } = await supabaseAdmin.storage
       .from("audio")
       .upload(fileName, fs.readFileSync(audioPath), {
@@ -281,12 +281,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         cacheControl: 'no-cache, no-store, must-revalidate' // Prevent browser caching
       });
     if (uploadErr) throw uploadErr;
-    logger.info(`[${scene.story_id}] ✅ Audio uploaded successfully`);
+    if (logger) { logger.info(`[${scene.story_id}] ✅ Audio uploaded successfully`); }
 
     const audioUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/audio/${fileName}`;
 
     // 8️⃣ Update scene with audio URL, voice_id, duration, word timestamps, and set audio_generated_at timestamp
-    logger.info(`[${scene.story_id}] 💾 Updating scene ${scene_id} with voice_id: ${voiceId}`);
+    if (logger) { logger.info(`[${scene.story_id}] 💾 Updating scene ${scene_id} with voice_id: ${voiceId}`); }
 
     // Build update object
     const updateData: any = {
@@ -300,9 +300,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Video uploads already have correct duration from video file
     if (!scene.video_url) {
       updateData.duration = duration;
-      logger.info(`[${scene.story_id}] ⏱️ Setting duration from audio: ${duration.toFixed(2)}s (no video exists)`);
+      if (logger) { logger.info(`[${scene.story_id}] ⏱️ Setting duration from audio: ${duration.toFixed(2)}s (no video exists)`); }
     } else {
-      logger.info(`[${scene.story_id}] ⏱️ Preserving existing video duration: ${scene.duration.toFixed(2)}s (video exists)`);
+      if (logger) { logger.info(`[${scene.story_id}] ⏱️ Preserving existing video duration: ${scene.duration.toFixed(2)}s (video exists)`); }
     }
 
     const { error: updateErr } = await supabaseAdmin
@@ -311,18 +311,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .eq("id", scene_id);
 
     if (updateErr) {
-      logger.error(`[${scene.story_id}] ❌ Database update error: ${updateErr.message}`);
+      if (logger) { logger.error(`[${scene.story_id}] ❌ Database update error: ${updateErr.message}`); }
       throw updateErr;
     }
-    logger.info(`[${scene.story_id}] ✅ Scene updated successfully with voice_id: ${voiceId}`);
+    if (logger) { logger.info(`[${scene.story_id}] ✅ Scene updated successfully with voice_id: ${voiceId}`); }
 
     // 9️⃣ Update story metadata (duration and completion status)
-    logger.info(`[${scene.story_id}] 📊 Updating story metadata...`);
+    if (logger) { logger.info(`[${scene.story_id}] 📊 Updating story metadata...`); }
     await updateStoryMetadata(scene.story_id);
-    logger.info(`[${scene.story_id}] ✅ Story metadata updated`);
+    if (logger) { logger.info(`[${scene.story_id}] ✅ Story metadata updated`); }
 
     // 💳 Deduct credits AFTER successful audio generation
-    logger.info(`[${scene.story_id}] 💳 Deducting ${creditsNeeded} credit after successful generation...`);
+    if (logger) { logger.info(`[${scene.story_id}] 💳 Deducting ${creditsNeeded} credit after successful generation...`); }
     const deductResult = await deductCredits(
       userId,
       creditsNeeded,
@@ -332,14 +332,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     );
 
     if (!deductResult.success) {
-      logger.error(`[${scene.story_id}] ⚠️ Failed to deduct credits after generation: ${deductResult.error}`);
+      if (logger) { logger.error(`[${scene.story_id}] ⚠️ Failed to deduct credits after generation: ${deductResult.error}`); }
       // Audio was generated successfully, so we don't fail the request
       // Admin can manually adjust credits if needed
     } else {
-      logger.info(`[${scene.story_id}] ✅ Deducted ${creditsNeeded} credit. New balance: ${deductResult.newBalance}`);
+      if (logger) { logger.info(`[${scene.story_id}] ✅ Deducted ${creditsNeeded} credit. New balance: ${deductResult.newBalance}`); }
     }
 
-    logger.info(`[${scene.story_id}] ✅ Audio saved to Supabase for scene: ${audioUrl}`);
+    if (logger) { logger.info(`[${scene.story_id}] ✅ Audio saved to Supabase for scene: ${audioUrl}`); }
     res.status(200).json({
       scene_id,
       story_id: scene.story_id,
@@ -351,7 +351,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   } catch (err: any) {
     // No refund needed since credits are only deducted after success
     if (logger && storyIdForLog) {
-      logger.error(`[${storyIdForLog}] ❌ Error during audio generation: ${err.message}`);
+      if (logger) { logger.error(`[${storyIdForLog}] ❌ Error during audio generation: ${err.message}`); }
     } else {
       console.error(`❌ Error during audio generation: ${err.message}`);
     }

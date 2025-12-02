@@ -123,6 +123,79 @@ npm build
 npm start
 ```
 
+## Docker Deployment
+
+### ⚠️ CRITICAL: Platform Architecture for VPS Deployment
+
+**ALWAYS use `--platform linux/amd64` when building Docker images for VPS deployment (Hostinger/Hetzner).**
+
+Most VPS servers use AMD64 architecture, but Mac M1/M2/M3 uses ARM64. If you forget the platform flag, the image will build successfully but will fail on the server with "exec format error".
+
+### Quick Deployment
+
+Use the deployment script (recommended):
+
+```bash
+./deploy.sh
+```
+
+This script:
+- Builds Docker image with correct platform flag (`--platform linux/amd64`)
+- Pushes to Docker Hub
+- Displays VPS deployment instructions
+
+### Manual Deployment
+
+**1. Build for AMD64:**
+```bash
+# CRITICAL: Do NOT forget --platform flag!
+docker build --platform linux/amd64 -t anthonyabhilash/kahaani:latest .
+```
+
+**2. Push to Docker Hub:**
+```bash
+docker push anthonyabhilash/kahaani:latest
+```
+
+**3. Deploy on VPS:**
+```bash
+# On Hostinger/Hetzner server via SSH
+
+# Pull image
+docker pull anthonyabhilash/kahaani:latest
+
+# Stop old container
+docker stop kahaani && docker rm kahaani
+
+# Run new container
+docker run -d --name kahaani -p 3000:3000 --env-file .env --restart unless-stopped anthonyabhilash/kahaani:latest
+
+# Check logs
+docker logs -f kahaani
+```
+
+### Troubleshooting
+
+**"exec format error" - Container exits immediately:**
+- **Cause**: Image built for wrong architecture (ARM64 instead of AMD64)
+- **Solution**: Rebuild with `docker build --platform linux/amd64`
+
+**Container keeps restarting:**
+```bash
+docker logs kahaani  # Check error logs
+```
+
+Common causes:
+- Missing environment variables in `.env` file
+- Invalid Supabase credentials
+- Port already in use
+
+### Files
+
+- `Dockerfile` - Multi-stage build (base → builder → runner)
+- `.dockerignore` - Excludes node_modules, .next, logs, tmp
+- `deploy.sh` - Automated deployment script with platform flag
+
 ## Architecture & Data Flow
 
 ### Generation Pipeline
