@@ -592,13 +592,6 @@ export default function StoryDetailsPage() {
       const data = await res.json();
       console.log("📊 Story data received:", data);
 
-      // Redirect cut_shorts to dedicated shorts page
-      if (data.story?.story_type === 'cut_shorts') {
-        console.log("🔀 Redirecting to /shorts page");
-        router.push(`/shorts/${id}`);
-        return;
-      }
-
       // Add cache-busting timestamp to all images and audio to force browser to reload
       // Use timestamp + random to ensure uniqueness even if fetched multiple times in same millisecond
       const timestamp = Date.now();
@@ -1944,7 +1937,7 @@ export default function StoryDetailsPage() {
         throw new Error("Please log in to analyze videos");
       }
 
-      const response = await fetch('/api/analyze_shorts', {
+      const response = await fetch('/api/shorts/generate', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${session.access_token}`,

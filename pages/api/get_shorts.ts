@@ -6,10 +6,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { scene_id } = req.query;
+  const { parent_video_id } = req.query;
 
-  if (!scene_id) {
-    return res.status(400).json({ error: 'scene_id is required' });
+  if (!parent_video_id) {
+    return res.status(400).json({ error: 'parent_video_id is required' });
   }
 
   try {
@@ -26,11 +26,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(401).json({ error: "Unauthorized - Invalid session" });
     }
 
-    // Fetch shorts for this scene
+    // Fetch shorts for this parent video
     const { data: shorts, error } = await supabaseAdmin
       .from('shorts')
       .select('*')
-      .eq('scene_id', scene_id)
+      .eq('parent_video_id', parent_video_id)
       .order('order', { ascending: true });
 
     if (error) {

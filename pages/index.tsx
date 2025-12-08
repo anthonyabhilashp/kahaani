@@ -37,7 +37,6 @@ type Story = {
   video_url: string | null;
   video_created_at: string | null;
   series_id: string | null;
-  story_type?: string | null;
 };
 
 type Series = {
@@ -49,6 +48,16 @@ type Series = {
   created_at: string;
   updated_at: string;
   has_character_consistency?: boolean;
+};
+
+type CutShortVideo = {
+  id: string;
+  title: string | null;
+  created_at: string;
+  video_url: string | null;
+  thumbnail_url: string | null;
+  duration: number | null;
+  shorts_count: number;
 };
 
 // Helper function to format duration
@@ -259,6 +268,8 @@ export default function Dashboard() {
   const [youtubeUrl, setYoutubeUrl] = useState("");
   const [generatingShorts, setGeneratingShorts] = useState(false);
   const [shortsProgress, setShortsProgress] = useState("");
+  const [cutShortVideos, setCutShortVideos] = useState<CutShortVideo[]>([]);
+  const [loadingCutShorts, setLoadingCutShorts] = useState(false);
   const [selectedSeriesView, setSelectedSeriesView] = useState<Series | null>(null); // Track selected series to view its stories
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false); // Track mobile sidebar state
   const [showCreditsPage, setShowCreditsPage] = useState(false); // Track credits page view
@@ -411,13 +422,10 @@ export default function Dashboard() {
       const offset = reset ? 0 : storiesOffset;
       const limit = 10;
 
-      // Build URL with series and story_type filters if provided
+      // Build URL with series filter if provided
       let url = `/api/get_stories?limit=${limit}&offset=${offset}`;
       if (seriesId) {
         url += `&series_id=${seriesId}`;
-      }
-      if (storyType) {
-        url += `&story_type=${storyType}`;
       }
 
       const res = await fetch(url, {
@@ -490,6 +498,53 @@ export default function Dashboard() {
     } catch (err) {
       console.error("Error fetching series:", err);
       setSeries([]);
+    }
+  }
+
+  // Fetch cut short videos from cut_short_videos table
+  async function fetchCutShortVideos() {
+    if (!user) return;
+
+    setLoadingCutShorts(true);
+    try {
+      const { data, error } = await supabase
+        .from("cut_short_videos")
+        .select("id, title, created_at, video_url, thumbnail_url, duration")
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: false });
+
+      if (error) throw error;
+
+      // Get shorts count for each video
+      const videosWithShortCount = await Promise.all(
+        (data || []).map(async (video: any) => {
+          const { count } = await supabase
+            .from("shorts")
+            .select("*", { count: "exact", head: true })
+            .eq("parent_video_id", video.id);
+
+          return {
+            id: video.id,
+            title: video.title,
+            created_at: video.created_at,
+            video_url: video.video_url,
+            thumbnail_url: video.thumbnail_url,
+            duration: video.duration,
+            shorts_count: count || 0
+          };
+        })
+      );
+
+      setCutShortVideos(videosWithShortCount);
+    } catch (err: any) {
+      console.error("Error fetching cut short videos:", err);
+      toast({
+        title: "Error",
+        description: "Failed to load cut short videos",
+        variant: "destructive"
+      });
+    } finally {
+      setLoadingCutShorts(false);
     }
   }
 
@@ -860,7 +915,7 @@ export default function Dashboard() {
     }
   }
 
-  // Handle video upload for Cut Shorts
+  // Handle video upload for Cut Shorts - redirects to /shorts page
   async function handleVideoUpload(file: File) {
     if (!user) return;
 
@@ -869,40 +924,11 @@ export default function Dashboard() {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) throw new Error("Not authenticated");
 
-      const createRes = await fetch("/api/generate_scenes", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${session.access_token}`
-        },
-        body: JSON.stringify({
-          prompt: file.name,
-          title: file.name.replace(/\.[^/.]+$/, ""),
-          sceneCount: 1,
-          voice_id: "alloy",
-          aspect_ratio: "9:16",
-          isBlank: true,
-          story_type: "cut_shorts"
-        })
-      });
-
-      if (!createRes.ok) throw new Error("Failed to create story");
-      const createData = await createRes.json();
-      const storyId = createData.story_id;
-
-      const { data: scenes } = await supabase
-        .from("scenes")
-        .select("id")
-        .eq("story_id", storyId)
-        .single();
-
-      if (!scenes) throw new Error("Scene not found");
-
       const formData = new FormData();
       formData.append("video", file);
-      formData.append("scene_id", scenes.id);
+      formData.append("title", file.name.replace(/\.[^/.]+$/, ""));
 
-      const uploadRes = await fetch("/api/upload-scene-video", {
+      const uploadRes = await fetch("/api/cut-short-videos/upload", {
         method: "POST",
         headers: {
           "Authorization": `Bearer ${session.access_token}`
@@ -916,14 +942,21 @@ export default function Dashboard() {
       }
 
       const uploadData = await uploadRes.json();
-      const videoUrl = uploadData.video_url;
+      const videoId = uploadData.cut_short_video?.id;
 
       toast({
         title: "Success",
-        description: "Video uploaded successfully. Click 'Analyze Shorts' to generate suggestions."
+        description: "Video uploaded successfully"
       });
 
       setUploadDialogOpen(false);
+
+      // Navigate to the shorts editor
+      if (videoId) {
+        router.push(`/shorts/${videoId}`);
+      } else {
+        router.push('/shorts');
+      }
     } catch (err: any) {
       console.error("Error uploading video:", err);
       toast({
@@ -936,7 +969,7 @@ export default function Dashboard() {
     }
   }
 
-  // Handle YouTube import for Cut Shorts
+  // Handle YouTube import for Cut Shorts - redirects to /shorts page
   async function handleYouTubeImport() {
     if (!user || !youtubeUrl.trim()) return;
 
@@ -945,44 +978,15 @@ export default function Dashboard() {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) throw new Error("Not authenticated");
 
-      const createRes = await fetch("/api/generate_scenes", {
+      const importRes = await fetch("/api/shorts/import-youtube", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           "Authorization": `Bearer ${session.access_token}`
         },
         body: JSON.stringify({
-          prompt: youtubeUrl,
-          title: "YouTube Import",
-          sceneCount: 1,
-          voice_id: "alloy",
-          aspect_ratio: "9:16",
-          isBlank: true,
-          story_type: "cut_shorts"
-        })
-      });
-
-      if (!createRes.ok) throw new Error("Failed to create story");
-      const createData = await createRes.json();
-      const storyId = createData.story_id;
-
-      const { data: scenes } = await supabase
-        .from("scenes")
-        .select("id")
-        .eq("story_id", storyId)
-        .single();
-
-      if (!scenes) throw new Error("Scene not found");
-
-      const importRes = await fetch("/api/import-youtube-video", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${session.access_token}`
-        },
-        body: JSON.stringify({
-          scene_id: scenes.id,
-          youtube_url: youtubeUrl
+          youtube_url: youtubeUrl,
+          title: "YouTube Import"
         })
       });
 
@@ -992,15 +996,22 @@ export default function Dashboard() {
       }
 
       const importData = await importRes.json();
-      const videoUrl = importData.video_url;
+      const videoId = importData.cut_short_video?.id;
 
       toast({
         title: "Success",
-        description: "YouTube video imported successfully. Click 'Analyze Shorts' to generate suggestions."
+        description: "YouTube video imported successfully"
       });
 
       setImportDialogOpen(false);
       setYoutubeUrl("");
+
+      // Navigate to the shorts editor
+      if (videoId) {
+        router.push(`/shorts/${videoId}`);
+      } else {
+        router.push('/shorts');
+      }
     } catch (err: any) {
       console.error("Error importing YouTube video:", err);
       toast({
@@ -1023,7 +1034,7 @@ export default function Dashboard() {
       if (!session) throw new Error("Not authenticated");
 
       // Analyze video to get AI suggestions
-      const analyzeRes = await fetch("/api/analyze_shorts", {
+      const analyzeRes = await fetch("/api/shorts/generate", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -1057,7 +1068,7 @@ export default function Dashboard() {
       }
 
       // Refresh the Cut Shorts grid
-      fetchStories(true, null, 'cut_shorts');
+      fetchCutShortVideos();
 
     } catch (err: any) {
       console.error("Error analyzing video:", err);
@@ -1108,16 +1119,8 @@ export default function Dashboard() {
 
   // Stable callbacks for StoryCard
   const handleStoryNavigate = React.useCallback((storyId: string) => {
-    // Find the story to check its type
-    const story = stories.find(s => s.id === storyId);
-
-    // Route to appropriate page based on story type
-    if (story?.story_type === 'cut_shorts') {
-      router.push(`/shorts/${storyId}`);
-    } else {
-      router.push(`/story/${storyId}`);
-    }
-  }, [router, stories]);
+    router.push(`/story/${storyId}`);
+  }, [router]);
 
   const handleStoryDelete = React.useCallback((e: React.MouseEvent, storyId: string) => {
     handleDeleteClick(e, storyId);
@@ -1561,7 +1564,7 @@ export default function Dashboard() {
                     setShowHelpPage(false);
                     setShowCreateStoryForm(false);
                     setMobileMenuOpen(false);
-                    fetchStories(true, null, 'cut_shorts');
+                    fetchCutShortVideos();
                   }}
                   className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors mt-1 ${
                     selectedCategory === "cut-shorts"
@@ -1728,7 +1731,7 @@ export default function Dashboard() {
                 setShowHelpPage(false);
                 setShowCreateStoryForm(false);
                 setMobileMenuOpen(false);
-                fetchStories(true, null, 'cut_shorts');
+                fetchCutShortVideos();
               }}
               className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all mt-2 ${
                 selectedCategory === "cut-shorts"
@@ -2391,7 +2394,11 @@ export default function Dashboard() {
                   This may take a minute. Please don't close this page.
                 </p>
               </div>
-            ) : stories.length === 0 ? (
+            ) : loadingCutShorts ? (
+              <div className="text-center py-20">
+                <Loader2 className="w-8 h-8 text-orange-500 animate-spin mx-auto" />
+              </div>
+            ) : cutShortVideos.length === 0 ? (
               <div className="text-center py-20">
                 <div className="mb-6 flex justify-center">
                   <div className="w-24 h-24 rounded-full bg-orange-900/20 flex items-center justify-center">
@@ -2422,35 +2429,81 @@ export default function Dashboard() {
               </div>
             ) : (
               <>
-                {/* Cut Shorts Grid */}
-                <StoryGrid
-                  stories={stories}
-                  showEpisodeBadge={false}
-                  totalStories={totalStories}
-                  seriesMap={seriesMap}
-                  onDelete={handleStoryDelete}
-                  onNavigate={handleStoryNavigate}
-                />
-                {/* Load More button */}
-                {hasMoreStories && stories.length > 0 && (
-                  <div className="flex justify-center mt-8">
-                    <Button
-                      onClick={loadMoreStories}
-                      disabled={loadingMoreStories}
-                      variant="outline"
-                      className="bg-gray-800 border-gray-700 text-white hover:bg-gray-700 hover:text-white"
+                {/* Cut Shorts Video Grid */}
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
+                  {cutShortVideos.map((video) => (
+                    <div
+                      key={video.id}
+                      onClick={() => router.push(`/shorts/${video.id}`)}
+                      className="group cursor-pointer relative"
                     >
-                      {loadingMoreStories ? (
-                        <>
-                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                          Loading...
-                        </>
-                      ) : (
-                        `Load More (${totalStories - stories.length} remaining)`
-                      )}
-                    </Button>
-                  </div>
-                )}
+                      <div className="relative rounded-md overflow-hidden bg-gray-900 border border-gray-800 hover:border-orange-600 transition-all duration-200 aspect-[9/16]">
+                        {video.thumbnail_url ? (
+                          <Image
+                            src={video.thumbnail_url}
+                            alt={video.title || "Video"}
+                            fill
+                            className="object-cover group-hover:scale-105 transition-transform duration-300"
+                            loading="eager"
+                            unoptimized
+                          />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-gray-800 to-gray-900">
+                            <Video className="w-8 h-8 text-gray-600" />
+                          </div>
+                        )}
+
+                        {/* Menu Button */}
+                        <div className="absolute top-1.5 right-1.5">
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
+                              <button className="p-1.5 bg-black/60 hover:bg-black/80 rounded-md transition-colors backdrop-blur-sm">
+                                <MoreHorizontal className="w-3.5 h-3.5 text-white" />
+                              </button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end" className="bg-gray-900 border-gray-800">
+                              <DropdownMenuItem
+                                onClick={async (e) => {
+                                  e.stopPropagation();
+                                  if (!confirm("Are you sure you want to delete this video and all its shorts?")) return;
+                                  try {
+                                    // Delete the video (shorts cascade automatically)
+                                    await supabase.from("cut_short_videos").delete().eq("id", video.id);
+                                    toast({ title: "Success", description: "Video deleted successfully" });
+                                    fetchCutShortVideos();
+                                  } catch (err) {
+                                    toast({ title: "Error", description: "Failed to delete video", variant: "destructive" });
+                                  }
+                                }}
+                                className="text-red-400 hover:text-red-300 hover:bg-gray-800 cursor-pointer"
+                              >
+                                <Trash2 className="w-4 h-4 mr-2" />
+                                Delete video
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </div>
+
+                        {/* Info Overlay */}
+                        <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 via-black/70 to-transparent p-2">
+                          <h3 className="text-[11px] font-semibold text-white leading-tight line-clamp-2 mb-1">
+                            {video.title || "Untitled Video"}
+                          </h3>
+                          <div className="flex items-center gap-2 text-[9px] text-gray-400">
+                            <span className="flex items-center gap-0.5">
+                              <Scissors className="w-2.5 h-2.5" />
+                              {video.shorts_count}
+                            </span>
+                            <span className="flex items-center gap-0.5">
+                              <Clock className="w-2.5 h-2.5" />
+                              {formatDuration(video.duration)}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </>
             )}
           </>

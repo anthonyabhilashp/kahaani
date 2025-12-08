@@ -8,14 +8,13 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Loader2, Upload, Video, Trash2, Clock, Scissors, Youtube, ArrowLeft } from "lucide-react";
+import { Loader2, Upload, Video, Trash2, Clock, Scissors, Youtube } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 
 type SourceVideo = {
   id: string;
   title: string | null;
   created_at: string;
-  scene_id: string;
   video_url: string | null;
   thumbnail_url: string | null;
   duration: number | null;
@@ -27,7 +26,6 @@ export default function ShortsPage() {
   const { user, loading: authLoading } = useAuth();
   const [sourceVideos, setSourceVideos] = useState<SourceVideo[]>([]);
   const [loading, setLoading] = useState(true);
-  const [selectedStoryId, setSelectedStoryId] = useState<string | null>(null);
 
   // Upload dialog state
   const [uploadDialogOpen, setUploadDialogOpen] = useState(false);
@@ -42,48 +40,35 @@ export default function ShortsPage() {
     }
   }, [user, authLoading, router]);
 
-  // Fetch source videos (stories with story_type='cut_shorts')
+  // Fetch source videos from cut_short_videos table
   const fetchSourceVideos = async () => {
     if (!user) return;
 
     setLoading(true);
     try {
       const { data, error } = await supabase
-        .from("stories")
-        .select(`
-          id,
-          title,
-          created_at,
-          scenes (
-            id,
-            video_url,
-            image_url,
-            duration
-          )
-        `)
+        .from("cut_short_videos")
+        .select("id, title, created_at, video_url, thumbnail_url, duration")
         .eq("user_id", user.id)
-        .eq("story_type", "cut_shorts")
         .order("created_at", { ascending: false });
 
       if (error) throw error;
 
+      // Get shorts count for each video
       const videosWithShortCount = await Promise.all(
-        (data || []).map(async (story: any) => {
-          const scene = story.scenes?.[0];
-
+        (data || []).map(async (video: any) => {
           const { count } = await supabase
             .from("shorts")
             .select("*", { count: "exact", head: true })
-            .eq("story_id", story.id);
+            .eq("parent_video_id", video.id);
 
           return {
-            id: story.id,
-            title: story.title,
-            created_at: story.created_at,
-            scene_id: scene?.id,
-            video_url: scene?.video_url,
-            thumbnail_url: scene?.image_url,
-            duration: scene?.duration,
+            id: video.id,
+            title: video.title,
+            created_at: video.created_at,
+            video_url: video.video_url,
+            thumbnail_url: video.thumbnail_url,
+            duration: video.duration,
             shorts_count: count || 0
           };
         })
@@ -117,40 +102,11 @@ export default function ShortsPage() {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) throw new Error("Not authenticated");
 
-      const createRes = await fetch("/api/generate_scenes", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${session.access_token}`
-        },
-        body: JSON.stringify({
-          prompt: file.name,
-          title: file.name.replace(/\.[^/.]+$/, ""),
-          sceneCount: 1,
-          voice_id: "alloy",
-          aspect_ratio: "9:16",
-          isBlank: true,
-          story_type: "cut_shorts"
-        })
-      });
-
-      if (!createRes.ok) throw new Error("Failed to create story");
-      const createData = await createRes.json();
-      const storyId = createData.story_id;
-
-      const { data: scenes } = await supabase
-        .from("scenes")
-        .select("id")
-        .eq("story_id", storyId)
-        .single();
-
-      if (!scenes) throw new Error("Scene not found");
-
       const formData = new FormData();
       formData.append("video", file);
-      formData.append("scene_id", scenes.id);
+      formData.append("title", file.name.replace(/\.[^/.]+$/, ""));
 
-      const uploadRes = await fetch("/api/upload-scene-video", {
+      const uploadRes = await fetch("/api/cut-short-videos/upload", {
         method: "POST",
         headers: {
           "Authorization": `Bearer ${session.access_token}`
@@ -191,44 +147,15 @@ export default function ShortsPage() {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) throw new Error("Not authenticated");
 
-      const createRes = await fetch("/api/generate_scenes", {
+      const importRes = await fetch("/api/shorts/import-youtube", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           "Authorization": `Bearer ${session.access_token}`
         },
         body: JSON.stringify({
-          prompt: youtubeUrl,
-          title: "YouTube Import",
-          sceneCount: 1,
-          voice_id: "alloy",
-          aspect_ratio: "9:16",
-          isBlank: true,
-          story_type: "cut_shorts"
-        })
-      });
-
-      if (!createRes.ok) throw new Error("Failed to create story");
-      const createData = await createRes.json();
-      const storyId = createData.story_id;
-
-      const { data: scenes } = await supabase
-        .from("scenes")
-        .select("id")
-        .eq("story_id", storyId)
-        .single();
-
-      if (!scenes) throw new Error("Scene not found");
-
-      const importRes = await fetch("/api/import-youtube-video", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${session.access_token}`
-        },
-        body: JSON.stringify({
-          scene_id: scenes.id,
-          youtube_url: youtubeUrl
+          youtube_url: youtubeUrl,
+          title: "YouTube Import"
         })
       });
 
@@ -258,14 +185,35 @@ export default function ShortsPage() {
   };
 
   // Handle delete source video
-  const handleDeleteVideo = async (storyId: string) => {
+  const handleDeleteVideo = async (videoId: string) => {
     if (!confirm("Are you sure you want to delete this video and all its shorts?")) return;
 
     try {
+      // 1️⃣ Get the video record first to get file URLs
+      const video = sourceVideos.find(v => v.id === videoId);
+
+      // 2️⃣ Delete files from Supabase Storage
+      if (video?.video_url) {
+        // Extract path from URL: .../storage/v1/object/public/videos/userId/filename.mp4
+        const videoPath = video.video_url.split('/storage/v1/object/public/videos/')[1];
+        if (videoPath) {
+          await supabase.storage.from("videos").remove([videoPath]);
+        }
+      }
+
+      if (video?.thumbnail_url) {
+        // Extract path from URL: .../storage/v1/object/public/images/userId/filename.jpg
+        const thumbnailPath = video.thumbnail_url.split('/storage/v1/object/public/images/')[1];
+        if (thumbnailPath) {
+          await supabase.storage.from("images").remove([thumbnailPath]);
+        }
+      }
+
+      // 3️⃣ Delete the database record (shorts cascade automatically via foreign key)
       const { error } = await supabase
-        .from("stories")
+        .from("cut_short_videos")
         .delete()
-        .eq("id", storyId);
+        .eq("id", videoId);
 
       if (error) throw error;
 
@@ -275,9 +223,6 @@ export default function ShortsPage() {
       });
 
       fetchSourceVideos();
-      if (selectedStoryId === storyId) {
-        setSelectedStoryId(null);
-      }
     } catch (err: any) {
       console.error("Error deleting video:", err);
       toast({
@@ -304,76 +249,6 @@ export default function ShortsPage() {
     );
   }
 
-  // If a story is selected, show story detail view with sidebar
-  if (selectedStoryId) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-black text-gray-100">
-        <div className="flex h-screen">
-          {/* Sidebar with source videos */}
-          <div className="w-80 border-r border-gray-800 bg-gray-900/30 overflow-y-auto flex-shrink-0">
-            <div className="p-4">
-              <Button
-                onClick={() => setSelectedStoryId(null)}
-                variant="ghost"
-                size="sm"
-                className="mb-4 w-full justify-start"
-              >
-                <ArrowLeft className="w-4 h-4 mr-2" />
-                Back to Shorts
-              </Button>
-              <h2 className="text-sm font-semibold text-gray-400 uppercase mb-3">Source Videos</h2>
-              <div className="space-y-2">
-                {sourceVideos.map((video) => (
-                  <div
-                    key={video.id}
-                    onClick={() => setSelectedStoryId(video.id)}
-                    className={`p-3 rounded-lg cursor-pointer transition-colors ${
-                      selectedStoryId === video.id
-                        ? "bg-orange-600/20 border border-orange-600"
-                        : "bg-gray-800/50 border border-transparent hover:border-gray-700"
-                    }`}
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="relative w-16 h-10 rounded overflow-hidden bg-gray-800 flex-shrink-0">
-                        {video.thumbnail_url ? (
-                          <Image
-                            src={video.thumbnail_url}
-                            alt={video.title || "Video"}
-                            fill
-                            className="object-cover"
-                            unoptimized
-                          />
-                        ) : (
-                          <div className="w-full h-full flex items-center justify-center">
-                            <Video className="w-4 h-4 text-gray-600" />
-                          </div>
-                        )}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium truncate">{video.title || "Untitled"}</p>
-                        <p className="text-xs text-gray-500">{video.shorts_count} shorts</p>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          {/* Main content - Story detail view */}
-          <div className="flex-1 overflow-hidden">
-            <iframe
-              src={`/story/${selectedStoryId}`}
-              className="w-full h-full border-0"
-              title="Story Detail"
-            />
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // Default view - grid of source videos
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-black text-gray-100">
       {/* Header */}
@@ -443,7 +318,7 @@ export default function ShortsPage() {
             {sourceVideos.map((video) => (
               <Card
                 key={video.id}
-                onClick={() => setSelectedStoryId(video.id)}
+                onClick={() => router.push(`/shorts/${video.id}`)}
                 className="bg-gray-900/50 border-gray-800 hover:border-orange-600 cursor-pointer transition-all group overflow-hidden"
               >
                 <div className="aspect-video relative bg-gray-800">
@@ -521,7 +396,7 @@ export default function ShortsPage() {
             {uploading && (
               <div className="flex items-center gap-2 text-sm text-gray-400">
                 <Loader2 className="w-4 h-4 animate-spin" />
-                Uploading and transcribing...
+                Uploading...
               </div>
             )}
           </div>

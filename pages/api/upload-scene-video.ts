@@ -123,20 +123,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (logger) { logger.info(`[Scene ${scene_id}] User: ${user.email}`); }
     if (logger) { logger.info(`[Scene ${scene_id}] File: ${videoFile.originalFilename}, Size: ${(videoFile.size / 1024 / 1024).toFixed(2)}MB`); }
 
-    // 1️⃣ Fetch scene data with story type
+    // 1️⃣ Fetch scene data
     const { data: scene, error: sceneErr } = await supabaseAdmin
       .from("scenes")
-      .select("id, story_id, text, stories!inner(story_type)")
+      .select("id, story_id, text")
       .eq("id", scene_id)
       .single();
 
     if (sceneErr || !scene) {
       throw new Error("Scene not found");
     }
-
-    const storyType = (scene as any).stories?.story_type;
-    const isCutShorts = storyType === 'cut_shorts';
-    if (logger) { logger.info(`[Scene ${scene_id}] Story type: ${storyType}, Skip transcription: ${isCutShorts}`); }
 
     // 2️⃣ Get video duration first (needed for credit calculation)
     tempVideoPath = videoFile.filepath;
@@ -262,20 +258,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await extractAudio(tempVideoPath, tempAudioPath);
     if (logger) { logger.info(`[Scene ${scene_id}] ✅ Audio extracted`); }
 
-    // 6️⃣ Recognize speech with Echogarden (skip for cut_shorts - transcribe on-demand during analysis)
-    let text = '';
-    let word_timestamps: Array<{ word: string; start: number; end: number }> = [];
-
-    if (!isCutShorts) {
-      if (logger) { logger.info(`[Scene ${scene_id}] 🎙️ Recognizing speech with Echogarden (local Whisper engine)...`); }
-      const transcription = await transcribeWithEchogarden(tempAudioPath);
-      text = transcription.text;
-      word_timestamps = transcription.word_timestamps;
-      if (logger) { logger.info(`[Scene ${scene_id}] ✅ Recognition complete: "${text.substring(0, 100)}..."`); }
-      if (logger) { logger.info(`[Scene ${scene_id}] 📝 Generated ${word_timestamps.length} word timestamps`); }
-    } else {
-      if (logger) { logger.info(`[Scene ${scene_id}] ⏭️ Skipping transcription (cut_shorts - will transcribe on-demand during analysis)`); }
-    }
+    // 6️⃣ Recognize speech with Echogarden
+    if (logger) { logger.info(`[Scene ${scene_id}] 🎙️ Recognizing speech with Echogarden (local Whisper engine)...`); }
+    const transcription = await transcribeWithEchogarden(tempAudioPath);
+    const text = transcription.text;
+    const word_timestamps = transcription.word_timestamps;
+    if (logger) { logger.info(`[Scene ${scene_id}] ✅ Recognition complete: "${text.substring(0, 100)}..."`); }
+    if (logger) { logger.info(`[Scene ${scene_id}] 📝 Generated ${word_timestamps.length} word timestamps`); }
 
     // 7️⃣ Upload audio to Supabase Storage
     const audioBuffer = fs.readFileSync(tempAudioPath);

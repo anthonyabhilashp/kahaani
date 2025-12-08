@@ -14,17 +14,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    let query = supabaseAdmin.from("video_generation_jobs").select("*");
+    let job: any = null;
+    let error: any = null;
 
     if (job_id && typeof job_id === "string") {
       // Query by job_id
-      query = query.eq("id", job_id).single();
+      const result = await supabaseAdmin
+        .from("video_generation_jobs")
+        .select("*")
+        .eq("id", job_id)
+        .single();
+      job = result.data;
+      error = result.error;
     } else if (story_id && typeof story_id === "string") {
       // Query by story_id - get latest processing job
-      query = query.eq("story_id", story_id).eq("status", "processing").order("started_at", { ascending: false }).limit(1).maybeSingle();
+      const result = await supabaseAdmin
+        .from("video_generation_jobs")
+        .select("*")
+        .eq("story_id", story_id)
+        .eq("status", "processing")
+        .order("started_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      job = result.data;
+      error = result.error;
     }
-
-    const { data: job, error } = await query;
 
     if (error) {
       console.error("Error fetching job:", error);

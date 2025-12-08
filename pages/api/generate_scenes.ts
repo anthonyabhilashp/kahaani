@@ -31,7 +31,7 @@ export const config = { api: { bodyParser: { sizeLimit: "4mb" } } };
 
 // --- Handler ---
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const { prompt, title, story_id, sceneCount = 5, manualScenes, isManual = false, voice_id, aspect_ratio, isBlank = false, story_type = 'regular' } = req.body;
+  const { prompt, title, story_id, sceneCount = 5, manualScenes, isManual = false, voice_id, aspect_ratio, isBlank = false } = req.body;
   if (!prompt) return res.status(400).json({ error: "Prompt required" });
 
   let logger: any = null;
@@ -80,8 +80,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         prompt,
         user_id: user.id,  // 🔑 Ensure user_id is set (fixes old stories without user_id)
         voice_id: voice_id || 'alloy',
-        aspect_ratio: aspect_ratio || '9:16',
-        story_type: story_type || 'regular'
+        aspect_ratio: aspect_ratio || '9:16'
       }).eq("id", storyId);
     } else {
       logger.log(`🆕 Creating new story for: "${prompt}"`);
@@ -94,8 +93,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           status: isBlank ? "complete" : "processing",  // Blank stories are complete immediately
           user_id: user.id,  // 🔑 Link story to authenticated user
           voice_id: voice_id || 'alloy',
-          aspect_ratio: aspect_ratio || '9:16',
-          story_type: story_type || 'regular'
+          aspect_ratio: aspect_ratio || '9:16'
         }]);
       if (storyErr) throw storyErr;
     }

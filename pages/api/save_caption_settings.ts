@@ -6,10 +6,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  const { story_id, caption_settings } = req.body;
+  const { story_id, short_id, caption_settings } = req.body;
 
-  if (!story_id) {
-    return res.status(400).json({ error: "story_id is required" });
+  if (!story_id && !short_id) {
+    return res.status(400).json({ error: "story_id or short_id is required" });
   }
 
   if (!caption_settings) {
@@ -34,26 +34,49 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: "Invalid caption_settings: enabled must be boolean" });
     }
 
-    // Update the story with new caption settings
-    const { data, error } = await supabaseAdmin
-      .from("stories")
-      .update({
-        caption_settings,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", story_id)
-      .select()
-      .single();
+    // Update either shorts or stories table based on which ID is provided
+    if (short_id) {
+      // Update short with caption settings
+      const { data, error } = await supabaseAdmin
+        .from("shorts")
+        .update({
+          caption_settings,
+        })
+        .eq("id", short_id)
+        .select()
+        .single();
 
-    if (error) {
-      console.error("Error saving caption settings:", error);
-      return res.status(500).json({ error: error.message });
+      if (error) {
+        console.error("Error saving caption settings for short:", error);
+        return res.status(500).json({ error: error.message });
+      }
+
+      return res.status(200).json({
+        success: true,
+        caption_settings: data.caption_settings
+      });
+    } else {
+      // Update story with caption settings
+      const { data, error } = await supabaseAdmin
+        .from("stories")
+        .update({
+          caption_settings,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", story_id)
+        .select()
+        .single();
+
+      if (error) {
+        console.error("Error saving caption settings:", error);
+        return res.status(500).json({ error: error.message });
+      }
+
+      return res.status(200).json({
+        success: true,
+        caption_settings: data.caption_settings
+      });
     }
-
-    return res.status(200).json({
-      success: true,
-      caption_settings: data.caption_settings
-    });
   } catch (err: any) {
     console.error("Error in save_caption_settings:", err);
     return res.status(500).json({ error: err.message });
