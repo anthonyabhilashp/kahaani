@@ -6,6 +6,7 @@ import { tmpdir } from "os";
 import ffmpeg from "fluent-ffmpeg";
 import * as Echogarden from "echogarden";
 import fetch from "node-fetch";
+import { spawn } from "child_process";
 
 export const config = { api: { bodyParser: { sizeLimit: "4mb" } } };
 
@@ -15,6 +16,53 @@ async function downloadAudio(url: string, outputPath: string): Promise<void> {
   if (!response.ok) throw new Error(`Failed to download audio: ${response.statusText}`);
   const buffer = await response.buffer();
   fs.writeFileSync(outputPath, buffer);
+}
+
+const COOKIES_PATH = '/root/cookies.txt';
+
+// Download audio segment from YouTube using yt-dlp
+async function downloadYouTubeAudio(url: string, outputPath: string, startTime?: number, endTime?: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const args = [
+      '-f', 'bestaudio[ext=m4a]/bestaudio/best',
+      '-x', '--audio-format', 'mp3',
+      '-o', outputPath,
+    ];
+
+    // Only use cookies if the file exists (production server)
+    if (fs.existsSync(COOKIES_PATH)) {
+      args.push('--cookies', COOKIES_PATH);
+    }
+
+    // Add time range if specified (download only the segment needed)
+    if (startTime !== undefined && endTime !== undefined) {
+      args.push('--download-sections', `*${startTime}-${endTime}`);
+      console.log(`📥 Downloading audio segment ${startTime}s - ${endTime}s from YouTube...`);
+    } else {
+      console.log("📥 Downloading full audio from YouTube...");
+    }
+
+    args.push(url);
+
+    const proc = spawn('yt-dlp', args);
+
+    let stderr = '';
+    proc.stderr.on('data', (data) => { stderr += data.toString(); });
+
+    proc.on('close', (code) => {
+      if (code === 0) {
+        console.log("✅ YouTube audio download completed");
+        resolve();
+      } else {
+        console.error("❌ yt-dlp audio download failed:", stderr);
+        reject(new Error(`Failed to download YouTube audio: ${stderr || 'Unknown error'}`));
+      }
+    });
+
+    proc.on('error', (err) => {
+      reject(new Error(`Failed to spawn yt-dlp: ${err.message}`));
+    });
+  });
 }
 
 // Extract audio clip for time range
@@ -111,15 +159,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    // Get parent video for audio_url
+    // Get parent video for audio_url or youtube_url
     const { data: parentVideo, error: parentError } = await supabaseAdmin
       .from('cut_short_videos')
-      .select('audio_url')
+      .select('audio_url, youtube_url, duration')
       .eq('id', short.parent_video_id)
       .single();
 
-    if (parentError || !parentVideo || !parentVideo.audio_url) {
-      return res.status(400).json({ error: 'Parent video audio not found' });
+    if (parentError || !parentVideo) {
+      return res.status(400).json({ error: 'Parent video not found' });
+    }
+
+    if (!parentVideo.audio_url && !parentVideo.youtube_url) {
+      return res.status(400).json({ error: 'No audio source available (no audio_url or youtube_url)' });
     }
 
     // Generate captions for ±60s range (so user can adjust timing without regenerating)
@@ -131,15 +183,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     console.log(`⏱️ Short range: ${short.start_time}s - ${short.end_time}s`);
     console.log(`⏱️ Caption range (±60s): ${captionStart}s - ${captionEnd}s`);
 
-    // Download full audio
+    // Download audio (from storage or YouTube)
     fullAudioPath = path.join(tmpdir(), `full-audio-${short_id}-${Date.now()}.mp3`);
-    console.log(`📥 Downloading audio...`);
-    await downloadAudio(parentVideo.audio_url, fullAudioPath);
-
-    // Extract extended clip for caption range (±60s)
     clipAudioPath = path.join(tmpdir(), `clip-audio-${short_id}-${Date.now()}.mp3`);
-    console.log(`✂️ Extracting extended clip for captions...`);
-    await extractAudioClip(fullAudioPath, clipAudioPath, captionStart, captionEnd);
+
+    if (parentVideo.audio_url) {
+      // Download from storage, then extract clip with ffmpeg
+      console.log(`📥 Downloading audio from storage...`);
+      await downloadAudio(parentVideo.audio_url, fullAudioPath);
+      console.log(`✂️ Extracting clip for captions...`);
+      await extractAudioClip(fullAudioPath, clipAudioPath, captionStart, captionEnd);
+    } else if (parentVideo.youtube_url) {
+      // Download only the segment needed directly from YouTube (faster!)
+      await downloadYouTubeAudio(parentVideo.youtube_url, clipAudioPath, captionStart, captionEnd);
+    }
 
     // Transcribe with Whisper
     console.log(`🎙️ Transcribing with Whisper...`);

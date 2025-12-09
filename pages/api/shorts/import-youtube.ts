@@ -2,12 +2,11 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { supabaseAdmin } from "../../../lib/supabaseAdmin";
 import { spawn } from "child_process";
 import { getUserLogger } from "../../../lib/userLogger";
-import fetch from "node-fetch";
 import fs from "fs";
-import path from "path";
-import { tmpdir } from "os";
 
 export const config = { api: { bodyParser: { sizeLimit: "4mb" } } };
+
+const COOKIES_PATH = '/root/cookies.txt';
 
 // Extract YouTube video ID from URL
 function extractYouTubeVideoId(url: string): string | null {
@@ -23,39 +22,6 @@ function extractYouTubeVideoId(url: string): string | null {
   return null;
 }
 
-// Download audio from YouTube using yt-dlp
-async function downloadYouTubeAudio(url: string, outputPath: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const args = [
-      '-f', 'bestaudio[ext=m4a]/bestaudio/best',
-      '-x', '--audio-format', 'mp3',
-      '-o', outputPath,
-      '--cookies', '/root/cookies.txt', // YouTube cookies to avoid bot detection
-      url
-    ];
-
-    console.log("📥 Downloading audio from YouTube...");
-    const process = spawn('yt-dlp', args);
-
-    let stderr = '';
-    process.stderr.on('data', (data) => { stderr += data.toString(); });
-
-    process.on('close', (code) => {
-      if (code === 0) {
-        console.log("✅ Audio download completed");
-        resolve();
-      } else {
-        console.error("❌ yt-dlp audio download failed:", stderr);
-        reject(new Error(`Failed to download audio: ${stderr || 'Unknown error'}`));
-      }
-    });
-
-    process.on('error', (err) => {
-      reject(new Error(`Failed to spawn yt-dlp: ${err.message}`));
-    });
-  });
-}
-
 // Get video metadata using yt-dlp (title, duration, aspect ratio) - NO download
 async function getYouTubeMetadata(url: string): Promise<{ title: string; duration: number; aspectRatio: string }> {
   return new Promise((resolve, reject) => {
@@ -65,9 +31,14 @@ async function getYouTubeMetadata(url: string): Promise<{ title: string; duratio
       '--print', '%(width)s',
       '--print', '%(height)s',
       '--no-download',
-      '--cookies', '/root/cookies.txt', // YouTube cookies to avoid bot detection
-      url
     ];
+
+    // Only use cookies if the file exists (production server)
+    if (fs.existsSync(COOKIES_PATH)) {
+      args.push('--cookies', COOKIES_PATH);
+    }
+
+    args.push(url);
 
     console.log("📊 Fetching YouTube metadata...");
     const process = spawn('yt-dlp', args);
@@ -170,36 +141,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const thumbnailUrl = `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`;
     if (logger) { logger.info(`🖼️ Using YouTube thumbnail: ${thumbnailUrl}`); }
 
-    // 3️⃣ Download audio from YouTube
-    const audioFileName = `${userId}/cut-short-audio-${videoId}-${Date.now()}.mp3`;
-    const tempAudioPath = path.join(tmpdir(), `yt-audio-${videoId}-${Date.now()}.mp3`);
-
-    if (logger) { logger.info(`📥 Downloading audio from YouTube...`); }
-    await downloadYouTubeAudio(youtube_url, tempAudioPath);
-
-    // 4️⃣ Upload audio to Supabase Storage
-    if (logger) { logger.info(`☁️ Uploading audio to storage...`); }
-    const audioBuffer = fs.readFileSync(tempAudioPath);
-
-    const { error: audioUploadError } = await supabaseAdmin.storage
-      .from("audio")
-      .upload(audioFileName, audioBuffer, {
-        contentType: "audio/mpeg",
-        upsert: false,
-      });
-
-    // Cleanup temp file
-    if (fs.existsSync(tempAudioPath)) fs.unlinkSync(tempAudioPath);
-
-    if (audioUploadError) {
-      if (logger) { logger.error(`❌ Audio upload error: ${audioUploadError.message}`); }
-      throw audioUploadError;
-    }
-
-    const audioUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/audio/${audioFileName}`;
-    if (logger) { logger.info(`✅ Audio uploaded: ${audioUrl}`); }
-
-    // 5️⃣ Insert into cut_short_videos table
+    // 3️⃣ Insert into cut_short_videos table (audio downloaded later when generating captions)
     if (logger) { logger.info(`💾 Inserting into cut_short_videos table...`); }
 
     const { data: insertedVideo, error: insertError } = await supabaseAdmin
@@ -209,7 +151,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         title: customTitle || ytTitle || "YouTube Import",
         video_url: null,
         youtube_url: youtube_url,
-        audio_url: audioUrl,
+        audio_url: null,  // Audio downloaded later when generating captions
         thumbnail_url: thumbnailUrl,
         duration: duration,
         aspect_ratio: aspectRatio,
