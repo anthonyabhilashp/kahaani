@@ -5,6 +5,8 @@ const nextConfig = {
     domains: ['localhost'],
     unoptimized: true
   },
+  // Allow dev server access from production domain
+  allowedDevOrigins: ['aivideogen.cc', 'www.aivideogen.cc'],
   async headers() {
     return [
       {
