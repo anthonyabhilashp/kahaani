@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/router";
-import { ArrowLeft, Loader2, Scissors, Play, Pause, Volume2, VolumeX, Save, Type, X, Check, Download, ChevronDown, Copy, ExternalLink } from "lucide-react";
+import { ArrowLeft, Loader2, Scissors, Play, Pause, Volume2, VolumeX, Save, Type, X, Check, Download, ChevronDown, Copy, ExternalLink, Music, Trash2 } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { supabase } from "../../lib/supabaseClient";
 import { toast } from "@/hooks/use-toast";
@@ -66,6 +66,26 @@ const defaultCaptionSettings: CaptionSettings = {
   textTransform: "none",
 };
 
+type MusicSettings = {
+  enabled: boolean;
+  music_id: string | null;
+  volume: number;
+};
+
+type MusicTrack = {
+  id: string;
+  name: string;
+  url: string;
+  duration: number;
+  is_preset: boolean;
+};
+
+const defaultMusicSettings: MusicSettings = {
+  enabled: false,
+  music_id: null,
+  volume: 30,
+};
+
 type ShortSuggestion = {
   id: string;
   start_time: number;
@@ -79,6 +99,7 @@ type ShortSuggestion = {
   thumbnail_url?: string;
   caption_settings?: CaptionSettings | null;
   word_timestamps?: WordTimestamp[] | null;
+  music_settings?: MusicSettings | null;
 };
 
 export default function ShortsPage() {
@@ -103,6 +124,25 @@ export default function ShortsPage() {
   const [savingCaptionId, setSavingCaptionId] = useState<string | null>(null);
   const [generatingCaptionsId, setGeneratingCaptionsId] = useState<string | null>(null);
   const [cuttingShortId, setCuttingShortId] = useState<string | null>(null);
+
+  // Music settings per short
+  const [musicPanelOpenId, setMusicPanelOpenId] = useState<string | null>(null);
+  const [shortMusicSettings, setShortMusicSettings] = useState<Map<string, MusicSettings>>(new Map());
+  const [savingMusicId, setSavingMusicId] = useState<string | null>(null);
+  const [musicLibrary, setMusicLibrary] = useState<MusicTrack[]>([]);
+  const [loadingMusicLibrary, setLoadingMusicLibrary] = useState(false);
+  const [previewingMusicId, setPreviewingMusicId] = useState<string | null>(null);
+  const musicPreviewRef = useRef<HTMLAudioElement | null>(null);
+  // Background music audio elements for video preview (per short)
+  const bgMusicAudioRef = useRef<Map<string, HTMLAudioElement>>(new Map());
+  // Store music track URLs by music_id for playback without needing library loaded
+  const musicTrackUrlsRef = useRef<Map<string, string>>(new Map());
+
+  // Store initial zoom ranges for each short (fixed when shorts are loaded)
+  const initialZoomRangesRef = useRef<Map<string, { rangeStart: number; rangeEnd: number }>>(new Map());
+  // Refs to access latest state values in event handlers
+  const shortMusicSettingsRef = useRef<Map<string, MusicSettings>>(new Map());
+  const musicLibraryRef = useRef<MusicTrack[]>([]);
 
   // Track current playback time per short for caption sync
   const [shortCurrentTimes, setShortCurrentTimes] = useState<Map<string, number>>(new Map());
@@ -153,11 +193,27 @@ export default function ShortsPage() {
     });
   }, [shortsSuggestions]);
 
+  // Keep music refs in sync with state
+  useEffect(() => {
+    shortMusicSettingsRef.current = shortMusicSettings;
+  }, [shortMusicSettings]);
+
+  useEffect(() => {
+    musicLibraryRef.current = musicLibrary;
+  }, [musicLibrary]);
+
   // Fetch source video and shorts
   useEffect(() => {
     if (!id) return;
     fetchSourceVideo();
   }, [id]);
+
+  // Load music library on mount (needed for video preview with music)
+  useEffect(() => {
+    if (user?.id) {
+      fetchMusicLibrary();
+    }
+  }, [user?.id]);
 
   const fetchSourceVideo = async () => {
     if (!id) return;
@@ -198,6 +254,7 @@ export default function ShortsPage() {
           thumbnail_url: s.thumbnail_url,
           caption_settings: s.caption_settings,
           word_timestamps: s.word_timestamps,
+          music_settings: s.music_settings || null,
         }));
         setShortsSuggestions(mappedShorts);
 
@@ -207,6 +264,36 @@ export default function ShortsPage() {
           newCaptionSettings.set(s.id, s.caption_settings || { ...defaultCaptionSettings });
         });
         setShortCaptionSettings(newCaptionSettings);
+
+        // Initialize music settings for each short (if any have music configured)
+        const newMusicSettings = new Map<string, MusicSettings>();
+        const musicIds = new Set<string>();
+        mappedShorts.forEach((s: ShortSuggestion) => {
+          if (s.music_settings) {
+            newMusicSettings.set(s.id, s.music_settings);
+            if (s.music_settings.enabled && s.music_settings.music_id) {
+              musicIds.add(s.music_settings.music_id);
+            }
+          }
+        });
+        if (newMusicSettings.size > 0) {
+          setShortMusicSettings(newMusicSettings);
+        }
+
+        // Fetch music track URLs (non-blocking)
+        if (musicIds.size > 0) {
+          supabase
+            .from('background_music_library')
+            .select('id, file_url')
+            .in('id', Array.from(musicIds))
+            .then(({ data: musicTracks }) => {
+              if (musicTracks) {
+                musicTracks.forEach((track: { id: string; file_url: string }) => {
+                  musicTrackUrlsRef.current.set(track.id, track.file_url);
+                });
+              }
+            });
+        }
       }
     } catch (err: any) {
       console.error("Error fetching video:", err);
@@ -244,6 +331,7 @@ export default function ShortsPage() {
           thumbnail_url: s.thumbnail_url,
           caption_settings: s.caption_settings,
           word_timestamps: s.word_timestamps,
+          music_settings: s.music_settings || null,
         }));
         setShortsSuggestions(mappedShorts);
 
@@ -253,6 +341,36 @@ export default function ShortsPage() {
           newCaptionSettings.set(s.id, s.caption_settings || { ...defaultCaptionSettings });
         });
         setShortCaptionSettings(newCaptionSettings);
+
+        // Initialize music settings for each short (if any have music configured)
+        const newMusicSettings = new Map<string, MusicSettings>();
+        const musicIds = new Set<string>();
+        mappedShorts.forEach((s: ShortSuggestion) => {
+          if (s.music_settings) {
+            newMusicSettings.set(s.id, s.music_settings);
+            if (s.music_settings.enabled && s.music_settings.music_id) {
+              musicIds.add(s.music_settings.music_id);
+            }
+          }
+        });
+        if (newMusicSettings.size > 0) {
+          setShortMusicSettings(newMusicSettings);
+        }
+
+        // Fetch music track URLs (non-blocking)
+        if (musicIds.size > 0) {
+          supabase
+            .from('background_music_library')
+            .select('id, file_url')
+            .in('id', Array.from(musicIds))
+            .then(({ data: musicTracks }) => {
+              if (musicTracks) {
+                musicTracks.forEach((track: { id: string; file_url: string }) => {
+                  musicTrackUrlsRef.current.set(track.id, track.file_url);
+                });
+              }
+            });
+        }
       }
     } catch (err: any) {
       console.error("Error fetching shorts:", err);
@@ -286,13 +404,14 @@ export default function ShortsPage() {
 
       const data = await response.json();
 
-      // Check if this short had captions enabled - need to regenerate
+      // Update local state - keep word_timestamps (they're stored as absolute times)
+      // The getShortWordTimestamps function will filter based on new timing
       const shortData = shortsSuggestions.find(s => s.id === shortId);
-      const hadCaptions = shortData?.word_timestamps && shortData.word_timestamps.length > 0;
-
-      // Update local state - clear word_timestamps since timing changed
       setShortsSuggestions(prev =>
-        prev.map(s => s.id === shortId ? { ...data.short, word_timestamps: null } : s)
+        prev.map(s => s.id === shortId ? {
+          ...data.short,
+          word_timestamps: shortData?.word_timestamps // Keep existing timestamps
+        } : s)
       );
 
       setEditingShortId(null);
@@ -301,11 +420,6 @@ export default function ShortsPage() {
         title: "Updated!",
         description: "Short timing updated successfully"
       });
-
-      // Regenerate captions if they existed before (force=true to bypass cache)
-      if (hadCaptions) {
-        generateCaptions(shortId, true);
-      }
 
       // Destroy and recreate YouTube player with new timing
       const existingPlayer = ytPlayersRef.current.get(shortId);
@@ -511,10 +625,224 @@ export default function ShortsPage() {
     }
   };
 
-  // Get word timestamps for a specific short - uses the short's own word_timestamps
+  // Fetch music library
+  const fetchMusicLibrary = async () => {
+    setLoadingMusicLibrary(true);
+    try {
+      const params = new URLSearchParams();
+      if (user?.id) params.append("user_id", user.id);
+
+      const res = await fetch(`/api/music/library?${params.toString()}`);
+      if (res.ok) {
+        const data = await res.json();
+        // Map database columns to MusicTrack type (file_url -> url)
+        const tracks: MusicTrack[] = (data.music || []).map((m: any) => ({
+          id: m.id,
+          name: m.name,
+          url: m.file_url || m.url, // database uses file_url
+          duration: m.duration || 0,
+          is_preset: m.is_preset || false,
+        }));
+        setMusicLibrary(tracks);
+      } else {
+        console.error("Failed to fetch music library");
+      }
+    } catch (err) {
+      console.error("Error fetching music library:", err);
+    } finally {
+      setLoadingMusicLibrary(false);
+    }
+  };
+
+  // Get music settings for a specific short
+  const getMusicSettings = (shortId: string): MusicSettings => {
+    return shortMusicSettings.get(shortId) || { ...defaultMusicSettings };
+  };
+
+  // Update a music setting for a specific short
+  const updateMusicSetting = <K extends keyof MusicSettings>(
+    shortId: string,
+    key: K,
+    value: MusicSettings[K]
+  ) => {
+    setShortMusicSettings(prev => {
+      const newMap = new Map(prev);
+      const current = newMap.get(shortId) || { ...defaultMusicSettings };
+      newMap.set(shortId, { ...current, [key]: value });
+      return newMap;
+    });
+  };
+
+  // Fetch music settings for a short from API
+  const fetchMusicSettings = async (shortId: string) => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) return;
+
+      const response = await fetch(`/api/shorts/${shortId}/music`, {
+        headers: { "Authorization": `Bearer ${session.access_token}` }
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setShortMusicSettings(prev => {
+          const newMap = new Map(prev);
+          newMap.set(shortId, {
+            enabled: data.enabled || false,
+            music_id: data.music_id || null,
+            volume: data.volume ?? 30,
+          });
+          return newMap;
+        });
+      }
+    } catch (err) {
+      console.error("Error fetching music settings:", err);
+    }
+  };
+
+  // Save music settings to database
+  const saveMusicSettings = async (shortId: string) => {
+    setSavingMusicId(shortId);
+    const settings = getMusicSettings(shortId);
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error("Not authenticated");
+
+      const response = await fetch(`/api/shorts/${shortId}/music`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${session.access_token}`
+        },
+        body: JSON.stringify(settings)
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || "Failed to save music settings");
+      }
+
+      toast({
+        title: "Saved!",
+        description: "Music settings saved successfully"
+      });
+    } catch (err: any) {
+      console.error("Error saving music settings:", err);
+      toast({
+        title: "Error",
+        description: err.message || "Failed to save music settings",
+        variant: "destructive"
+      });
+    } finally {
+      setSavingMusicId(null);
+    }
+  };
+
+  // Toggle music preview playback
+  const toggleMusicPreview = (track: MusicTrack) => {
+    if (previewingMusicId === track.id) {
+      // Stop playing
+      if (musicPreviewRef.current) {
+        musicPreviewRef.current.pause();
+        musicPreviewRef.current.currentTime = 0;
+      }
+      setPreviewingMusicId(null);
+    } else {
+      // Start playing
+      if (musicPreviewRef.current) {
+        musicPreviewRef.current.pause();
+      }
+      const audio = new Audio(track.url);
+      audio.volume = 0.5;
+      audio.onended = () => setPreviewingMusicId(null);
+      audio.play();
+      musicPreviewRef.current = audio;
+      setPreviewingMusicId(track.id);
+    }
+  };
+
+  // Stop music preview on panel close
+  const stopMusicPreview = () => {
+    if (musicPreviewRef.current) {
+      musicPreviewRef.current.pause();
+      musicPreviewRef.current.currentTime = 0;
+    }
+    setPreviewingMusicId(null);
+  };
+
+  // Start background music for video preview
+  const startBgMusicForPreview = (shortId: string) => {
+    // Use refs to get latest state values
+    const settings = shortMusicSettingsRef.current.get(shortId);
+    if (!settings?.enabled || !settings?.music_id) {
+      console.log('Music not enabled or no music_id for short', shortId);
+      return;
+    }
+
+    // Get music URL from ref (preloaded) or from library ref
+    let musicUrl = musicTrackUrlsRef.current.get(settings.music_id);
+    if (!musicUrl) {
+      // Try to find in library as fallback
+      const track = musicLibraryRef.current.find(t => t.id === settings.music_id);
+      if (track) {
+        musicUrl = track.url;
+        musicTrackUrlsRef.current.set(settings.music_id, track.url);
+      }
+    }
+
+    if (!musicUrl) {
+      console.log('Music URL not found for', settings.music_id);
+      return;
+    }
+
+    console.log('Starting bg music for short', shortId, 'url:', musicUrl);
+
+    // Stop any existing audio for this short
+    const existingAudio = bgMusicAudioRef.current.get(shortId);
+    if (existingAudio) {
+      existingAudio.pause();
+    }
+
+    // Create new audio element
+    const audio = new Audio(musicUrl);
+    audio.loop = true;
+    audio.volume = (settings.volume ?? 30) / 100;
+    audio.play().catch(err => console.error('Failed to play bg music:', err));
+    bgMusicAudioRef.current.set(shortId, audio);
+  };
+
+  // Stop background music for video preview
+  const stopBgMusicForPreview = (shortId: string) => {
+    const audio = bgMusicAudioRef.current.get(shortId);
+    if (audio) {
+      audio.pause();
+      audio.currentTime = 0;
+      bgMusicAudioRef.current.delete(shortId);
+    }
+  };
+
+  // Update background music volume in real-time
+  const updateBgMusicVolume = (shortId: string, volume: number) => {
+    const audio = bgMusicAudioRef.current.get(shortId);
+    if (audio) {
+      audio.volume = volume / 100;
+    }
+  };
+
+  // Get word timestamps for a specific short - filters and adjusts based on current timing
   const getShortWordTimestamps = useCallback((short: ShortSuggestion): WordTimestamp[] => {
-    // Return the short's own word_timestamps (already relative to short start at 0)
-    return short.word_timestamps || [];
+    if (!short.word_timestamps || short.word_timestamps.length === 0) return [];
+
+    // word_timestamps are stored with ABSOLUTE times (relative to original video)
+    // Filter to current short's range and make relative to short start
+    return short.word_timestamps
+      .filter(w => w.start >= short.start_time && w.start < short.end_time)
+      .map(w => ({
+        word: w.word,
+        start: w.start - short.start_time,
+        end: w.end - short.start_time,
+      }));
   }, []);
 
   // Initialize YouTube player for a short
@@ -560,6 +888,10 @@ export default function ShortsPage() {
               event.target.seekTo(times.start, true);
             }
 
+            // Start background music if enabled
+            // Dispatch custom event to trigger music start (avoids closure issues)
+            window.dispatchEvent(new CustomEvent('short-play', { detail: { shortId } }));
+
             // Start tracking time
             const interval = setInterval(() => {
               try {
@@ -572,6 +904,11 @@ export default function ShortsPage() {
                 // Loop back if past end time
                 if (currentTime >= currentTimes.end) {
                   event.target.seekTo(currentTimes.start, true);
+                  // Restart background music from beginning on loop
+                  const bgAudio = bgMusicAudioRef.current.get(shortId);
+                  if (bgAudio) {
+                    bgAudio.currentTime = 0;
+                  }
                 }
               } catch (e) {
                 // Player might be destroyed
@@ -593,6 +930,8 @@ export default function ShortsPage() {
                 newSet.delete(shortId);
                 return newSet;
               });
+              // Stop background music
+              window.dispatchEvent(new CustomEvent('short-pause', { detail: { shortId } }));
             }
           }
         },
@@ -618,6 +957,30 @@ export default function ShortsPage() {
 
     return () => clearTimeout(timeout);
   }, [ytApiReady, sourceVideo?.youtube_url, shortsSuggestions, initYouTubePlayer]);
+
+  // Listen for custom events to start/stop background music (avoids closure issues in YT player callbacks)
+  useEffect(() => {
+    const handlePlay = (e: CustomEvent<{ shortId: string }>) => {
+      startBgMusicForPreview(e.detail.shortId);
+    };
+    const handlePause = (e: CustomEvent<{ shortId: string }>) => {
+      stopBgMusicForPreview(e.detail.shortId);
+    };
+
+    window.addEventListener('short-play', handlePlay as EventListener);
+    window.addEventListener('short-pause', handlePause as EventListener);
+
+    return () => {
+      window.removeEventListener('short-play', handlePlay as EventListener);
+      window.removeEventListener('short-pause', handlePause as EventListener);
+      // Cleanup all background music on unmount
+      bgMusicAudioRef.current.forEach(audio => {
+        audio.pause();
+      });
+      bgMusicAudioRef.current.clear();
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Empty deps - we use refs to access latest state
 
   const analyzeShorts = async () => {
     if (!id || typeof id !== 'string') return;
@@ -717,7 +1080,7 @@ export default function ShortsPage() {
       <header className="border-b border-gray-800 px-6 py-4 flex items-center justify-between">
         <div className="flex items-center gap-4">
           <button
-            onClick={() => router.push('/shorts')}
+            onClick={() => router.push('/?category=cut-shorts')}
             className="flex items-center gap-2 text-gray-400 hover:text-white transition-colors"
           >
             <ArrowLeft className="w-5 h-5" />
@@ -822,38 +1185,79 @@ export default function ShortsPage() {
                                 id={`yt-player-${short.id}`}
                                 className="absolute inset-0 w-full h-full"
                               />
-                              {/* Play/Pause overlay for YouTube */}
-                              {!playingPreviews.has(short.id) && (
-                                <div
-                                  className="absolute inset-0 flex items-center justify-center cursor-pointer z-10"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    const ytPlayer = ytPlayersRef.current.get(short.id);
-                                    if (!ytPlayer || !ytPlayer.playVideo || !ytPlayersReady.has(short.id)) {
-                                      console.log('YouTube player not ready yet');
-                                      return;
-                                    }
+                              {/* Controls overlay for YouTube - show on hover */}
+                              <div className="absolute inset-0 flex items-center justify-center z-10 opacity-0 hover:opacity-100 transition-opacity">
+                                <div className="flex items-center gap-3">
+                                  {/* Rewind 5s */}
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      const ytPlayer = ytPlayersRef.current.get(short.id);
+                                      if (!ytPlayer || !ytPlayersReady.has(short.id)) return;
+                                      const currentTime = ytPlayer.getCurrentTime?.() || short.start_time;
+                                      const newTime = Math.max(short.start_time, currentTime - 5);
+                                      ytPlayer.seekTo(newTime, true);
+                                    }}
+                                    className="w-10 h-10 bg-black/60 rounded-full flex items-center justify-center hover:bg-black/80 transition-colors"
+                                  >
+                                    <span className="text-white text-xs font-bold">-5</span>
+                                  </button>
 
-                                    // Stop all other players
-                                    playingPreviews.forEach(id => {
-                                      const otherPlayer = ytPlayersRef.current.get(id);
-                                      if (otherPlayer?.pauseVideo) otherPlayer.pauseVideo();
-                                    });
+                                  {/* Play/Pause */}
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      const ytPlayer = ytPlayersRef.current.get(short.id);
+                                      if (!ytPlayer || !ytPlayer.playVideo || !ytPlayersReady.has(short.id)) {
+                                        console.log('YouTube player not ready yet');
+                                        return;
+                                      }
 
-                                    // Seek to start and play
-                                    ytPlayer.seekTo(short.start_time, true);
-                                    ytPlayer.playVideo();
-                                  }}
-                                >
-                                  <div className="w-16 h-16 bg-black/60 rounded-full flex items-center justify-center hover:bg-black/80 transition-colors">
-                                    {ytPlayersReady.has(short.id) ? (
-                                      <Play className="w-8 h-8 text-white ml-1" />
-                                    ) : (
+                                      if (playingPreviews.has(short.id)) {
+                                        // Pause
+                                        ytPlayer.pauseVideo();
+                                      } else {
+                                        // Stop all other players
+                                        playingPreviews.forEach(id => {
+                                          const otherPlayer = ytPlayersRef.current.get(id);
+                                          if (otherPlayer?.pauseVideo) otherPlayer.pauseVideo();
+                                        });
+
+                                        // Play from current position (or start if not playing)
+                                        const currentTime = ytPlayer.getCurrentTime?.() || 0;
+                                        if (currentTime < short.start_time || currentTime > short.end_time) {
+                                          ytPlayer.seekTo(short.start_time, true);
+                                        }
+                                        ytPlayer.playVideo();
+                                      }
+                                    }}
+                                    className="w-16 h-16 bg-black/60 rounded-full flex items-center justify-center hover:bg-black/80 transition-colors"
+                                  >
+                                    {!ytPlayersReady.has(short.id) ? (
                                       <Loader2 className="w-8 h-8 text-white animate-spin" />
+                                    ) : playingPreviews.has(short.id) ? (
+                                      <Pause className="w-8 h-8 text-white" />
+                                    ) : (
+                                      <Play className="w-8 h-8 text-white ml-1" />
                                     )}
-                                  </div>
+                                  </button>
+
+                                  {/* Forward 5s */}
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      const ytPlayer = ytPlayersRef.current.get(short.id);
+                                      if (!ytPlayer || !ytPlayersReady.has(short.id)) return;
+                                      const currentTime = ytPlayer.getCurrentTime?.() || short.start_time;
+                                      const newTime = Math.min(short.end_time, currentTime + 5);
+                                      ytPlayer.seekTo(newTime, true);
+                                    }}
+                                    className="w-10 h-10 bg-black/60 rounded-full flex items-center justify-center hover:bg-black/80 transition-colors"
+                                  >
+                                    <span className="text-white text-xs font-bold">+5</span>
+                                  </button>
                                 </div>
-                              )}
+                              </div>
                             </>
                           ) : sourceVideo?.video_url ? (
                             <video
@@ -1013,17 +1417,31 @@ export default function ShortsPage() {
                           <h4 className="font-semibold text-white text-xs mb-2 line-clamp-2 leading-snug">
                             {short.title}
                           </h4>
-                          {/* Custom YouTube-style Seek Bar */}
+                          {/* Custom YouTube-style Seek Bar with ±60s zoom */}
                           {(() => {
                             const videoDuration = sourceVideo?.duration || 1;
-                            const startPercent = (short.start_time / videoDuration) * 100;
-                            const endPercent = (short.end_time / videoDuration) * 100;
+
+                            // Get or initialize fixed zoom range (only set once per short)
+                            if (!initialZoomRangesRef.current.has(short.id)) {
+                              initialZoomRangesRef.current.set(short.id, {
+                                rangeStart: Math.max(0, short.start_time - 60),
+                                rangeEnd: Math.min(videoDuration, short.end_time + 60),
+                              });
+                            }
+                            const zoomRange = initialZoomRangesRef.current.get(short.id)!;
+                            const rangeStart = zoomRange.rangeStart;
+                            const rangeEnd = zoomRange.rangeEnd;
+                            const rangeWidth = rangeEnd - rangeStart;
+
+                            // Calculate percentages within the fixed zoom range
+                            const startPercent = ((short.start_time - rangeStart) / rangeWidth) * 100;
+                            const endPercent = ((short.end_time - rangeStart) / rangeWidth) * 100;
 
                             const handleSeekBarClick = (e: React.MouseEvent<HTMLDivElement>) => {
                               const rect = e.currentTarget.getBoundingClientRect();
                               const clickX = e.clientX - rect.left;
                               const percent = clickX / rect.width;
-                              const seekTime = percent * videoDuration;
+                              const seekTime = rangeStart + (percent * rangeWidth);
 
                               // Seek the player
                               const ytPlayer = ytPlayersRef.current.get(short.id);
@@ -1038,7 +1456,7 @@ export default function ShortsPage() {
                               const seekBar = e.currentTarget.parentElement;
                               if (!seekBar) return;
 
-                              // Store initial values at drag start
+                              // Store current values at drag start
                               let currentStart = short.start_time;
                               let currentEnd = short.end_time;
 
@@ -1046,7 +1464,7 @@ export default function ShortsPage() {
                                 const rect = seekBar.getBoundingClientRect();
                                 const clickX = Math.max(0, Math.min(moveEvent.clientX - rect.left, rect.width));
                                 const percent = clickX / rect.width;
-                                const newTime = Math.round(percent * videoDuration * 2) / 2; // Snap to 0.5s
+                                const newTime = Math.round((rangeStart + percent * rangeWidth) * 2) / 2; // Snap to 0.5s
 
                                 if (type === 'start' && newTime < currentEnd - 1 && newTime >= 0) {
                                   setShortsSuggestions(prev => prev.map(s => {
@@ -1081,7 +1499,7 @@ export default function ShortsPage() {
                             // Calculate current playback position
                             const relativeTime = shortCurrentTimes.get(short.id) || 0;
                             const absoluteTime = short.start_time + relativeTime;
-                            const progressPercent = (absoluteTime / videoDuration) * 100;
+                            const progressPercent = ((absoluteTime - rangeStart) / rangeWidth) * 100;
                             const isPlaying = playingPreviews.has(short.id);
 
                             return (
@@ -1142,11 +1560,16 @@ export default function ShortsPage() {
                                   </div>
                                 </div>
 
-                                {/* Duration & Save below */}
+                                {/* Range indicator & Duration below */}
                                 <div className="flex items-center justify-between mt-2">
-                                  <span className="text-[10px] text-gray-400">
-                                    {formatTime(short.duration)} clip
-                                  </span>
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-[10px] text-gray-400">
+                                      {formatTime(short.duration)} clip
+                                    </span>
+                                    <span className="text-[9px] text-gray-500">
+                                      (viewing {formatTime(rangeStart)} - {formatTime(rangeEnd)})
+                                    </span>
+                                  </div>
                                   {editingShortId === short.id && (
                                     <div className="flex gap-2">
                                       <button
@@ -1182,38 +1605,80 @@ export default function ShortsPage() {
                             );
                           })()}
 
-                          {/* Action Buttons Row - Captions on left, Cut & Download on right */}
+                          {/* Action Buttons Row - Captions & Music on left, Cut & Download on right */}
                           <div className="mt-2 flex items-center justify-between">
-                            {/* Caption Settings Button - Left */}
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setCaptionPanelOpenId(captionPanelOpenId === short.id ? null : short.id);
-                              }}
-                              disabled={generatingCaptionsId === short.id}
-                              className={`px-3 py-1.5 text-xs rounded transition-colors flex items-center gap-1.5 disabled:opacity-50 ${
-                                short.word_timestamps && short.word_timestamps.length > 0
-                                  ? 'bg-green-800 hover:bg-green-700 text-white'
-                                  : 'bg-gray-700 hover:bg-gray-600 text-gray-400'
-                              }`}
-                            >
-                              {generatingCaptionsId === short.id ? (
-                                <>
-                                  <Loader2 className="w-3 h-3 animate-spin" />
-                                  <span>Captions...</span>
-                                </>
-                              ) : short.word_timestamps && short.word_timestamps.length > 0 ? (
-                                <>
-                                  <Check className="w-3 h-3" />
-                                  <span>Captions</span>
-                                </>
-                              ) : (
-                                <>
-                                  <Type className="w-3 h-3" />
-                                  <span>Captions</span>
-                                </>
-                              )}
-                            </button>
+                            {/* Left side - Captions & Music */}
+                            <div className="flex items-center gap-2">
+                              {/* Caption Settings Button */}
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setCaptionPanelOpenId(captionPanelOpenId === short.id ? null : short.id);
+                                  if (musicPanelOpenId === short.id) {
+                                    setMusicPanelOpenId(null);
+                                    stopMusicPreview();
+                                  }
+                                }}
+                                disabled={generatingCaptionsId === short.id}
+                                className={`px-3 py-1.5 text-xs rounded transition-colors flex items-center gap-1.5 disabled:opacity-50 ${
+                                  short.word_timestamps && short.word_timestamps.length > 0
+                                    ? 'bg-green-800 hover:bg-green-700 text-white'
+                                    : 'bg-gray-700 hover:bg-gray-600 text-gray-400'
+                                }`}
+                              >
+                                {generatingCaptionsId === short.id ? (
+                                  <>
+                                    <Loader2 className="w-3 h-3 animate-spin" />
+                                    <span>Captions...</span>
+                                  </>
+                                ) : short.word_timestamps && short.word_timestamps.length > 0 ? (
+                                  <>
+                                    <Check className="w-3 h-3" />
+                                    <span>Captions</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Type className="w-3 h-3" />
+                                    <span>Captions</span>
+                                  </>
+                                )}
+                              </button>
+
+                              {/* Music Settings Button */}
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  const isOpening = musicPanelOpenId !== short.id;
+                                  setMusicPanelOpenId(isOpening ? short.id : null);
+                                  if (captionPanelOpenId === short.id) {
+                                    setCaptionPanelOpenId(null);
+                                  }
+                                  if (isOpening) {
+                                    fetchMusicLibrary();
+                                    fetchMusicSettings(short.id);
+                                  } else {
+                                    stopMusicPreview();
+                                  }
+                                }}
+                                className={`px-3 py-1.5 text-xs rounded transition-colors flex items-center gap-1.5 ${
+                                  getMusicSettings(short.id).enabled
+                                    ? 'bg-green-800 hover:bg-green-700 text-white'
+                                    : 'bg-gray-700 hover:bg-gray-600 text-gray-400'
+                                }`}
+                              >
+                                {getMusicSettings(short.id).enabled ? (
+                                  <>
+                                    <Check className="w-3 h-3" />
+                                    <span>Music</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Music className="w-3 h-3" />
+                                    <span>Music</span>
+                                  </>
+                                )}
+                              </button>
+                            </div>
 
                             {/* Right side - Cut Short & Download */}
                             <div className="flex items-center gap-2">
@@ -1464,6 +1929,166 @@ export default function ShortsPage() {
                                 className="w-full py-2 bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white text-xs font-medium rounded-lg transition-colors flex items-center justify-center gap-1.5"
                               >
                                 {savingCaptionId === short.id ? (
+                                  <Loader2 className="w-3 h-3 animate-spin" />
+                                ) : (
+                                  <Save className="w-3 h-3" />
+                                )}
+                                Save Settings
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* Music Settings Drawer - Slides from left */}
+                          <div
+                            className={`absolute top-0 left-0 h-full w-64 bg-gray-900 border-r border-gray-700 shadow-2xl z-20 transform transition-transform duration-300 ease-in-out overflow-y-auto ${
+                              musicPanelOpenId === short.id ? 'translate-x-0' : '-translate-x-full'
+                            }`}
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            {/* Drawer Header */}
+                            <div className="sticky top-0 bg-gray-900 border-b border-gray-700 p-3 flex items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <Music className="w-4 h-4 text-orange-500" />
+                                <span className="text-sm font-semibold text-white">Background Music</span>
+                              </div>
+                              <button
+                                onClick={() => {
+                                  setMusicPanelOpenId(null);
+                                  stopMusicPreview();
+                                }}
+                                className="p-1 hover:bg-gray-700 rounded transition-colors"
+                              >
+                                <X className="w-4 h-4 text-gray-400" />
+                              </button>
+                            </div>
+
+                            {/* Drawer Content */}
+                            <div className="p-3 space-y-4">
+                              {/* Enable/Disable */}
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs text-gray-300">Enable Music</span>
+                                <button
+                                  onClick={() => {
+                                    const currentEnabled = getMusicSettings(short.id).enabled;
+                                    updateMusicSetting(short.id, 'enabled', !currentEnabled);
+                                  }}
+                                  className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                                    getMusicSettings(short.id).enabled ? 'bg-orange-600' : 'bg-gray-600'
+                                  }`}
+                                >
+                                  <span
+                                    className="inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform"
+                                    style={{ transform: getMusicSettings(short.id).enabled ? 'translateX(18px)' : 'translateX(2px)' }}
+                                  />
+                                </button>
+                              </div>
+
+                              {getMusicSettings(short.id).enabled && (
+                                <>
+                                  {/* Volume Slider */}
+                                  <div>
+                                    <label className="block text-[10px] text-gray-400 mb-1">
+                                      Volume: <span className="text-orange-400">{getMusicSettings(short.id).volume}%</span>
+                                    </label>
+                                    <Slider
+                                      value={[getMusicSettings(short.id).volume]}
+                                      onValueChange={(value) => {
+                                        updateMusicSetting(short.id, 'volume', value[0]);
+                                        // Update playing audio volume in real-time
+                                        updateBgMusicVolume(short.id, value[0]);
+                                      }}
+                                      min={0}
+                                      max={100}
+                                      step={1}
+                                      className="w-full"
+                                    />
+                                  </div>
+
+                                  {/* Music Library */}
+                                  <div>
+                                    <label className="block text-[10px] text-gray-400 mb-2">Select Track</label>
+                                    {loadingMusicLibrary ? (
+                                      <div className="flex items-center justify-center py-4">
+                                        <Loader2 className="w-4 h-4 animate-spin text-gray-400" />
+                                      </div>
+                                    ) : musicLibrary.length === 0 ? (
+                                      <div className="text-xs text-gray-500 text-center py-4">
+                                        No music tracks available
+                                      </div>
+                                    ) : (
+                                      <div className="space-y-1 max-h-48 overflow-y-auto">
+                                        {musicLibrary.map((track) => (
+                                          <div
+                                            key={track.id}
+                                            className={`flex items-center gap-2 p-2 rounded cursor-pointer transition-colors ${
+                                              getMusicSettings(short.id).music_id === track.id
+                                                ? 'bg-orange-600/20 border border-orange-600'
+                                                : 'bg-gray-800 hover:bg-gray-700 border border-transparent'
+                                            }`}
+                                            onClick={() => {
+                                              updateMusicSetting(short.id, 'music_id', track.id);
+                                              // Store the track URL for playback
+                                              musicTrackUrlsRef.current.set(track.id, track.url);
+                                            }}
+                                          >
+                                            {/* Play/Pause Preview */}
+                                            <button
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                toggleMusicPreview(track);
+                                              }}
+                                              className="p-1 hover:bg-gray-600 rounded transition-colors"
+                                            >
+                                              {previewingMusicId === track.id ? (
+                                                <Pause className="w-3 h-3 text-orange-400" />
+                                              ) : (
+                                                <Play className="w-3 h-3 text-gray-400" />
+                                              )}
+                                            </button>
+
+                                            {/* Track info */}
+                                            <div className="flex-1 min-w-0">
+                                              <div className="text-xs text-white truncate">{track.name}</div>
+                                              <div className="text-[10px] text-gray-500">
+                                                {Math.floor(track.duration / 60)}:{String(Math.floor(track.duration % 60)).padStart(2, '0')}
+                                              </div>
+                                            </div>
+
+                                            {/* Selected indicator */}
+                                            {getMusicSettings(short.id).music_id === track.id && (
+                                              <Check className="w-3 h-3 text-orange-400" />
+                                            )}
+                                          </div>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </div>
+
+                                  {/* Clear selection */}
+                                  {getMusicSettings(short.id).music_id && (
+                                    <button
+                                      onClick={() => updateMusicSetting(short.id, 'music_id', null)}
+                                      className="w-full py-1.5 text-xs text-gray-400 hover:text-red-400 transition-colors flex items-center justify-center gap-1"
+                                    >
+                                      <Trash2 className="w-3 h-3" />
+                                      Remove Music
+                                    </button>
+                                  )}
+                                </>
+                              )}
+
+                              {/* Save Button */}
+                              <button
+                                onClick={async (e) => {
+                                  e.stopPropagation();
+                                  await saveMusicSettings(short.id);
+                                  setMusicPanelOpenId(null);
+                                  stopMusicPreview();
+                                }}
+                                disabled={savingMusicId === short.id}
+                                className="w-full py-2 bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white text-xs font-medium rounded-lg transition-colors flex items-center justify-center gap-1.5"
+                              >
+                                {savingMusicId === short.id ? (
                                   <Loader2 className="w-3 h-3 animate-spin" />
                                 ) : (
                                   <Save className="w-3 h-3" />

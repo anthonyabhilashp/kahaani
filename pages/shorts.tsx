@@ -18,6 +18,7 @@ type SourceVideo = {
   video_url: string | null;
   thumbnail_url: string | null;
   duration: number | null;
+  aspect_ratio: string | null;
   shorts_count: number;
 };
 
@@ -48,7 +49,7 @@ export default function ShortsPage() {
     try {
       const { data, error } = await supabase
         .from("cut_short_videos")
-        .select("id, title, created_at, video_url, thumbnail_url, duration")
+        .select("id, title, created_at, video_url, thumbnail_url, duration, aspect_ratio")
         .eq("user_id", user.id)
         .order("created_at", { ascending: false });
 
@@ -69,6 +70,7 @@ export default function ShortsPage() {
             video_url: video.video_url,
             thumbnail_url: video.thumbnail_url,
             duration: video.duration,
+            aspect_ratio: video.aspect_ratio,
             shorts_count: count || 0
           };
         })
@@ -154,8 +156,7 @@ export default function ShortsPage() {
           "Authorization": `Bearer ${session.access_token}`
         },
         body: JSON.stringify({
-          youtube_url: youtubeUrl,
-          title: "YouTube Import"
+          youtube_url: youtubeUrl
         })
       });
 
@@ -321,7 +322,13 @@ export default function ShortsPage() {
                 onClick={() => router.push(`/shorts/${video.id}`)}
                 className="bg-gray-900/50 border-gray-800 hover:border-orange-600 cursor-pointer transition-all group overflow-hidden"
               >
-                <div className="aspect-video relative bg-gray-800">
+                <div
+                  className={`relative bg-gray-800 ${
+                    video.aspect_ratio === '9:16' ? 'aspect-[9/16]' :
+                    video.aspect_ratio === '1:1' ? 'aspect-square' :
+                    'aspect-video'
+                  }`}
+                >
                   {video.thumbnail_url ? (
                     <Image
                       src={video.thumbnail_url}

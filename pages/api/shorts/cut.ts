@@ -210,6 +210,42 @@ async function burnCaptions(
   });
 }
 
+// Mix background music into video
+async function mixBackgroundMusic(
+  inputPath: string,
+  outputPath: string,
+  musicPath: string,
+  volume: number, // 0-100
+  duration: number
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const musicVolume = volume / 100; // Convert percentage to 0-1 scale
+
+    ffmpeg()
+      .input(inputPath)
+      .input(musicPath)
+      .complexFilter([
+        // Loop background music to match video duration
+        `[1:a]aloop=loop=-1:size=2e+09,volume=${musicVolume}[bg]`,
+        // Mix original audio with background music
+        `[0:a][bg]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[mixed]`
+      ])
+      .outputOptions([
+        '-map', '0:v',
+        '-map', '[mixed]',
+        `-t`, `${duration}`,
+        '-c:v', 'copy',
+        '-c:a', 'aac',
+        '-b:a', '256k',
+        '-movflags', '+faststart',
+      ])
+      .output(outputPath)
+      .on('end', () => resolve())
+      .on('error', (err) => reject(err))
+      .run();
+  });
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -242,10 +278,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     tempDir = path.join(tmpdir(), `cut_${short_id}_${Date.now()}`);
     fs.mkdirSync(tempDir, { recursive: true });
 
-    // Get short details including caption settings
+    // Get short details including caption and music settings
     const { data: short, error: shortError } = await supabaseAdmin
       .from('shorts')
-      .select('id, start_time, end_time, title, parent_video_id, user_id, caption_settings, word_timestamps')
+      .select('id, start_time, end_time, title, parent_video_id, user_id, caption_settings, word_timestamps, music_settings')
       .eq('id', short_id)
       .single();
 
@@ -306,10 +342,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Check if captions should be burned in
     const captionSettings = short.caption_settings as any;
-    const wordTimestamps = short.word_timestamps as Array<{ word: string; start: number; end: number }> | null;
+    const rawWordTimestamps = short.word_timestamps as Array<{ word: string; start: number; end: number }> | null;
+
+    // Filter timestamps to current short range and make relative to clip start (0)
+    // word_timestamps are stored with ABSOLUTE times (relative to original video)
+    const wordTimestamps = rawWordTimestamps
+      ?.filter(w => w.start >= start && w.start < end)
+      .map(w => ({
+        word: w.word,
+        start: w.start - start,
+        end: w.end - start,
+      })) || null;
+
+    // Use an intermediate path for the video after captions
+    let videoAfterCaptions = outputPath;
 
     if (captionSettings?.enabled && wordTimestamps && wordTimestamps.length > 0) {
-      logger.info(`📝 Burning captions (${wordTimestamps.length} words)...`);
+      logger.info(`📝 Burning captions (${wordTimestamps.length} words from ${rawWordTimestamps?.length || 0} total)...`);
 
       // Generate ASS subtitle file
       const assContent = generateASSSubtitles(wordTimestamps, {
@@ -327,14 +376,59 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       fs.writeFileSync(assPath, assContent);
 
       // Burn captions into video
-      await burnCaptions(rawVideoPath, outputPath, assPath);
+      const captionedVideoPath = path.join(tempDir, `captioned_${short_id}.mp4`);
+      await burnCaptions(rawVideoPath, captionedVideoPath, assPath);
+      videoAfterCaptions = captionedVideoPath;
 
       // Cleanup
       if (fs.existsSync(assPath)) fs.unlinkSync(assPath);
       if (fs.existsSync(rawVideoPath)) fs.unlinkSync(rawVideoPath);
     } else {
-      // No captions - just rename raw to output
-      fs.renameSync(rawVideoPath, outputPath);
+      // No captions - use raw video
+      videoAfterCaptions = rawVideoPath;
+    }
+
+    // Check if background music should be mixed in
+    const musicSettings = short.music_settings as { enabled?: boolean; music_id?: string; volume?: number } | null;
+
+    if (musicSettings?.enabled && musicSettings?.music_id && (musicSettings.volume ?? 30) > 0) {
+      logger.info(`🎵 Adding background music (${musicSettings.volume ?? 30}% volume)...`);
+
+      // Get music URL from library
+      const { data: musicData, error: musicError } = await supabaseAdmin
+        .from('background_music_library')
+        .select('file_url')
+        .eq('id', musicSettings.music_id)
+        .single();
+
+      if (musicError || !musicData?.file_url) {
+        logger.warn(`⚠️ Failed to get music URL, skipping music mixing`);
+        // Just move the video without music
+        if (videoAfterCaptions !== outputPath) {
+          fs.renameSync(videoAfterCaptions, outputPath);
+        }
+      } else {
+        // Download the music file
+        const musicPath = path.join(tempDir, 'background-music.mp3');
+        logger.info(`📥 Downloading background music...`);
+        await downloadVideo(musicData.file_url, musicPath);
+
+        // Mix music into video
+        await mixBackgroundMusic(videoAfterCaptions, outputPath, musicPath, musicSettings.volume ?? 30, duration);
+
+        // Cleanup
+        if (fs.existsSync(musicPath)) fs.unlinkSync(musicPath);
+        if (videoAfterCaptions !== outputPath && fs.existsSync(videoAfterCaptions)) {
+          fs.unlinkSync(videoAfterCaptions);
+        }
+
+        logger.info(`✅ Background music mixed successfully`);
+      }
+    } else {
+      // No music - move the video to final output
+      if (videoAfterCaptions !== outputPath) {
+        fs.renameSync(videoAfterCaptions, outputPath);
+      }
     }
 
     // Verify final output exists

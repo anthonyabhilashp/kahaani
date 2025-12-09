@@ -55,12 +55,14 @@ async function downloadYouTubeAudio(url: string, outputPath: string): Promise<vo
   });
 }
 
-// Get video metadata using yt-dlp (title, duration) - NO download
-async function getYouTubeMetadata(url: string): Promise<{ title: string; duration: number }> {
+// Get video metadata using yt-dlp (title, duration, aspect ratio) - NO download
+async function getYouTubeMetadata(url: string): Promise<{ title: string; duration: number; aspectRatio: string }> {
   return new Promise((resolve, reject) => {
     const args = [
       '--print', '%(title)s',
       '--print', '%(duration)s',
+      '--print', '%(width)s',
+      '--print', '%(height)s',
       '--no-download',
       url
     ];
@@ -84,8 +86,22 @@ async function getYouTubeMetadata(url: string): Promise<{ title: string; duratio
         const lines = stdout.trim().split('\n');
         const title = lines[0] || 'YouTube Video';
         const duration = parseFloat(lines[1]) || 0;
-        console.log(`✅ Metadata: "${title}", ${duration}s`);
-        resolve({ title, duration });
+        const width = parseFloat(lines[2]) || 1920;
+        const height = parseFloat(lines[3]) || 1080;
+
+        // Determine aspect ratio category
+        const ratio = width / height;
+        let aspectRatio = '16:9'; // default
+        if (ratio < 0.7) {
+          aspectRatio = '9:16'; // Portrait (vertical)
+        } else if (ratio > 1.4) {
+          aspectRatio = '16:9'; // Landscape (horizontal)
+        } else {
+          aspectRatio = '1:1'; // Square-ish
+        }
+
+        console.log(`✅ Metadata: "${title}", ${duration}s, ${width}x${height} (${aspectRatio})`);
+        resolve({ title, duration, aspectRatio });
       } else {
         console.error("❌ yt-dlp metadata failed:", stderr);
         reject(new Error(`Failed to get YouTube metadata: ${stderr || 'Unknown error'}`));
@@ -144,9 +160,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (logger) { logger.info(`User: ${user.email}`); }
     if (logger) { logger.info(`URL: ${youtube_url}`); }
 
-    // 1️⃣ Get video metadata (title, duration) - NO download
-    const { title: ytTitle, duration } = await getYouTubeMetadata(youtube_url);
-    if (logger) { logger.info(`⏱️ Video duration: ${duration.toFixed(2)} seconds`); }
+    // 1️⃣ Get video metadata (title, duration, aspect ratio) - NO download
+    const { title: ytTitle, duration, aspectRatio } = await getYouTubeMetadata(youtube_url);
+    if (logger) { logger.info(`⏱️ Video duration: ${duration.toFixed(2)} seconds, aspect ratio: ${aspectRatio}`); }
 
     // 2️⃣ Use YouTube's thumbnail directly (no extraction needed)
     const thumbnailUrl = `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`;
@@ -194,6 +210,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         audio_url: audioUrl,
         thumbnail_url: thumbnailUrl,
         duration: duration,
+        aspect_ratio: aspectRatio,
       })
       .select()
       .single();

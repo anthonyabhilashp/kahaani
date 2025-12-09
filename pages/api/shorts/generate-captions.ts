@@ -122,29 +122,43 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: 'Parent video audio not found' });
     }
 
+    // Generate captions for ±60s range (so user can adjust timing without regenerating)
+    const CAPTION_PADDING = 60; // seconds before and after
+    const captionStart = Math.max(0, short.start_time - CAPTION_PADDING);
+    const captionEnd = Math.min(parentVideo.duration || short.end_time + CAPTION_PADDING, short.end_time + CAPTION_PADDING);
+
     console.log(`🎙️ Generating captions for short ${short_id}`);
-    console.log(`⏱️ Time range: ${short.start_time}s - ${short.end_time}s`);
+    console.log(`⏱️ Short range: ${short.start_time}s - ${short.end_time}s`);
+    console.log(`⏱️ Caption range (±60s): ${captionStart}s - ${captionEnd}s`);
 
     // Download full audio
     fullAudioPath = path.join(tmpdir(), `full-audio-${short_id}-${Date.now()}.mp3`);
     console.log(`📥 Downloading audio...`);
     await downloadAudio(parentVideo.audio_url, fullAudioPath);
 
-    // Extract clip for this short's time range
+    // Extract extended clip for caption range (±60s)
     clipAudioPath = path.join(tmpdir(), `clip-audio-${short_id}-${Date.now()}.mp3`);
-    console.log(`✂️ Extracting clip...`);
-    await extractAudioClip(fullAudioPath, clipAudioPath, short.start_time, short.end_time);
+    console.log(`✂️ Extracting extended clip for captions...`);
+    await extractAudioClip(fullAudioPath, clipAudioPath, captionStart, captionEnd);
 
     // Transcribe with Whisper
     console.log(`🎙️ Transcribing with Whisper...`);
-    const word_timestamps = await transcribeAudio(clipAudioPath);
-    console.log(`✅ Got ${word_timestamps.length} words`);
+    const rawTimestamps = await transcribeAudio(clipAudioPath);
+    console.log(`✅ Got ${rawTimestamps.length} words`);
+
+    // Store timestamps with ABSOLUTE times (relative to original video)
+    // Frontend will filter and adjust based on current start_time/end_time
+    const word_timestamps = rawTimestamps.map(w => ({
+      word: w.word,
+      start: w.start + captionStart,
+      end: w.end + captionStart,
+    }));
 
     // Cleanup
     if (fs.existsSync(fullAudioPath)) fs.unlinkSync(fullAudioPath);
     if (fs.existsSync(clipAudioPath)) fs.unlinkSync(clipAudioPath);
 
-    // Save to database
+    // Save timestamps with absolute times
     const { error: updateError } = await supabaseAdmin
       .from('shorts')
       .update({ word_timestamps })
@@ -154,11 +168,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       throw updateError;
     }
 
-    console.log(`✅ Captions saved for short ${short_id}`);
+    console.log(`✅ Captions saved for short ${short_id} (${word_timestamps.length} words)`);
 
     return res.status(200).json({
       success: true,
-      word_timestamps
+      word_timestamps,
     });
 
   } catch (err: any) {

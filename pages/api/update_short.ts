@@ -33,7 +33,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Calculate new duration
     const duration = end_time - start_time;
 
-    // Update the short
+    // Update the short (word_timestamps stay as absolute times, frontend filters them)
     const { data: updatedShort, error } = await supabaseAdmin
       .from('shorts')
       .update({
@@ -43,7 +43,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         updated_at: new Date().toISOString()
       })
       .eq('id', short_id)
-      .eq('user_id', user.id) // Ensure user owns this short
+      .eq('user_id', user.id)
       .select()
       .single();
 

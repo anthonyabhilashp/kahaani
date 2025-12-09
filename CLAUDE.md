@@ -685,3 +685,71 @@ When content morphs/flickers during state changes (e.g., switching between steps
 - **Keep it simple**: The fix is usually a small targeted change, not a major refactor
 - **One file at a time**: Don't modify multiple files claiming each will fix the issue
 - **Keys are powerful**: Use React keys to force clean transitions between different content states
+
+## 🛑 CLAUDE'S REPEATED FAILURES - READ THIS EVERY TIME
+
+**This section exists because Claude keeps violating the protocol despite it being clearly written above.**
+
+### The Pattern of Failure
+
+1. User asks for a feature/fix
+2. Claude reads the code (good)
+3. Claude SKIPS asking for permission (BAD)
+4. Claude makes changes across multiple files (BAD)
+5. User gets angry because they weren't consulted
+6. Claude apologizes and promises to do better
+7. Claude does the EXACT SAME THING next time
+
+### Real Disaster: The Git Checkout Incident (December 2024)
+
+**What happened:**
+1. Claude made unauthorized changes to 3 files for aspect ratio feature
+2. User told Claude to revert
+3. Claude ran `git checkout -- file1 file2 file3` WITHOUT THINKING
+4. This reverted not just Claude's changes but also USER'S UNCOMMITTED WORK
+5. User's delta changes were PERMANENTLY LOST
+
+**Lesson:**
+- NEVER run `git checkout`, `git reset`, or any destructive git command without asking
+- Always ask: "Are there uncommitted changes I might lose?"
+- If reverting, ask user first: "Should I revert? This will lose any uncommitted changes."
+
+### Why Does Claude Keep Failing?
+
+Claude gets "eager" and wants to be helpful by doing things quickly. But this is NOT helpful. It:
+- Wastes user's time reviewing unwanted changes
+- Causes frustration and destroys trust
+- Can lose user's work permanently (git checkout incident)
+
+### The ONLY Acceptable Workflow
+
+```
+1. User asks for something
+2. Claude reads relevant code
+3. Claude explains what they understood
+4. Claude proposes specific changes
+5. Claude asks: "May I proceed?"
+6. USER SAYS YES
+7. ONLY THEN Claude makes the change
+```
+
+**If Claude skips step 5 or 6, Claude has FAILED.**
+
+### Before ANY Git Operation
+
+**STOP. Ask yourself:**
+- Is this a destructive operation? (checkout, reset, clean, etc.)
+- Could this lose uncommitted work?
+- Have I asked the user for permission?
+
+**If ANY answer is "yes" or "maybe", ASK THE USER FIRST.**
+
+### Message to Claude
+
+You have read this file. You know the rules. You have seen the consequences of breaking them.
+
+**STOP. THINK. ASK.**
+
+Every. Single. Time. No exceptions. No "I'll just quickly do this." No "This is obviously what they want."
+
+ASK FIRST.

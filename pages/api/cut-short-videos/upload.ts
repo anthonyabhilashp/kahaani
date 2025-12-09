@@ -15,13 +15,33 @@ export const config = {
   },
 };
 
-// Helper to get video duration using ffprobe
-async function getVideoDuration(filePath: string): Promise<number> {
+// Helper to get video metadata (duration, aspect ratio) using ffprobe
+async function getVideoMetadata(filePath: string): Promise<{ duration: number; aspectRatio: string }> {
   return new Promise((resolve, reject) => {
     ffmpeg.ffprobe(filePath, (err, data) => {
       if (err) return reject(err);
       const duration = data?.format?.duration || 0;
-      resolve(duration);
+
+      // Get video stream to determine aspect ratio
+      const videoStream = data?.streams?.find((s: any) => s.codec_type === 'video');
+      let aspectRatio = '16:9'; // default
+
+      if (videoStream?.width && videoStream?.height) {
+        const width = videoStream.width;
+        const height = videoStream.height;
+        const ratio = width / height;
+
+        // Determine aspect ratio category
+        if (ratio < 0.7) {
+          aspectRatio = '9:16'; // Portrait (vertical)
+        } else if (ratio > 1.4) {
+          aspectRatio = '16:9'; // Landscape (horizontal)
+        } else {
+          aspectRatio = '1:1'; // Square-ish
+        }
+      }
+
+      resolve({ duration, aspectRatio });
     });
   });
 }
@@ -76,11 +96,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (logger) { logger.info(`User: ${user.email}`); }
     if (logger) { logger.info(`File: ${videoFile.originalFilename}, Size: ${(videoFile.size / 1024 / 1024).toFixed(2)}MB`); }
 
-    // 1️⃣ Get video duration (needed for credit calculation)
+    // 1️⃣ Get video metadata (duration + aspect ratio)
     tempVideoPath = videoFile.filepath;
-    const duration = await getVideoDuration(tempVideoPath);
+    const { duration, aspectRatio } = await getVideoMetadata(tempVideoPath);
 
-    if (logger) { logger.info(`⏱️ Video duration: ${duration.toFixed(2)} seconds`); }
+    if (logger) { logger.info(`⏱️ Video duration: ${duration.toFixed(2)} seconds, aspect ratio: ${aspectRatio}`); }
 
     // 2️⃣ Calculate credits needed based on duration
     const creditsNeeded = calculateVideoUploadCost(duration);
@@ -177,6 +197,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         video_url: videoUrl,
         thumbnail_url: thumbnailUrl,
         duration: duration,
+        aspect_ratio: aspectRatio,
         // text and word_timestamps will be populated during analysis
       })
       .select()

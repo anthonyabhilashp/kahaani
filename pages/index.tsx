@@ -57,6 +57,7 @@ type CutShortVideo = {
   video_url: string | null;
   thumbnail_url: string | null;
   duration: number | null;
+  aspect_ratio: string | null;
   shorts_count: number;
 };
 
@@ -341,6 +342,9 @@ export default function Dashboard() {
               fetchStories(true, seriesId);
             }
           }
+        } else if (category === "cut-shorts") {
+          setSelectedCategory("cut-shorts");
+          fetchCutShortVideos();
         } else {
           setSelectedCategory("faceless-videos");
         }
@@ -509,7 +513,7 @@ export default function Dashboard() {
     try {
       const { data, error } = await supabase
         .from("cut_short_videos")
-        .select("id, title, created_at, video_url, thumbnail_url, duration")
+        .select("id, title, created_at, video_url, thumbnail_url, duration, aspect_ratio")
         .eq("user_id", user.id)
         .order("created_at", { ascending: false });
 
@@ -530,6 +534,7 @@ export default function Dashboard() {
             video_url: video.video_url,
             thumbnail_url: video.thumbnail_url,
             duration: video.duration,
+            aspect_ratio: video.aspect_ratio,
             shorts_count: count || 0
           };
         })
@@ -985,8 +990,7 @@ export default function Dashboard() {
           "Authorization": `Bearer ${session.access_token}`
         },
         body: JSON.stringify({
-          youtube_url: youtubeUrl,
-          title: "YouTube Import"
+          youtube_url: youtubeUrl
         })
       });
 
@@ -2430,14 +2434,18 @@ export default function Dashboard() {
             ) : (
               <>
                 {/* Cut Shorts Video Grid */}
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-2 lg:grid-cols-3 gap-5">
                   {cutShortVideos.map((video) => (
                     <div
                       key={video.id}
                       onClick={() => router.push(`/shorts/${video.id}`)}
                       className="group cursor-pointer relative"
                     >
-                      <div className="relative rounded-md overflow-hidden bg-gray-900 border border-gray-800 hover:border-orange-600 transition-all duration-200 aspect-[9/16]">
+                      <div className={`relative rounded-md overflow-hidden bg-gray-900 border border-gray-800 hover:border-orange-600 transition-all duration-200 ${
+                        video.aspect_ratio === '9:16' ? 'aspect-[9/16]' :
+                        video.aspect_ratio === '1:1' ? 'aspect-square' :
+                        'aspect-video'
+                      }`}>
                         {video.thumbnail_url ? (
                           <Image
                             src={video.thumbnail_url}
