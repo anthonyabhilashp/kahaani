@@ -30,6 +30,7 @@ async function downloadYouTubeAudio(url: string, outputPath: string): Promise<vo
       '-f', 'bestaudio[ext=m4a]/bestaudio/best',
       '-x', '--audio-format', 'mp3',
       '-o', outputPath,
+      '--cookies', '/root/cookies.txt', // YouTube cookies to avoid bot detection
       url
     ];
 
@@ -64,6 +65,7 @@ async function getYouTubeMetadata(url: string): Promise<{ title: string; duratio
       '--print', '%(width)s',
       '--print', '%(height)s',
       '--no-download',
+      '--cookies', '/root/cookies.txt', // YouTube cookies to avoid bot detection
       url
     ];
 
