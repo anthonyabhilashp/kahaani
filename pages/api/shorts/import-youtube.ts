@@ -31,12 +31,8 @@ async function getYouTubeMetadata(url: string): Promise<{ title: string; duratio
       '--print', '%(width)s',
       '--print', '%(height)s',
       '--no-download',
+      '--no-warnings',
     ];
-
-    // Only use cookies if the file exists (production server)
-    if (fs.existsSync(COOKIES_PATH)) {
-      args.push('--cookies', COOKIES_PATH);
-    }
 
     args.push(url);
 
@@ -77,7 +73,12 @@ async function getYouTubeMetadata(url: string): Promise<{ title: string; duratio
         resolve({ title, duration, aspectRatio });
       } else {
         console.error("❌ yt-dlp metadata failed:", stderr);
-        reject(new Error(`Failed to get YouTube metadata: ${stderr || 'Unknown error'}`));
+        // Check if it's a bot detection issue
+        if (stderr.includes('Sign in to confirm') || stderr.includes('bot')) {
+          reject(new Error('YouTube is blocking this request. Try a different video or try again later.'));
+        } else {
+          reject(new Error(`Failed to get YouTube metadata: ${stderr || 'Unknown error'}`));
+        }
       }
     });
 

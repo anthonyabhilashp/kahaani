@@ -617,7 +617,7 @@ async function runVideoGeneration(params: VideoGenParams) {
             .outputOptions([
               '-y',
               '-pix_fmt yuv420p',
-              '-preset medium',
+              '-preset fast',
               '-crf 18',
             ]);
 
@@ -799,7 +799,7 @@ async function runVideoGeneration(params: VideoGenParams) {
                 "-colorspace bt709",
                 `-t ${scene.duration}`,
                 "-r 30",
-                "-preset medium",
+                "-preset fast",
                 "-crf 15",
               ])
               .save(clipPath);
@@ -832,7 +832,7 @@ async function runVideoGeneration(params: VideoGenParams) {
                 `-vf ${videoFilter}`,
                 `-t ${scene.duration}`,
                 "-r 30", // Smooth playback for overlays
-                "-preset medium", // Match effect clips preset
+                "-preset fast", // Match effect clips preset
                 "-crf 15", // Match effect clips quality
               ])
               .save(clipPath)
@@ -1061,7 +1061,7 @@ async function runVideoGeneration(params: VideoGenParams) {
           "-map [outv]",
           "-c:v libx264",
           "-crf 18", // High quality (same as individual clips)
-          "-preset medium",
+          "-preset fast",
           "-pix_fmt yuv420p",
           "-movflags +faststart",
         ])
