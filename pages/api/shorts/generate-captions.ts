@@ -18,8 +18,6 @@ async function downloadAudio(url: string, outputPath: string): Promise<void> {
   fs.writeFileSync(outputPath, buffer);
 }
 
-const COOKIES_PATH = '/root/cookies.txt';
-
 // Download audio segment from YouTube using yt-dlp
 async function downloadYouTubeAudio(url: string, outputPath: string, startTime?: number, endTime?: number): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -27,12 +25,8 @@ async function downloadYouTubeAudio(url: string, outputPath: string, startTime?:
       '-f', 'bestaudio[ext=m4a]/bestaudio/best',
       '-x', '--audio-format', 'mp3',
       '-o', outputPath,
+      '--no-warnings',
     ];
-
-    // Only use cookies if the file exists (production server)
-    if (fs.existsSync(COOKIES_PATH)) {
-      args.push('--cookies', COOKIES_PATH);
-    }
 
     // Add time range if specified (download only the segment needed)
     if (startTime !== undefined && endTime !== undefined) {
