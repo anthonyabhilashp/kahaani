@@ -596,9 +596,9 @@ async function runVideoGeneration(params: VideoGenParams) {
           logger.info(`[${story_id}] 📏 Source video is ${sourceVideoDuration.toFixed(2)}s, need ${requiredDuration.toFixed(2)}s - extending last frame by ${extensionDuration.toFixed(2)}s`);
         }
 
-        // Build video filters
+        // Build video filters with high-quality lanczos upscaling for 4K
         const videoFilters = [
-          `scale=${width}:${height}:force_original_aspect_ratio=decrease`,
+          `scale=${width}:${height}:force_original_aspect_ratio=decrease:flags=lanczos`,
           `pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black`
         ];
 

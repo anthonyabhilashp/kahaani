@@ -296,11 +296,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       audio_generated_at: new Date().toISOString()
     };
 
-    // Only update duration if there's NO video (for image-based scenes)
+    // Only update duration if there's NO video or no existing duration
     // Video uploads already have correct duration from video file
-    if (!scene.video_url) {
+    if (!scene.video_url || !scene.duration) {
       updateData.duration = duration;
-      if (logger) { logger.info(`[${scene.story_id}] ⏱️ Setting duration from audio: ${duration.toFixed(2)}s (no video exists)`); }
+      if (logger) { logger.info(`[${scene.story_id}] ⏱️ Setting duration from audio: ${duration.toFixed(2)}s`); }
     } else {
       if (logger) { logger.info(`[${scene.story_id}] ⏱️ Preserving existing video duration: ${scene.duration.toFixed(2)}s (video exists)`); }
     }

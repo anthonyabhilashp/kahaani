@@ -269,6 +269,45 @@ export default function StoryDetailsPage() {
   const [loadingVideoDuration, setLoadingVideoDuration] = useState(false);
   const [videoImportMode, setVideoImportMode] = useState<'file' | 'youtube'>('file');
   const [youtubeUrl, setYoutubeUrl] = useState<string>('');
+
+  // Stock video search state
+  const [stockVideoDrawerOpen, setStockVideoDrawerOpen] = useState(false);
+  const [stockVideoDrawerScene, setStockVideoDrawerScene] = useState<number | null>(null);
+  const [stockVideoQuery, setStockVideoQuery] = useState<string>('');
+  const [stockVideoResults, setStockVideoResults] = useState<Array<{
+    id: number;
+    thumbnail: string;
+    duration: number;
+    width: number;
+    height: number;
+    preview_url: string;
+    download_url: string;
+    aspect_ratio: string;
+  }>>([]);
+  const [searchingStockVideos, setSearchingStockVideos] = useState(false);
+  const [selectingStockVideo, setSelectingStockVideo] = useState<number | null>(null);
+  const [stockVideoPage, setStockVideoPage] = useState(1);
+  const [stockVideoHasMore, setStockVideoHasMore] = useState(false);
+  const [loadingMoreStockVideos, setLoadingMoreStockVideos] = useState(false);
+
+  // Stock photo search state
+  const [stockPhotoDrawerOpen, setStockPhotoDrawerOpen] = useState(false);
+  const [stockPhotoDrawerScene, setStockPhotoDrawerScene] = useState<number | null>(null);
+  const [stockPhotoQuery, setStockPhotoQuery] = useState<string>('');
+  const [stockPhotoResults, setStockPhotoResults] = useState<Array<{
+    id: number;
+    thumbnail: string;
+    preview_url: string;
+    download_url: string;
+    width: number;
+    height: number;
+  }>>([]);
+  const [searchingStockPhotos, setSearchingStockPhotos] = useState(false);
+  const [selectingStockPhoto, setSelectingStockPhoto] = useState<number | null>(null);
+  const [stockPhotoPage, setStockPhotoPage] = useState(1);
+  const [stockPhotoHasMore, setStockPhotoHasMore] = useState(false);
+  const [loadingMoreStockPhotos, setLoadingMoreStockPhotos] = useState(false);
+
   const [creditConfirmOpen, setCreditConfirmOpen] = useState(false);
   const [creditConfirmAction, setCreditConfirmAction] = useState<{
     title: string;
@@ -1841,6 +1880,249 @@ export default function StoryDetailsPage() {
     setYoutubeUrl('');
     setVideoImportMode('file');
     setVideoDrawerOpen(true);
+  };
+
+  // Open stock video search drawer
+  const openStockVideoSearch = (sceneIndex: number) => {
+    const scene = scenes[sceneIndex];
+    // Pre-fill search with full scene text
+    setStockVideoDrawerScene(sceneIndex);
+    setStockVideoQuery(scene?.text || '');
+    setStockVideoResults([]);
+    setStockVideoPage(1);
+    setStockVideoHasMore(false);
+    setStockVideoDrawerOpen(true);
+  };
+
+  // Search stock videos
+  const searchStockVideos = async (loadMore = false) => {
+    if (!stockVideoQuery.trim()) return;
+
+    const page = loadMore ? stockVideoPage + 1 : 1;
+
+    try {
+      if (loadMore) {
+        setLoadingMoreStockVideos(true);
+      } else {
+        setSearchingStockVideos(true);
+        setStockVideoResults([]);
+      }
+
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        throw new Error("Please log in to search stock videos");
+      }
+
+      const response = await fetch('/api/search-stock-videos', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          query: stockVideoQuery,
+          orientation: story?.aspect_ratio === '16:9' ? 'landscape' : 'portrait',
+          per_page: 15,
+          page,
+        }),
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to search stock videos');
+      }
+
+      if (loadMore) {
+        setStockVideoResults(prev => [...prev, ...(data.videos || [])]);
+      } else {
+        setStockVideoResults(data.videos || []);
+        // Update search bar with AI-extracted keywords
+        if (data.search_query && data.search_query !== stockVideoQuery) {
+          setStockVideoQuery(data.search_query);
+        }
+      }
+      setStockVideoPage(page);
+      setStockVideoHasMore(data.has_more || false);
+    } catch (err: any) {
+      toast({ description: err.message || 'Failed to search stock videos', variant: 'destructive' });
+    } finally {
+      setSearchingStockVideos(false);
+      setLoadingMoreStockVideos(false);
+    }
+  };
+
+  // Select and save stock video to scene
+  const selectStockVideo = async (video: typeof stockVideoResults[0]) => {
+    if (stockVideoDrawerScene === null) return;
+
+    const scene = scenes[stockVideoDrawerScene];
+    if (!scene || !scene.id) return;
+
+    try {
+      setSelectingStockVideo(video.id);
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        throw new Error("Please log in to select stock videos");
+      }
+
+      const response = await fetch('/api/select-stock-video', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          scene_id: scene.id,
+          story_id: story?.id,
+          download_url: video.download_url,
+          duration: video.duration,
+          stock_video_id: video.id,
+        }),
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to select stock video');
+      }
+
+      // Update local scene state - don't change duration, keep audio duration
+      setScenes(prev => prev.map((s, i) =>
+        i === stockVideoDrawerScene
+          ? { ...s, video_url: data.video_url }
+          : s
+      ));
+
+      toast({ description: `Stock video added to scene ${stockVideoDrawerScene + 1}` });
+      setStockVideoDrawerOpen(false);
+
+      // Refresh story data to ensure sync
+      await fetchStory(false, true);
+    } catch (err: any) {
+      toast({ description: err.message || 'Failed to select stock video', variant: 'destructive' });
+    } finally {
+      setSelectingStockVideo(null);
+    }
+  };
+
+  // Open stock photo search drawer
+  const openStockPhotoSearch = (sceneIndex: number) => {
+    const scene = scenes[sceneIndex];
+    if (!scene) return;
+    setStockPhotoDrawerScene(sceneIndex);
+    setStockPhotoQuery(scene?.text || '');
+    setStockPhotoResults([]);
+    setStockPhotoPage(1);
+    setStockPhotoHasMore(false);
+    setStockPhotoDrawerOpen(true);
+  };
+
+  // Search stock photos
+  const searchStockPhotos = async (loadMore = false) => {
+    if (!stockPhotoQuery.trim()) return;
+
+    const page = loadMore ? stockPhotoPage + 1 : 1;
+
+    try {
+      if (loadMore) {
+        setLoadingMoreStockPhotos(true);
+      } else {
+        setSearchingStockPhotos(true);
+        setStockPhotoResults([]);
+      }
+
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        throw new Error("Please log in to search stock photos");
+      }
+
+      const response = await fetch('/api/search-stock-photos', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          query: stockPhotoQuery,
+          orientation: story?.aspect_ratio === '16:9' ? 'landscape' : 'portrait',
+          per_page: 15,
+          page,
+        }),
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to search stock photos');
+      }
+
+      if (loadMore) {
+        setStockPhotoResults(prev => [...prev, ...(data.photos || [])]);
+      } else {
+        setStockPhotoResults(data.photos || []);
+        // Update search bar with AI-extracted keywords
+        if (data.search_query && data.search_query !== stockPhotoQuery) {
+          setStockPhotoQuery(data.search_query);
+        }
+      }
+      setStockPhotoPage(page);
+      setStockPhotoHasMore(data.has_more || false);
+    } catch (err: any) {
+      toast({ description: err.message || 'Failed to search stock photos', variant: 'destructive' });
+    } finally {
+      setSearchingStockPhotos(false);
+      setLoadingMoreStockPhotos(false);
+    }
+  };
+
+  // Select and save stock photo to scene
+  const selectStockPhoto = async (photo: typeof stockPhotoResults[0]) => {
+    if (stockPhotoDrawerScene === null) return;
+
+    const scene = scenes[stockPhotoDrawerScene];
+    if (!scene || !scene.id) return;
+
+    try {
+      setSelectingStockPhoto(photo.id);
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        throw new Error("Please log in to select stock photos");
+      }
+
+      const response = await fetch('/api/select-stock-photo', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          scene_id: scene.id,
+          story_id: story?.id,
+          download_url: photo.download_url,
+          stock_photo_id: photo.id,
+        }),
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to select stock photo');
+      }
+
+      // Update local scene state
+      setScenes(prev => prev.map((s, i) =>
+        i === stockPhotoDrawerScene
+          ? { ...s, image_url: data.image_url }
+          : s
+      ));
+
+      toast({ description: `Stock photo added to scene ${stockPhotoDrawerScene + 1}` });
+      setStockPhotoDrawerOpen(false);
+
+      // Refresh story data to ensure sync
+      await fetchStory(false, true);
+    } catch (err: any) {
+      toast({ description: err.message || 'Failed to select stock photo', variant: 'destructive' });
+    } finally {
+      setSelectingStockPhoto(null);
+    }
   };
 
   // Handle YouTube video import
@@ -4483,7 +4765,17 @@ export default function StoryDetailsPage() {
                     <div className="flex gap-3 mb-3">
                       {/* Thumbnail */}
                       <div className="relative w-20 h-32 flex-shrink-0 rounded overflow-hidden bg-gray-800">
-                        {scene.image_url ? (
+                        {scene.video_url ? (
+                          <video
+                            key={scene.video_url}
+                            src={scene.video_url}
+                            className="w-full h-full object-cover"
+                            muted
+                            playsInline
+                            preload="metadata"
+                            onLoadedMetadata={(e) => { e.currentTarget.currentTime = 0.1; }}
+                          />
+                        ) : scene.image_url ? (
                           <img
                             key={scene.image_url}
                             src={scene.image_url}
@@ -4793,22 +5085,44 @@ export default function StoryDetailsPage() {
                           </TooltipContent>
                         </Tooltip>
 
-                        {/* Shorts Button - Only show when video is uploaded */}
-                        {scene.video_url && (
+                        {/* Stock Photo Button - Only show if no image and no video */}
+                        {!scene.image_url && !scene.video_url && (
                           <Tooltip>
                             <TooltipTrigger asChild>
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  openShortsDrawer(index);
+                                  openStockPhotoSearch(index);
                                 }}
-                                className="p-1.5 bg-purple-800 hover:bg-purple-700 text-white rounded transition-colors"
+                                className="px-2 lg:px-3 py-1.5 bg-teal-700 hover:bg-teal-600 text-white text-xs rounded transition-colors flex items-center gap-1 lg:gap-1.5"
                               >
-                                <Scissors className="w-3.5 h-3.5" />
+                                <Search className="w-3 h-3" />
+                                <span className="text-[10px] lg:text-xs">Stock Img</span>
                               </button>
                             </TooltipTrigger>
                             <TooltipContent>
-                              <p>Cut shorts from this video</p>
+                              <p>Search free stock photos</p>
+                            </TooltipContent>
+                          </Tooltip>
+                        )}
+
+                        {/* Stock Video Button - Only show if no video */}
+                        {!scene.video_url && !uploadingSceneVideo.has(index) && (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openStockVideoSearch(index);
+                                }}
+                                className="px-2 lg:px-3 py-1.5 bg-orange-700 hover:bg-orange-600 text-white text-xs rounded transition-colors flex items-center gap-1 lg:gap-1.5"
+                              >
+                                <Search className="w-3 h-3" />
+                                <span className="text-[10px] lg:text-xs">Stock Vid</span>
+                              </button>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              <p>Search free stock videos</p>
                             </TooltipContent>
                           </Tooltip>
                         )}
@@ -6753,6 +7067,285 @@ export default function StoryDetailsPage() {
                   )}
                 </Button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Stock Video Search Drawer */}
+      {stockVideoDrawerOpen && stockVideoDrawerScene !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          {/* Background Overlay */}
+          <div
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            onClick={() => setStockVideoDrawerOpen(false)}
+          />
+
+          {/* Drawer Content */}
+          <div className="relative bg-gray-900 rounded-2xl shadow-2xl border border-gray-700 max-w-2xl w-full max-h-[90vh] overflow-y-auto transform transition-all">
+            <div className="p-5">
+              {/* Header */}
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold text-white">
+                  Stock Videos for Scene #{stockVideoDrawerScene + 1}
+                </h3>
+                <button
+                  onClick={() => setStockVideoDrawerOpen(false)}
+                  className="text-gray-400 hover:text-white transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Info Box */}
+              <div className="mb-4 p-3 bg-orange-900/20 border border-orange-700/30 rounded-lg">
+                <div className="flex items-start gap-2">
+                  <Search className="w-4 h-4 text-orange-400 mt-0.5 flex-shrink-0" />
+                  <div className="text-xs text-orange-300">
+                    Search for stock videos and click to add to your scene.
+                  </div>
+                </div>
+              </div>
+
+              {/* Search Input */}
+              <div className="flex gap-2 mb-4">
+                <textarea
+                  value={stockVideoQuery}
+                  onChange={(e) => setStockVideoQuery(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && (e.preventDefault(), searchStockVideos(false))}
+                  placeholder="Describe the video you're looking for..."
+                  rows={2}
+                  className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm placeholder:text-gray-500 focus:outline-none focus:border-orange-500 resize-none"
+                />
+                <Button
+                  onClick={() => searchStockVideos(false)}
+                  disabled={searchingStockVideos || !stockVideoQuery.trim()}
+                  className="bg-orange-600 hover:bg-orange-700 text-white disabled:opacity-50 h-auto"
+                >
+                  {searchingStockVideos ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Search className="w-4 h-4" />
+                  )}
+                </Button>
+              </div>
+
+              {/* Results Grid */}
+              {stockVideoResults.length > 0 ? (
+                <>
+                  <div className="grid grid-cols-3 gap-3">
+                    {stockVideoResults.map((video) => (
+                      <div
+                        key={video.id}
+                        className="relative group cursor-pointer rounded-lg overflow-hidden border border-gray-700 hover:border-orange-500 transition-colors"
+                        onClick={() => selectStockVideo(video)}
+                        onMouseEnter={(e) => {
+                          const vid = e.currentTarget.querySelector('video');
+                          if (vid) vid.play().catch(() => {});
+                        }}
+                        onMouseLeave={(e) => {
+                          const vid = e.currentTarget.querySelector('video');
+                          if (vid) { vid.pause(); vid.currentTime = 0.1; }
+                        }}
+                      >
+                        {/* Video Preview */}
+                        <div className="aspect-video bg-gray-800">
+                          <video
+                            src={video.thumbnail}
+                            muted
+                            loop
+                            playsInline
+                            preload="metadata"
+                            className="w-full h-full object-cover pointer-events-none"
+                            onLoadedMetadata={(e) => { e.currentTarget.currentTime = 0.1; }}
+                          />
+                        </div>
+
+                        {/* Duration Badge */}
+                        <div className="absolute bottom-1 right-1 bg-black/70 text-white text-xs px-1.5 py-0.5 rounded pointer-events-none">
+                          {video.duration}s
+                        </div>
+
+                        {/* Hover Overlay */}
+                        <div className="absolute inset-0 bg-orange-600/0 group-hover:bg-orange-600/30 transition-colors flex items-center justify-center pointer-events-none">
+                          {selectingStockVideo === video.id ? (
+                            <Loader2 className="w-8 h-8 text-white animate-spin" />
+                          ) : (
+                            <Plus className="w-8 h-8 text-white opacity-0 group-hover:opacity-100 transition-opacity" />
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Load More Button */}
+                  {stockVideoHasMore && (
+                    <div className="mt-4 text-center">
+                      <Button
+                        onClick={() => searchStockVideos(true)}
+                        disabled={loadingMoreStockVideos}
+                        variant="outline"
+                        className="border-gray-600 text-gray-300 hover:bg-gray-800 hover:text-white"
+                      >
+                        {loadingMoreStockVideos ? (
+                          <>
+                            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                            Loading...
+                          </>
+                        ) : (
+                          'Load More'
+                        )}
+                      </Button>
+                    </div>
+                  )}
+                </>
+              ) : searchingStockVideos ? (
+                <div className="flex flex-col items-center justify-center py-12 text-gray-400">
+                  <Loader2 className="w-8 h-8 animate-spin mb-2" />
+                  <p>Searching...</p>
+                </div>
+              ) : (
+                <div className="flex flex-col items-center justify-center py-12 text-gray-400">
+                  <Search className="w-8 h-8 mb-2 opacity-50" />
+                  <p>Search for stock videos above</p>
+                </div>
+              )}
+
+              {/* Attribution */}
+              <p className="text-xs text-gray-500 mt-4 text-center">
+                Videos provided by <a href="https://pixabay.com" target="_blank" rel="noopener noreferrer" className="text-orange-400 hover:underline">Pixabay</a>
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Stock Photo Search Drawer */}
+      {stockPhotoDrawerOpen && stockPhotoDrawerScene !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          {/* Background Overlay */}
+          <div
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            onClick={() => setStockPhotoDrawerOpen(false)}
+          />
+
+          {/* Drawer Content */}
+          <div className="relative bg-gray-900 rounded-2xl shadow-2xl border border-gray-700 max-w-2xl w-full max-h-[90vh] overflow-y-auto transform transition-all">
+            <div className="p-5">
+              {/* Header */}
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold text-white">
+                  Stock Photos for Scene #{stockPhotoDrawerScene + 1}
+                </h3>
+                <button
+                  onClick={() => setStockPhotoDrawerOpen(false)}
+                  className="text-gray-400 hover:text-white transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Info Box */}
+              <div className="mb-4 p-3 bg-teal-900/20 border border-teal-700/30 rounded-lg">
+                <div className="flex items-start gap-2">
+                  <Search className="w-4 h-4 text-teal-400 mt-0.5 flex-shrink-0" />
+                  <div className="text-xs text-teal-300">
+                    Search for stock photos and click to add to your scene.
+                  </div>
+                </div>
+              </div>
+
+              {/* Search Input */}
+              <div className="flex gap-2 mb-4">
+                <textarea
+                  value={stockPhotoQuery}
+                  onChange={(e) => setStockPhotoQuery(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && (e.preventDefault(), searchStockPhotos(false))}
+                  placeholder="Describe the photo you're looking for..."
+                  rows={2}
+                  className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm placeholder:text-gray-500 focus:outline-none focus:border-teal-500 resize-none"
+                />
+                <Button
+                  onClick={() => searchStockPhotos(false)}
+                  disabled={searchingStockPhotos || !stockPhotoQuery.trim()}
+                  className="bg-teal-600 hover:bg-teal-700 text-white disabled:opacity-50 h-auto"
+                >
+                  {searchingStockPhotos ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Search className="w-4 h-4" />
+                  )}
+                </Button>
+              </div>
+
+              {/* Results Grid */}
+              {stockPhotoResults.length > 0 ? (
+                <>
+                  <div className="grid grid-cols-3 gap-3">
+                    {stockPhotoResults.map((photo) => (
+                      <div
+                        key={photo.id}
+                        className="relative group cursor-pointer rounded-lg overflow-hidden border border-gray-700 hover:border-teal-500 transition-colors"
+                        onClick={() => selectStockPhoto(photo)}
+                      >
+                        {/* Thumbnail */}
+                        <div className="aspect-square bg-gray-800">
+                          <img
+                            src={photo.thumbnail}
+                            alt="Stock photo thumbnail"
+                            className="w-full h-full object-cover"
+                          />
+                        </div>
+
+                        {/* Hover Overlay */}
+                        <div className="absolute inset-0 bg-teal-600/0 group-hover:bg-teal-600/30 transition-colors flex items-center justify-center">
+                          {selectingStockPhoto === photo.id ? (
+                            <Loader2 className="w-8 h-8 text-white animate-spin" />
+                          ) : (
+                            <Plus className="w-8 h-8 text-white opacity-0 group-hover:opacity-100 transition-opacity" />
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Load More Button */}
+                  {stockPhotoHasMore && (
+                    <div className="mt-4 text-center">
+                      <Button
+                        onClick={() => searchStockPhotos(true)}
+                        disabled={loadingMoreStockPhotos}
+                        variant="outline"
+                        className="border-gray-600 text-gray-300 hover:bg-gray-800 hover:text-white"
+                      >
+                        {loadingMoreStockPhotos ? (
+                          <>
+                            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                            Loading...
+                          </>
+                        ) : (
+                          'Load More'
+                        )}
+                      </Button>
+                    </div>
+                  )}
+                </>
+              ) : searchingStockPhotos ? (
+                <div className="flex flex-col items-center justify-center py-12 text-gray-400">
+                  <Loader2 className="w-8 h-8 animate-spin mb-2" />
+                  <p>Searching...</p>
+                </div>
+              ) : (
+                <div className="flex flex-col items-center justify-center py-12 text-gray-400">
+                  <Search className="w-8 h-8 mb-2 opacity-50" />
+                  <p>Search for stock photos above</p>
+                </div>
+              )}
+
+              {/* Attribution */}
+              <p className="text-xs text-gray-500 mt-4 text-center">
+                Photos provided by <a href="https://pixabay.com" target="_blank" rel="noopener noreferrer" className="text-teal-400 hover:underline">Pixabay</a>
+              </p>
             </div>
           </div>
         </div>
