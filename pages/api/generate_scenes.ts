@@ -123,30 +123,58 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       logger.log(`🧠 Generating ${sceneCount} scenes with ${SCENE_MODEL} (${PROVIDER})...`);
 
       const storyPrompt = `
-You are a JSON generator. Break the following content into exactly ${sceneCount} scenes with a title.
+You are an expert storyteller and content creator specializing in viral, engaging short-form content (TikTok, Instagram Reels, YouTube Shorts).
 
-RULES:
-- RESPECT THE USER'S INTENT: If they want facts, provide facts. If they want a story, provide a story.
-- Match the tone and style to the user's request (educational, narrative, dramatic, informative, etc.)
-- Use proper punctuation: periods, commas, exclamation marks, question marks
-- Write complete sentences that work well when read aloud
-- Make each scene clear, engaging, and easy to visualize
-- Focus on creating compelling, high-quality content for each scene
-- If the user provides a long story, intelligently condense or summarize it into exactly ${sceneCount} scenes
-- For STORIES: The last scene should provide narrative closure
-- For FACTS/EDUCATIONAL content: Each scene is an independent fact - DO NOT add moral lessons, calls to action, or preachy endings. Just provide interesting, standalone facts.
+USER REQUEST:
+${prompt}
+
+YOUR TASK:
+Create exactly ${sceneCount} highly engaging scenes with a scroll-stopping title. Each scene should captivate viewers and make them want to keep watching.
+
+WHAT MAKES CONTENT VIRAL AND ENGAGING:
+- Opens with a HOOK that stops scrolling (surprising fact, bold claim, relatable problem, curiosity gap)
+- Creates emotional resonance (excitement, wonder, shock, curiosity, relatability)
+- Uses storytelling patterns: setup → tension → payoff
+- Each scene builds anticipation for the next
+- Ends with impact (twist, revelation, satisfying conclusion, or call-to-thought)
+- Uses natural, conversational language that works when spoken aloud
+- Includes vivid, visual descriptions that are easy to imagine
+- Avoids generic conclusions or preachy morals
+
+CONTENT TYPE GUIDELINES:
+- STORIES: Create narrative arc with compelling characters, conflict, and resolution. Make viewers care about what happens next.
+- FACTS/EDUCATIONAL: Present each fact as a mini-revelation. Use patterns like "You won't believe...", "Here's why...", "The truth about...". Make learning feel like discovering secrets.
+- INFORMATIVE: Transform information into narrative. Use curiosity gaps and progressive reveals.
+
+SCENE STRUCTURE:
+- Scene 1: MUST hook immediately (first 2 seconds are critical)
+- Middle scenes: Build momentum, raise stakes, deepen intrigue
+- Final scene: Deliver satisfying payoff OR thought-provoking conclusion
+
+TITLE GUIDELINES:
+- Make it scroll-stopping and shareable
+- Use proven patterns: "POV:", "Wait until...", "Nobody talks about...", "The truth about...", "How I...", "Why..."
+- Keep it 5-12 words, punchy and intriguing
+- Match the content type (story, facts, educational)
+
+WRITING STYLE:
+- Write for the EAR not the eye (this will be spoken aloud)
+- Use contractions, natural speech patterns
+- Include proper punctuation for pacing
+- Make every word count - no fluff
+- Create vivid mental images
 
 Return ONLY valid JSON in this exact format:
 {
-  "title": "A title that matches the content type and topic",
+  "title": "A scroll-stopping, shareable title (5-12 words)",
   "scenes": [
     {
-      "text": "Clear, well-punctuated sentences."
+      "text": "Engaging, visual, conversational scene text."
     }
   ]
 }
 
-User request: ${prompt}
+Remember: Your goal is to create content so engaging that viewers HAVE to watch until the end and want to share it.
       `;
 
       const response = await fetch(OPENROUTER_URL, {
