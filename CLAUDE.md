@@ -259,9 +259,13 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=
 SUPABASE_SERVICE_ROLE_KEY=
 
 # AI APIs
-OPENROUTER_API_KEY=        # Scene generation
-OPENAI_API_KEY=            # Alternative image generation
-ELEVENLABS_API_KEY=        # Audio narration
+OPENROUTER_API_KEY=        # Scene generation (stories) + UGC script generation
+OPENAI_API_KEY=            # TTS audio generation
+ELEVENLABS_API_KEY=        # Audio narration (alternative to OpenAI TTS)
+
+# UGC Ads (New)
+HEYGEN_API_KEY=            # Talking avatar video generation
+UGC_SCRIPT_MODEL=google/gemini-2.5-flash-1219  # Optional: Override UGC script model (via OpenRouter)
 
 # Model configuration
 PROVIDER=openrouter
@@ -753,3 +757,208 @@ You have read this file. You know the rules. You have seen the consequences of b
 Every. Single. Time. No exceptions. No "I'll just quickly do this." No "This is obviously what they want."
 
 ASK FIRST.
+
+---
+
+## 💰 BUSINESS CONTEXT & REVENUE STRATEGY
+
+**Last Updated:** January 2025
+
+### Current Situation
+
+**Product:** aivideogen.cc - AI-powered faceless video generation platform
+**Metrics:** 50 sign-ups, 0 paying customers, 0% retention
+**Burn Rate:** $118/mo Claude + Supabase + Hosting + API costs
+**Cash Runway:** Low - needs revenue within 30 days
+
+### The Core Problem
+
+**50 users tried the product. ZERO came back. ZERO paid.**
+
+This is a **product-market fit issue**, not a feature issue. Building more features (UGC Creator, Series, etc.) won't help if the core product doesn't retain users.
+
+### Critical Lessons Learned
+
+#### 1. **Too Many Features = Confusion**
+- Product has 4 different features (Stories, Series, Cut Shorts, UGC)
+- No clear value proposition
+- Users don't know what problem it solves
+- **Fix:** Focus on ONE use case that works perfectly
+
+#### 2. **Multi-Step Process = Drop-off**
+Current Faceless Video flow:
+1. Generate Scenes (wait)
+2. Generate Images (wait)
+3. Generate Audio (wait)
+4. Generate Video (wait)
+
+**This is 4 separate clicks + waiting.** Users drop off.
+
+**Fix:** Combine into ONE button that does everything automatically.
+
+#### 3. **No Instant Gratification**
+- New user signs up → Gets credits → Creates video → Waits 5-10 minutes → Gets mediocre result
+- They don't see value in first 30 seconds
+- **Fix:** Show example videos immediately, pre-generate first video, or 10-second demo
+
+#### 4. **Credit System is Confusing**
+- Users don't know how many credits they need
+- Don't know what they can create with X credits
+- Fear of running out mid-project
+- **Fix:** Show upfront cost: "This video will cost 15 credits (you have 50)"
+
+#### 5. **Quality Must Be Excellent**
+- If output is mediocre, users won't pay
+- Better to do ONE thing perfectly than many things poorly
+- **Current stack:** Gemini Flash (images), ElevenLabs (audio), Pixabay (stock videos)
+
+### Target Customer Analysis
+
+**Who has highest probability of paying for faceless AI videos:**
+
+#### 🥇 #1: YouTube Faceless Channel Creators (9/10 probability)
+
+**Profile:**
+- Run channels: "Top 10", "Reddit Stories", "Scary Facts", "Motivational Content"
+- Need 3-7 videos per week
+- Currently spend $500-2,000/month on Fiverr freelancers
+- Clear ROI from YouTube ad revenue
+
+**Why they'll pay:**
+- ✅ **PROVEN BUYERS** - Already spending money on videos
+- ✅ **High volume need** - Recurring weekly demand
+- ✅ **Clear pain point** - Manual creation takes 5-10 hours/video
+- ✅ **Speed matters** - Need fast turnaround
+
+**Pricing they'll accept:**
+- $99-199/mo for unlimited videos
+- OR $29/video (vs. $50-100 on Fiverr)
+
+**Where to find them:**
+- YouTube search: "faceless channel", "reddit stories", "top 10"
+- Reddit: r/PartneredYoutube, r/YouTubeCreators
+- Twitter: "faceless youtube channel"
+
+#### 🥈 #2: Content Agencies/Freelancers (8/10 probability)
+
+**Profile:**
+- Creating videos for clients
+- Charge $500-2,000 per video
+- Use tools to deliver faster = higher margins
+
+**Pricing:** $149-299/mo (B2B pricing)
+
+#### 🥉 #3: Podcast Clip Creators (7/10 probability)
+
+**Profile:**
+- Turn podcast episodes into 20+ short clips
+- Takes 10 hours manually
+- Need automation
+
+**Pricing:** $49-99/mo
+
+### Recommended Revenue Strategy
+
+**STOP building features. START validating demand.**
+
+#### Week 1: User Research & Proof
+1. Email 50 existing users - offer $10 Starbucks for 15min call
+2. Find out WHY they didn't come back
+3. Create 5 sample videos - be brutally honest about quality
+4. Identify 50 YouTube faceless channels (10K-500K subs)
+
+#### Week 2: Service-Based Revenue (Fastest path to cash)
+1. Create 3 sample videos in popular faceless channel styles
+2. Email 50 creators: "I made this sample for you - interested?"
+3. Offer: "Done-for-you faceless videos - $299 each, 24hr delivery"
+4. **Goal:** Get 1 paying client
+
+**Why service first:**
+- Cash flow NOW (desperately needed)
+- Learn what customers actually want
+- Build case studies
+- Discover which feature is valuable
+
+#### Week 3-4: Scale What Works
+If service gets traction:
+- Do 5-10 client projects manually
+- Document what works
+- Build templates
+- Then automate with SaaS
+
+If NO ONE buys service after 20 outreach attempts:
+- Product might not be viable
+- Consider pivot or shutdown
+
+### What NOT to Do
+
+❌ **Don't run paid ads** - 0% conversion = burning money
+❌ **Don't build more features** - Won't fix retention
+❌ **Don't assume you know the problem** - Talk to users first
+❌ **Don't ignore the data** - 50 users, 0 retention = broken
+
+### Cost Cutting Measures
+
+**Immediate actions to reduce burn:**
+1. Pause Claude subscription after critical work ($118/mo saved)
+2. Use Supabase free tier if possible
+3. Switch to cheapest AI models (not GPT-4)
+4. Minimize hosting costs
+
+**Can't outrun burn rate with zero revenue.**
+
+### Success Metrics
+
+**30-Day Goal:**
+- 1 paying customer (service or SaaS)
+- $99-299 revenue
+- Validated that someone will pay
+
+**90-Day Goal:**
+- 10 paying customers
+- $500-1,000 MRR
+- Clear product-market fit signal
+
+### Alternative Revenue Models
+
+If faceless videos don't work:
+
+1. **UGC Ads Service** - Create UGC-style ads for DTC brands ($299-500/video)
+2. **White-label** - Partner with agencies who resell to clients
+3. **Niche SaaS** - Pick ONE vertical (e.g., "TikTok hooks for SaaS")
+4. **Consulting** - Position as video creation consultant, use tool to deliver faster
+
+### Hard Truth
+
+**If after talking to 10 users you discover:**
+- Videos are low quality
+- Process is too complicated
+- Competitors are better
+- Nobody needs this
+
+**Then pivot or shut down.** Better to find out now than after burning $1,000 more.
+
+### Key Principle
+
+**Revenue solves everything. Features don't.**
+
+Focus 100% of energy on getting ONE person to pay. Once you have that, you have a business. Until then, you have a hobby.
+
+---
+
+## 🎯 IMMEDIATE ACTION ITEMS (When Working on This Codebase)
+
+Based on business context above, **prioritize:**
+
+1. ✅ **Simplification over features** - Remove complexity, don't add it
+2. ✅ **User research insights** - Implement feedback from user interviews
+3. ✅ **Quality over quantity** - Make ONE feature excellent, not many mediocre
+4. ✅ **Speed to value** - Reduce time from signup to first video
+5. ❌ **No new features** unless user explicitly validated demand
+
+**Before building anything, ask:**
+- "Will this help get the first paying customer?"
+- "Did a user explicitly ask for this?"
+- "Does this simplify or complicate the experience?"
+
+If answer is no, don't build it.

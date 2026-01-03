@@ -5094,7 +5094,7 @@ export default function StoryDetailsPage() {
                                   e.stopPropagation();
                                   openStockPhotoSearch(index);
                                 }}
-                                className="px-2 lg:px-3 py-1.5 bg-teal-700 hover:bg-teal-600 text-white text-xs rounded transition-colors flex items-center gap-1 lg:gap-1.5"
+                                className="px-2 lg:px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-400 text-xs rounded transition-colors flex items-center gap-1 lg:gap-1.5"
                               >
                                 <Search className="w-3 h-3" />
                                 <span className="text-[10px] lg:text-xs">Stock Img</span>
@@ -5115,7 +5115,7 @@ export default function StoryDetailsPage() {
                                   e.stopPropagation();
                                   openStockVideoSearch(index);
                                 }}
-                                className="px-2 lg:px-3 py-1.5 bg-orange-700 hover:bg-orange-600 text-white text-xs rounded transition-colors flex items-center gap-1 lg:gap-1.5"
+                                className="px-2 lg:px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-400 text-xs rounded transition-colors flex items-center gap-1 lg:gap-1.5"
                               >
                                 <Search className="w-3 h-3" />
                                 <span className="text-[10px] lg:text-xs">Stock Vid</span>
@@ -7246,10 +7246,10 @@ export default function StoryDetailsPage() {
               </div>
 
               {/* Info Box */}
-              <div className="mb-4 p-3 bg-teal-900/20 border border-teal-700/30 rounded-lg">
+              <div className="mb-4 p-3 bg-orange-900/20 border border-orange-700/30 rounded-lg">
                 <div className="flex items-start gap-2">
-                  <Search className="w-4 h-4 text-teal-400 mt-0.5 flex-shrink-0" />
-                  <div className="text-xs text-teal-300">
+                  <Search className="w-4 h-4 text-orange-400 mt-0.5 flex-shrink-0" />
+                  <div className="text-xs text-orange-300">
                     Search for stock photos and click to add to your scene.
                   </div>
                 </div>
@@ -7263,12 +7263,12 @@ export default function StoryDetailsPage() {
                   onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && (e.preventDefault(), searchStockPhotos(false))}
                   placeholder="Describe the photo you're looking for..."
                   rows={2}
-                  className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm placeholder:text-gray-500 focus:outline-none focus:border-teal-500 resize-none"
+                  className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm placeholder:text-gray-500 focus:outline-none focus:border-orange-500 resize-none"
                 />
                 <Button
                   onClick={() => searchStockPhotos(false)}
                   disabled={searchingStockPhotos || !stockPhotoQuery.trim()}
-                  className="bg-teal-600 hover:bg-teal-700 text-white disabled:opacity-50 h-auto"
+                  className="bg-orange-600 hover:bg-orange-700 text-white disabled:opacity-50 h-auto"
                 >
                   {searchingStockPhotos ? (
                     <Loader2 className="w-4 h-4 animate-spin" />
@@ -7285,7 +7285,7 @@ export default function StoryDetailsPage() {
                     {stockPhotoResults.map((photo) => (
                       <div
                         key={photo.id}
-                        className="relative group cursor-pointer rounded-lg overflow-hidden border border-gray-700 hover:border-teal-500 transition-colors"
+                        className="relative group cursor-pointer rounded-lg overflow-hidden border border-gray-700 hover:border-orange-500 transition-colors"
                         onClick={() => selectStockPhoto(photo)}
                       >
                         {/* Thumbnail */}
@@ -7298,7 +7298,7 @@ export default function StoryDetailsPage() {
                         </div>
 
                         {/* Hover Overlay */}
-                        <div className="absolute inset-0 bg-teal-600/0 group-hover:bg-teal-600/30 transition-colors flex items-center justify-center">
+                        <div className="absolute inset-0 bg-orange-600/0 group-hover:bg-orange-600/30 transition-colors flex items-center justify-center">
                           {selectingStockPhoto === photo.id ? (
                             <Loader2 className="w-8 h-8 text-white animate-spin" />
                           ) : (

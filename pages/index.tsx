@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Plus, Loader2, PlayCircle, Clock, Film, Image as ImageIcon, Video, User, LogOut, Trash2, MoreHorizontal, Smartphone, Square, Monitor, Coins, List, ArrowLeft, ArrowRight, FileText, Menu, X, Sparkles, Volume2, Info, Play, StopCircle, HelpCircle, Search, ChevronRight, MessageCircle, Scissors, Upload, Youtube } from "lucide-react";
+import { Plus, Loader2, PlayCircle, Clock, Film, Image as ImageIcon, Video, User, LogOut, Trash2, MoreHorizontal, Smartphone, Square, Monitor, Coins, List, ArrowLeft, ArrowRight, FileText, Menu, X, Sparkles, Volume2, VolumeX, Info, Play, StopCircle, HelpCircle, Search, ChevronRight, MessageCircle, Scissors, Upload, Youtube } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   DropdownMenu,
@@ -240,7 +240,7 @@ export default function Dashboard() {
   const [selectedSeriesForCreate, setSelectedSeriesForCreate] = useState<string | null>(null);
   const [newPrompt, setNewPrompt] = useState("");
   const [creating, setCreating] = useState(false);
-  const [selectedCategory, setSelectedCategory] = useState<"faceless-videos" | "series" | "cut-shorts">("faceless-videos");
+  const [selectedCategory, setSelectedCategory] = useState<"faceless-videos" | "series" | "cut-shorts" | "ugc-ads">("faceless-videos");
   const [sceneCount, setSceneCount] = useState(5);
   const [aspectRatio, setAspectRatio] = useState<'9:16' | '16:9' | '1:1'>('9:16');
   const [showCreditWarning, setShowCreditWarning] = useState(false);
@@ -301,6 +301,33 @@ export default function Dashboard() {
   const [playingPreviewId, setPlayingPreviewId] = useState<string | null>(null);
   const voicePreviewAudioRef = useRef<HTMLAudioElement | null>(null);
   const [isBlankStory, setIsBlankStory] = useState(false); // Toggle for blank story mode
+
+  // UGC Ads state
+  const [ugcVideos, setUgcVideos] = useState<any[]>([]);
+  const [loadingUgcVideos, setLoadingUgcVideos] = useState(false);
+  const [showUgcWizard, setShowUgcWizard] = useState(false);
+  const [ugcStep, setUgcStep] = useState<'input' | 'script' | 'avatar' | 'customize'>('input');
+  const [ugcInputText, setUgcInputText] = useState('');
+  const [ugcVideoId, setUgcVideoId] = useState<string | null>(null);
+  const [ugcScriptData, setUgcScriptData] = useState<any>(null);
+  const [ugcAvatarImageUrl, setUgcAvatarImageUrl] = useState<string>('');
+  const [generatingUGCScript, setGeneratingUGCScript] = useState(false);
+  const [generatingUGCAudio, setGeneratingUGCAudio] = useState(false);
+  const [generatingUGCAvatar, setGeneratingUGCAvatar] = useState(false);
+  const [ugcAvatars, setUgcAvatars] = useState<any[]>([]);
+  const [ugcVoices, setUgcVoices] = useState<any[]>([]);
+  const [loadingUgcAvatars, setLoadingUgcAvatars] = useState(false);
+  const [loadingUgcVoices, setLoadingUgcVoices] = useState(false);
+  const [selectedUgcAvatarId, setSelectedUgcAvatarId] = useState<string>('');
+  const [selectedUgcVoiceId, setSelectedUgcVoiceId] = useState<string>('');
+  const [ugcResolution, setUgcResolution] = useState<'720p' | '1080p'>('720p');
+  const [selectedUgcVideo, setSelectedUgcVideo] = useState<any>(null);
+  const [showUgcPreview, setShowUgcPreview] = useState(false);
+  const [deleteUgcDialogOpen, setDeleteUgcDialogOpen] = useState(false);
+  const [ugcToDelete, setUgcToDelete] = useState<any>(null);
+  const [deletingUgc, setDeletingUgc] = useState(false);
+  const [ugcDeleteCountdown, setUgcDeleteCountdown] = useState(2);
+  const [ugcMutedState, setUgcMutedState] = useState<Record<string, boolean>>({});
 
   // Show landing page for non-authenticated users
   // (Removed redirect to /login - will show landing page instead)
@@ -408,6 +435,37 @@ export default function Dashboard() {
       return () => clearInterval(interval);
     }
   }, [deleteDialogOpen]);
+
+  // Countdown timer for UGC delete confirmation
+  useEffect(() => {
+    if (deleteUgcDialogOpen) {
+      setUgcDeleteCountdown(2);
+
+      const interval = setInterval(() => {
+        setUgcDeleteCountdown((prev) => {
+          if (prev <= 1) {
+            clearInterval(interval);
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+
+      return () => clearInterval(interval);
+    }
+  }, [deleteUgcDialogOpen]);
+
+  // Fetch UGC avatars and voices when wizard opens and reaches avatar step
+  useEffect(() => {
+    if (showUgcWizard && ugcStep === 'avatar') {
+      if (ugcAvatars.length === 0) {
+        fetchUgcAvatars();
+      }
+      if (ugcVoices.length === 0) {
+        fetchUgcVoices();
+      }
+    }
+  }, [showUgcWizard, ugcStep]);
 
   async function fetchStories(reset = true, seriesId: string | null = null, storyType: string | null = null) {
     if (reset) {
@@ -550,6 +608,262 @@ export default function Dashboard() {
       });
     } finally {
       setLoadingCutShorts(false);
+    }
+  }
+
+  async function fetchUGCVideos() {
+    if (!user) return;
+
+    setLoadingUgcVideos(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const response = await fetch('/api/get_ugc_videos', {
+        headers: {
+          'Authorization': `Bearer ${session?.access_token}`
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to fetch UGC videos');
+      }
+
+      const data = await response.json();
+      setUgcVideos(data.videos || []);
+    } catch (err: any) {
+      console.error("Error fetching UGC videos:", err);
+      toast({
+        title: "Error",
+        description: "Failed to load UGC videos",
+        variant: "destructive"
+      });
+    } finally {
+      setLoadingUgcVideos(false);
+    }
+  }
+
+  async function fetchUgcAvatars() {
+    setLoadingUgcAvatars(true);
+    try {
+      const response = await fetch('/api/ugc/list-avatars');
+      if (!response.ok) throw new Error('Failed to fetch avatars');
+      const data = await response.json();
+      setUgcAvatars(data.data?.avatars || []);
+    } catch (error) {
+      console.error("Error fetching UGC avatars:", error);
+      toast({
+        title: "Error",
+        description: "Failed to load avatars",
+        variant: "destructive"
+      });
+    } finally {
+      setLoadingUgcAvatars(false);
+    }
+  }
+
+  async function fetchUgcVoices() {
+    setLoadingUgcVoices(true);
+    try {
+      const response = await fetch('/api/ugc/list-voices');
+      if (!response.ok) throw new Error('Failed to fetch voices');
+      const data = await response.json();
+      setUgcVoices(data.data?.voices || []);
+    } catch (error) {
+      console.error("Error fetching UGC voices:", error);
+      toast({
+        title: "Error",
+        description: "Failed to load voices",
+        variant: "destructive"
+      });
+    } finally {
+      setLoadingUgcVoices(false);
+    }
+  }
+
+  async function handleUGCGenerateScript() {
+    if (!ugcInputText.trim()) return;
+
+    setGeneratingUGCScript(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        toast({
+          title: "Error",
+          description: "Please log in to generate scripts",
+          variant: "destructive"
+        });
+        return;
+      }
+
+      const response = await fetch('/api/ugc/generate-script', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`
+        },
+        body: JSON.stringify({
+          input_text: ugcInputText
+        })
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to generate script');
+      }
+
+      const data = await response.json();
+      setUgcVideoId(data.ugc_video_id);
+      setUgcScriptData(data);
+      setUgcStep('script');
+
+      // Refresh credits
+      if (refetchCredits) {
+        refetchCredits();
+      }
+
+      toast({
+        title: "Success",
+        description: `Script generated! (${data.credits_deducted} credit used)`,
+      });
+    } catch (error: any) {
+      console.error("Error generating script:", error);
+      toast({
+        title: "Error",
+        description: error.message || "Failed to generate script",
+        variant: "destructive"
+      });
+    } finally {
+      setGeneratingUGCScript(false);
+    }
+  }
+
+  async function handleUGCGenerateAudio() {
+    if (!ugcVideoId) return;
+
+    setGeneratingUGCAudio(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        toast({
+          title: "Error",
+          description: "Please log in",
+          variant: "destructive"
+        });
+        return;
+      }
+
+      const response = await fetch('/api/ugc/generate-audio', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`
+        },
+        body: JSON.stringify({
+          ugc_video_id: ugcVideoId,
+          voice_id: selectedUgcVoiceId || null
+        })
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to generate audio');
+      }
+
+      const data = await response.json();
+
+      // Refresh credits
+      if (refetchCredits) {
+        refetchCredits();
+      }
+
+      toast({
+        title: "Success",
+        description: `Audio generated! (${data.credits_deducted} credits used)`,
+      });
+
+      return data;
+    } catch (error: any) {
+      console.error("Error generating audio:", error);
+      toast({
+        title: "Error",
+        description: error.message || "Failed to generate audio",
+        variant: "destructive"
+      });
+      throw error;
+    } finally {
+      setGeneratingUGCAudio(false);
+    }
+  }
+
+  async function handleUGCGenerateAvatarVideo() {
+    if (!ugcVideoId || !selectedUgcAvatarId || !selectedUgcVoiceId) {
+      toast({
+        title: "Error",
+        description: "Please select both avatar and voice",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    setGeneratingUGCAvatar(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        toast({
+          title: "Error",
+          description: "Please log in",
+          variant: "destructive"
+        });
+        return;
+      }
+
+      // Generate avatar video with HeyGen (includes audio + lip-sync)
+      const response = await fetch('/api/ugc/generate-avatar-video', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`
+        },
+        body: JSON.stringify({
+          ugc_video_id: ugcVideoId,
+          avatar_id: selectedUgcAvatarId,
+          voice_id: selectedUgcVoiceId,
+          resolution: ugcResolution
+        })
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to generate avatar video');
+      }
+
+      const data = await response.json();
+
+      // Close wizard and refresh UGC videos
+      setShowUgcWizard(false);
+      fetchUGCVideos();
+
+      // Reset wizard state
+      setUgcStep('input');
+      setUgcInputText('');
+      setUgcVideoId(null);
+      setUgcScriptData(null);
+      setSelectedUgcAvatarId('');
+      setSelectedUgcVoiceId('');
+      setUgcResolution('720p');
+
+      toast({
+        title: "Success",
+        description: "UGC ad generated successfully!",
+      });
+    } catch (error: any) {
+      console.error("Error generating avatar video:", error);
+      toast({
+        title: "Error",
+        description: error.message || "Failed to generate avatar video",
+        variant: "destructive"
+      });
+    } finally {
+      setGeneratingUGCAvatar(false);
     }
   }
 
@@ -758,6 +1072,87 @@ export default function Dashboard() {
     e.stopPropagation(); // Prevent navigation to series view
     setSeriesToDelete(series);
     setDeleteSeriesDialogOpen(true);
+  }
+
+  // UGC video download function
+  async function handleUgcDownload(e: React.MouseEvent, video: any) {
+    e.stopPropagation();
+    if (!video.video_url) return;
+
+    try {
+      toast({ description: "Downloading video..." });
+
+      // Fetch the video as a blob
+      const response = await fetch(video.video_url);
+      const blob = await response.blob();
+
+      // Create a temporary URL for the blob
+      const url = window.URL.createObjectURL(blob);
+
+      // Create a temporary link and trigger download
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${video.title || 'ugc-ad'}.mp4`;
+      document.body.appendChild(link);
+      link.click();
+
+      // Clean up
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+
+      toast({ description: "Video downloaded successfully" });
+    } catch (error) {
+      console.error("Download error:", error);
+      toast({ description: "Failed to download video", variant: "destructive" });
+    }
+  }
+
+  // UGC video delete function
+  async function deleteUgcVideo() {
+    if (!ugcToDelete) return;
+    setDeletingUgc(true);
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        toast({ description: "Please log in", variant: "destructive" });
+        return;
+      }
+
+      const res = await fetch("/api/ugc/delete-video", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${session.access_token}`
+        },
+        body: JSON.stringify({
+          ugc_video_id: ugcToDelete.id,
+        }),
+      });
+
+      if (res.ok) {
+        // Remove video from local state
+        setUgcVideos(ugcVideos.filter(v => v.id !== ugcToDelete.id));
+        setDeleteUgcDialogOpen(false);
+        setUgcToDelete(null);
+        toast({ description: "UGC video deleted successfully" });
+      } else {
+        const data = await res.json();
+        console.error("Error deleting UGC video:", data.error);
+        toast({ description: `Failed to delete video: ${data.error}`, variant: "destructive" });
+      }
+    } catch (error) {
+      console.error("Error deleting UGC video:", error);
+      toast({ description: "Failed to delete video. Please try again.", variant: "destructive" });
+    } finally {
+      setDeletingUgc(false);
+    }
+  }
+
+  function handleDeleteUgcClick(e: React.MouseEvent, video: any) {
+    e.stopPropagation();
+    setUgcToDelete(video);
+    setDeleteUgcDialogOpen(true);
   }
 
   function handleAddToSeriesClick(e: React.MouseEvent, story: Story) {
@@ -1562,6 +1957,26 @@ export default function Dashboard() {
 
                 <button
                   onClick={() => {
+                    setSelectedCategory("ugc-ads");
+                    setSelectedSeriesView(null);
+                    setShowCreditsPage(false);
+                    setShowHelpPage(false);
+                    setShowCreateStoryForm(false);
+                    setMobileMenuOpen(false);
+                    fetchUGCVideos();
+                  }}
+                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors mt-1 ${
+                    selectedCategory === "ugc-ads"
+                      ? "bg-orange-600 text-white"
+                      : "text-gray-400 hover:bg-gray-900 hover:text-white"
+                  }`}
+                >
+                  <User className="w-5 h-5" />
+                  <span className="font-medium">UGC Ads</span>
+                </button>
+
+                <button
+                  onClick={() => {
                     setSelectedCategory("cut-shorts");
                     setSelectedSeriesView(null);
                     setShowCreditsPage(false);
@@ -1725,6 +2140,26 @@ export default function Dashboard() {
             >
               <Film className="w-5 h-5" />
               <span className="font-semibold">Series</span>
+            </button>
+
+            <button
+              onClick={() => {
+                setSelectedCategory("ugc-ads");
+                setSelectedSeriesView(null);
+                setShowCreditsPage(false);
+                setShowHelpPage(false);
+                setShowCreateStoryForm(false);
+                setMobileMenuOpen(false);
+                fetchUGCVideos();
+              }}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all mt-2 ${
+                selectedCategory === "ugc-ads"
+                  ? "bg-orange-600 text-white"
+                  : "text-gray-400 hover:bg-gray-900 hover:text-white"
+              }`}
+            >
+              <User className="w-5 h-5" />
+              <span className="font-semibold">UGC Ads</span>
             </button>
 
             <button
@@ -1966,7 +2401,7 @@ export default function Dashboard() {
               </div>
             ) : (
               <h1 className="text-3xl font-bold text-white">
-                {showHelpPage ? "Help & Support" : selectedCategory === "series" ? "Series" : selectedCategory === "cut-shorts" ? "Cut Shorts" : "Stories"}
+                {showHelpPage ? "Help & Support" : selectedCategory === "series" ? "Series" : selectedCategory === "cut-shorts" ? "Cut Shorts" : selectedCategory === "ugc-ads" ? "UGC Ads" : "Stories"}
               </h1>
             )}
             {/* Desktop Create Buttons - Hidden on mobile, credits page, help page, and create form */}
@@ -2077,8 +2512,21 @@ export default function Dashboard() {
                 </>
               )}
 
+              {selectedCategory === "ugc-ads" && (
+                <Button
+                  onClick={() => {
+                    setShowUgcWizard(true);
+                    setUgcStep('input');
+                  }}
+                  className="bg-orange-600 hover:bg-orange-700"
+                >
+                  <Plus className="w-4 h-4 mr-2" />
+                  New UGC Ad
+                </Button>
+              )}
+
               {/* Only show New Story button on Stories tab */}
-              {selectedCategory !== "series" && selectedCategory !== "cut-shorts" && (
+              {selectedCategory !== "series" && selectedCategory !== "cut-shorts" && selectedCategory !== "ugc-ads" && (
               <Button
                 data-tour="create-story-button"
                 className="bg-orange-600 hover:bg-orange-700"
@@ -2515,6 +2963,135 @@ export default function Dashboard() {
               </>
             )}
           </>
+        ) : selectedCategory === "ugc-ads" ? (
+          // UGC Ads View
+          <>
+            {loadingUgcVideos ? (
+              <div className="text-center py-20">
+                <Loader2 className="w-8 h-8 text-orange-500 animate-spin mx-auto" />
+              </div>
+            ) : ugcVideos.length === 0 ? (
+              <div className="text-center py-20">
+                <div className="mb-6 flex justify-center">
+                  <div className="w-24 h-24 rounded-full bg-orange-900/20 flex items-center justify-center">
+                    <User className="w-12 h-12 text-orange-400" />
+                  </div>
+                </div>
+                <h3 className="text-2xl font-semibold text-white mb-4">No UGC Ads Yet</h3>
+                <p className="text-gray-400 mb-8 max-w-md mx-auto">
+                  Create your first talking avatar UGC ad to get started
+                </p>
+                <Button
+                  onClick={() => {
+                    setShowUgcWizard(true);
+                    setUgcStep('input');
+                  }}
+                  className="bg-orange-600 hover:bg-orange-700"
+                >
+                  <Plus className="w-4 h-4 mr-2" />
+                  Create New UGC Ad
+                </Button>
+              </div>
+            ) : (
+              <>
+                {/* UGC Videos Grid */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-5">
+                  {ugcVideos.map((video) => {
+                    const isMuted = ugcMutedState[video.id] !== false; // Default to muted (true)
+
+                    return (
+                      <div
+                        key={video.id}
+                        className="group relative"
+                      >
+                        <div className="relative rounded-md overflow-hidden bg-gray-900 border border-gray-800 hover:border-orange-600 transition-all duration-200 aspect-[9/16]">
+                          {video.video_url ? (
+                            <>
+                              <video
+                                src={video.video_url}
+                                className="w-full h-full object-cover"
+                                muted={isMuted}
+                                loop
+                                playsInline
+                                onMouseEnter={(e) => e.currentTarget.play()}
+                                onMouseLeave={(e) => {
+                                  e.currentTarget.pause();
+                                  e.currentTarget.currentTime = 0;
+                                }}
+                              />
+
+                              {/* Volume button */}
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setUgcMutedState(prev => ({
+                                    ...prev,
+                                    [video.id]: !isMuted
+                                  }));
+                                }}
+                                className="absolute bottom-14 left-2 p-1.5 bg-black/60 hover:bg-black/80 rounded-full backdrop-blur-sm opacity-0 group-hover:opacity-100 transition-opacity z-10"
+                              >
+                                {isMuted ? (
+                                  <VolumeX className="w-4 h-4 text-white" />
+                                ) : (
+                                  <Volume2 className="w-4 h-4 text-white" />
+                                )}
+                              </button>
+                            </>
+                          ) : (
+                            <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-gray-800 to-gray-900">
+                              <User className="w-8 h-8 text-gray-600" />
+                            </div>
+                          )}
+
+                          {/* Three-dot menu */}
+                          <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity z-10">
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <button
+                                  className="p-1.5 bg-black/60 hover:bg-black/80 rounded-full backdrop-blur-sm"
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  <MoreHorizontal className="w-4 h-4 text-white" />
+                                </button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end" className="bg-gray-900 border-gray-700">
+                                <DropdownMenuItem
+                                  onClick={(e) => handleUgcDownload(e, video)}
+                                  className="text-gray-200 hover:text-white hover:bg-gray-800 cursor-pointer"
+                                >
+                                  <Video className="w-4 h-4 mr-2" />
+                                  Download video
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  onClick={(e) => handleDeleteUgcClick(e, video)}
+                                  className="text-red-400 hover:text-red-300 hover:bg-gray-800 cursor-pointer"
+                                >
+                                  <Trash2 className="w-4 h-4 mr-2" />
+                                  Delete video
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                          </div>
+
+                          {/* Info Overlay */}
+                          <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 via-black/70 to-transparent p-2 pointer-events-none">
+                            <h3 className="text-[11px] font-semibold text-white leading-tight line-clamp-2 mb-1">
+                              {video.title || "Untitled UGC Ad"}
+                            </h3>
+                            <div className="flex items-center gap-2 text-[9px] text-gray-400">
+                              <span>{video.status || 'draft'}</span>
+                              {video.duration && <span>{video.duration.toFixed(1)}s</span>}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </>
         ) : (
           <>
 
@@ -2667,6 +3244,62 @@ export default function Dashboard() {
                   <>
                     <Trash2 className="w-4 h-4 mr-2" />
                     Delete Series
+                  </>
+                )}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete UGC Video Confirmation Dialog */}
+      <Dialog open={deleteUgcDialogOpen} onOpenChange={setDeleteUgcDialogOpen}>
+        <DialogContent className="sm:max-w-md bg-gray-900 text-white border-gray-800">
+          <DialogHeader>
+            <DialogTitle className="text-xl font-bold">Delete UGC Ad?</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-gray-300">
+              Are you sure you want to delete "{ugcToDelete?.title || 'this UGC ad'}"? This will permanently delete:
+            </p>
+            <ul className="list-disc list-inside text-gray-400 text-sm space-y-1 ml-2">
+              <li>The generated avatar video</li>
+              <li>All script clips and audio</li>
+              <li>All associated assets</li>
+            </ul>
+            <p className="text-red-400 text-sm font-semibold">
+              This action cannot be undone.
+            </p>
+            <div className="flex gap-3 justify-end mt-6">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setDeleteUgcDialogOpen(false);
+                  setUgcToDelete(null);
+                }}
+                disabled={deletingUgc}
+                className="bg-gray-800 hover:bg-gray-700 text-white border-gray-700"
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={deleteUgcVideo}
+                disabled={deletingUgc || ugcDeleteCountdown > 0}
+                className="bg-red-600 hover:bg-red-700 text-white disabled:opacity-50"
+              >
+                {deletingUgc ? (
+                  <>
+                    <Loader2 className="animate-spin h-4 w-4 mr-2" />
+                    Deleting...
+                  </>
+                ) : ugcDeleteCountdown > 0 ? (
+                  <>
+                    Delete in {ugcDeleteCountdown}...
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-4 h-4 mr-2" />
+                    Delete UGC Ad
                   </>
                 )}
               </Button>
@@ -2885,6 +3518,267 @@ export default function Dashboard() {
                     Import
                   </>
                 )}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* UGC Wizard Dialog */}
+      <Dialog open={showUgcWizard} onOpenChange={setShowUgcWizard}>
+        <DialogContent className="bg-gray-900 border-gray-800 text-white max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Create UGC Ad - Step {ugcStep === 'input' ? '1' : ugcStep === 'script' ? '2' : ugcStep === 'avatar' ? '3' : '4'} of 4</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-6 py-4">
+            {ugcStep === 'input' && (
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">
+                    What's your product or idea?
+                  </label>
+                  <textarea
+                    value={ugcInputText}
+                    onChange={(e) => setUgcInputText(e.target.value)}
+                    placeholder="E.g., My coffee brand that helps you wake up energized..."
+                    className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-orange-600 min-h-[120px]"
+                  />
+                </div>
+                <Button
+                  onClick={handleUGCGenerateScript}
+                  disabled={!ugcInputText.trim() || generatingUGCScript}
+                  className="w-full bg-orange-600 hover:bg-orange-700"
+                >
+                  {generatingUGCScript ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Generating Script...
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="w-4 h-4 mr-2" />
+                      Generate Script (1 credit)
+                    </>
+                  )}
+                </Button>
+              </div>
+            )}
+
+            {ugcStep === 'script' && ugcScriptData && (
+              <div className="space-y-4">
+                <div>
+                  <h3 className="text-lg font-semibold mb-2">{ugcScriptData.title}</h3>
+                  <p className="text-gray-400 text-sm mb-4">{ugcScriptData.total_duration}s total</p>
+                </div>
+                <div className="max-h-96 overflow-y-auto space-y-3">
+                  <p className="text-white whitespace-pre-wrap">{ugcScriptData.script_text}</p>
+                </div>
+                <div className="flex gap-3">
+                  <Button
+                    onClick={() => setUgcStep('input')}
+                    variant="outline"
+                    className="flex-1 border-gray-700"
+                  >
+                    <ArrowLeft className="w-4 h-4 mr-2" />
+                    Back
+                  </Button>
+                  <Button
+                    onClick={() => setUgcStep('avatar')}
+                    className="flex-1 bg-orange-600 hover:bg-orange-700"
+                  >
+                    Next: Choose Avatar
+                    <ArrowRight className="w-4 h-4 ml-2" />
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {ugcStep === 'avatar' && (
+              <div className="space-y-4">
+                {/* Avatar Selector */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">
+                    Choose Avatar
+                  </label>
+                  {loadingUgcAvatars ? (
+                    <div className="text-center py-4">
+                      <Loader2 className="w-5 h-5 text-orange-500 animate-spin mx-auto" />
+                      <p className="text-xs text-gray-500 mt-2">Loading avatars...</p>
+                    </div>
+                  ) : (
+                    <select
+                      value={selectedUgcAvatarId}
+                      onChange={(e) => setSelectedUgcAvatarId(e.target.value)}
+                      className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg text-white focus:outline-none focus:border-orange-600"
+                    >
+                      <option value="">Select an avatar</option>
+                      {ugcAvatars.map((avatar: any) => (
+                        <option key={avatar.avatar_id} value={avatar.avatar_id}>
+                          {avatar.avatar_name} {avatar.gender ? `(${avatar.gender})` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+
+                {/* Voice Selector */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">
+                    Choose Voice
+                  </label>
+                  {loadingUgcVoices ? (
+                    <div className="text-center py-4">
+                      <Loader2 className="w-5 h-5 text-orange-500 animate-spin mx-auto" />
+                      <p className="text-xs text-gray-500 mt-2">Loading voices...</p>
+                    </div>
+                  ) : (
+                    <select
+                      value={selectedUgcVoiceId}
+                      onChange={(e) => setSelectedUgcVoiceId(e.target.value)}
+                      className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg text-white focus:outline-none focus:border-orange-600"
+                    >
+                      <option value="">Select a voice</option>
+                      {ugcVoices.map((voice: any) => (
+                        <option key={voice.voice_id} value={voice.voice_id}>
+                          {voice.display_name || voice.name} {voice.language ? `(${voice.language})` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+
+                {/* Resolution Selector */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">
+                    Video Resolution
+                  </label>
+                  <select
+                    value={ugcResolution}
+                    onChange={(e) => setUgcResolution(e.target.value as '720p' | '1080p')}
+                    className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg text-white focus:outline-none focus:border-orange-600"
+                  >
+                    <option value="720p">720p (720x1280) - Free Plan</option>
+                    <option value="1080p">1080p (1080x1920) - Requires Standard Plan</option>
+                  </select>
+                  <p className="text-xs text-gray-400 mt-2">
+                    Choose based on your HeyGen subscription plan
+                  </p>
+                </div>
+
+                <div className="flex gap-3">
+                  <Button
+                    onClick={() => setUgcStep('script')}
+                    variant="outline"
+                    className="flex-1 border-gray-700"
+                  >
+                    <ArrowLeft className="w-4 h-4 mr-2" />
+                    Back
+                  </Button>
+                  <Button
+                    onClick={() => setUgcStep('customize')}
+                    disabled={!selectedUgcAvatarId || !selectedUgcVoiceId}
+                    className="flex-1 bg-orange-600 hover:bg-orange-700"
+                  >
+                    Next: Generate
+                    <ArrowRight className="w-4 h-4 ml-2" />
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {ugcStep === 'customize' && (
+              <div className="space-y-4">
+                <div className="bg-blue-900/20 border border-blue-600/50 rounded-lg p-4">
+                  <p className="text-sm text-blue-200">
+                    Ready to generate your UGC ad!
+                  </p>
+                  <p className="text-sm text-blue-300 mt-2">
+                    HeyGen will create a talking avatar video with lip-synced audio using your selected voice.
+                  </p>
+                  <p className="text-xs text-gray-400 mt-2">
+                    ⚡ This may take 2-5 minutes to generate
+                  </p>
+                </div>
+
+                <div className="flex gap-3">
+                  <Button
+                    onClick={() => setUgcStep('avatar')}
+                    variant="outline"
+                    className="flex-1 border-gray-700"
+                  >
+                    <ArrowLeft className="w-4 h-4 mr-2" />
+                    Back
+                  </Button>
+                  <Button
+                    onClick={handleUGCGenerateAvatarVideo}
+                    disabled={generatingUGCAvatar}
+                    className="flex-1 bg-orange-600 hover:bg-orange-700"
+                  >
+                    {generatingUGCAvatar ? (
+                      <>
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        Generating Avatar Video...
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles className="w-4 h-4 mr-2" />
+                        Generate UGC Ad (FREE)
+                      </>
+                    )}
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* UGC Video Preview Dialog */}
+      <Dialog open={showUgcPreview} onOpenChange={setShowUgcPreview}>
+        <DialogContent className="bg-gray-900 border-gray-800 text-white max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>{selectedUgcVideo?.title || "UGC Ad"}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            {/* Video Player */}
+            {selectedUgcVideo?.video_url && (
+              <div className="relative bg-black rounded-lg overflow-hidden aspect-[9/16] max-h-[70vh] mx-auto">
+                <video
+                  src={selectedUgcVideo.video_url}
+                  controls
+                  autoPlay
+                  loop
+                  className="w-full h-full object-contain"
+                />
+              </div>
+            )}
+
+            {/* Video Info */}
+            <div className="flex items-center justify-between text-sm text-gray-400">
+              <span>Duration: {selectedUgcVideo?.duration?.toFixed(1)}s</span>
+              <span>Status: {selectedUgcVideo?.status}</span>
+            </div>
+
+            {/* Actions */}
+            <div className="flex gap-3">
+              <Button
+                onClick={() => {
+                  const link = document.createElement('a');
+                  link.href = selectedUgcVideo?.video_url;
+                  link.download = `${selectedUgcVideo?.title || 'ugc-ad'}.mp4`;
+                  link.click();
+                }}
+                className="flex-1 bg-orange-600 hover:bg-orange-700"
+              >
+                <Video className="w-4 h-4 mr-2" />
+                Download Video
+              </Button>
+              <Button
+                onClick={() => setShowUgcPreview(false)}
+                variant="outline"
+                className="border-gray-700"
+              >
+                Close
               </Button>
             </div>
           </div>

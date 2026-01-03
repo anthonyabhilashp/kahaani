@@ -32,6 +32,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // 🚀 OPTIMIZED: Use VIEW to get all data in ONE query
     // This replaces 3 queries per story with 1 query total
+    // EXCLUDE UGC temp stories (stories created for UGC video generation)
+    // by checking if story_id exists in ugc_videos table
+    const { data: ugcStoryIds } = await supabaseAdmin
+      .from('ugc_videos')
+      .select('id');
+
+    const ugcIds = (ugcStoryIds || []).map(v => v.id);
+
     let viewQuery = supabaseAdmin
       .from("stories_dashboard")
       .select("*", { count: 'exact' })
@@ -40,6 +48,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (!isAdmin) {
       viewQuery = viewQuery.eq('user_id', user.id);
+    }
+
+    // Exclude UGC temp stories
+    if (ugcIds.length > 0) {
+      viewQuery = viewQuery.not('id', 'in', `(${ugcIds.join(',')})`);
     }
 
     // Filter by series if series_id is provided
@@ -61,6 +74,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       if (!isAdmin) {
         query = query.eq('user_id', user.id);
+      }
+
+      // Exclude UGC temp stories (same as above)
+      if (ugcIds.length > 0) {
+        query = query.not('id', 'in', `(${ugcIds.join(',')})`);
       }
 
       // Filter by series if series_id is provided

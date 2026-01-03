@@ -1257,7 +1257,27 @@ async function runVideoGeneration(params: VideoGenParams) {
 
     // 11️⃣ Upload final video
     const buffer = fs.readFileSync(finalVideo);
-    const fileName = `video-${story_id}-${Date.now()}.mp4`;
+
+    // Determine storage path based on video type
+    // Check if this is a UGC video by querying ugc_videos table
+    const { data: ugcCheck } = await supabaseAdmin
+      .from('ugc_videos')
+      .select('id')
+      .eq('id', story_id)
+      .single();
+
+    let fileName: string;
+    const isUGCVideo = !!ugcCheck;
+
+    if (isUGCVideo) {
+      // UGC videos: {user_id}/ugc/{ugc_video_id}/video.mp4
+      fileName = `${userId}/ugc/${story_id}/video.mp4`;
+      logger.info(`[${story_id}] 📁 UGC video path: ${fileName}`);
+    } else {
+      // Regular stories: {user_id}/stories/{story_id}/video-{timestamp}.mp4
+      fileName = `${userId}/stories/${story_id}/video-${Date.now()}.mp4`;
+      logger.info(`[${story_id}] 📁 Story video path: ${fileName}`);
+    }
 
     const { error: uploadErr } = await supabaseAdmin.storage
     .from("videos")
@@ -1289,6 +1309,24 @@ async function runVideoGeneration(params: VideoGenParams) {
     if (upsertErr) throw upsertErr;
 
     logger.info(`[${story_id}] ☁️ Uploaded video → ${publicUrl} (${totalDuration.toFixed(1)}s total)`);
+
+    // 📹 If this is a UGC video, also update the ugc_videos table
+    if (isUGCVideo) {
+      const { error: ugcUpdateErr } = await supabaseAdmin
+        .from('ugc_videos')
+        .update({
+          video_url: publicUrl,
+          duration: totalDuration,
+          status: 'completed'
+        })
+        .eq('id', story_id);
+
+      if (ugcUpdateErr) {
+        logger.warn(`[${story_id}] ⚠️ Failed to update UGC video record: ${ugcUpdateErr.message}`);
+      } else {
+        logger.info(`[${story_id}] ✅ Updated UGC video record with video URL`);
+      }
+    }
 
     // 🧹 Clean up old videos ONLY after new video is successfully uploaded and saved
     if (oldVideos?.length) {
