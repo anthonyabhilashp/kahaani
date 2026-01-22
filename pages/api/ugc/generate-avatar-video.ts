@@ -11,7 +11,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  const { ugc_video_id, avatar_id, voice_id, resolution = '720p' } = req.body;
+  const {
+    ugc_video_id,
+    avatar_id,
+    voice_id,
+    resolution = '720p',
+    background_type,        // 'image', 'video', or 'color'
+    background_url,         // Direct URL for image/video
+    background_asset_id,    // HeyGen asset ID (from upload-asset API)
+    background_color        // Hex color code (e.g., '#00FF00')
+  } = req.body;
 
   if (!ugc_video_id) {
     return res.status(400).json({ error: "ugc_video_id is required" });
@@ -84,21 +93,49 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     logger.info(`Calling HeyGen API to generate video with avatar: ${selectedAvatarId}, voice: ${selectedVoiceId}...`);
 
-    const heygenPayload = {
-      video_inputs: [
-        {
-          character: {
-            type: "avatar",
-            avatar_id: selectedAvatarId,
-            avatar_style: "normal"
-          },
-          voice: {
-            type: "text",
-            input_text: ugcVideo.script_text,
-            voice_id: selectedVoiceId
-          }
+    // Build video input object
+    const videoInput: any = {
+      character: {
+        type: "avatar",
+        avatar_id: selectedAvatarId,
+        avatar_style: "normal"
+      },
+      voice: {
+        type: "text",
+        input_text: ugcVideo.script_text,
+        voice_id: selectedVoiceId
+      }
+    };
+
+    // Add background if specified
+    if (background_type) {
+      if (background_type === 'image' || background_type === 'video') {
+        // Image or video background
+        if (background_asset_id) {
+          videoInput.background = {
+            type: background_type,
+            image_asset_id: background_asset_id  // HeyGen asset ID from upload
+          };
+          logger.info(`Using ${background_type} background with asset ID: ${background_asset_id}`);
+        } else if (background_url) {
+          videoInput.background = {
+            type: background_type,
+            url: background_url  // Direct URL
+          };
+          logger.info(`Using ${background_type} background with URL: ${background_url}`);
         }
-      ],
+      } else if (background_type === 'color' && background_color) {
+        // Solid color background
+        videoInput.background = {
+          type: 'color',
+          value: background_color
+        };
+        logger.info(`Using color background: ${background_color}`);
+      }
+    }
+
+    const heygenPayload = {
+      video_inputs: [videoInput],
       dimension: {
         width: dimensions.width,
         height: dimensions.height

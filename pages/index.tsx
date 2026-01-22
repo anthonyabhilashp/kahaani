@@ -329,6 +329,14 @@ export default function Dashboard() {
   const [ugcDeleteCountdown, setUgcDeleteCountdown] = useState(2);
   const [ugcMutedState, setUgcMutedState] = useState<Record<string, boolean>>({});
 
+  // UGC Background/Product Image state
+  const [ugcBackgroundType, setUgcBackgroundType] = useState<'none' | 'image' | 'color'>('none');
+  const [ugcBackgroundFile, setUgcBackgroundFile] = useState<File | null>(null);
+  const [ugcBackgroundPreview, setUgcBackgroundPreview] = useState<string>('');
+  const [ugcBackgroundColor, setUgcBackgroundColor] = useState<string>('#00FF00');
+  const [uploadingBackground, setUploadingBackground] = useState(false);
+  const [backgroundAssetId, setBackgroundAssetId] = useState<string>('');
+
   // Show landing page for non-authenticated users
   // (Removed redirect to /login - will show landing page instead)
 
@@ -794,6 +802,66 @@ export default function Dashboard() {
     }
   }
 
+  // Handle background image upload to HeyGen
+  async function handleUGCBackgroundUpload(file: File) {
+    setUploadingBackground(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        toast({ title: "Error", description: "Please log in", variant: "destructive" });
+        return;
+      }
+
+      // Upload to Supabase Storage first
+      const fileName = `ugc-background-${Date.now()}-${file.name}`;
+      const { data: uploadData, error: uploadError } = await supabase.storage
+        .from('images')
+        .upload(fileName, file);
+
+      if (uploadError) throw uploadError;
+
+      // Get public URL
+      const { data: { publicUrl } } = supabase.storage
+        .from('images')
+        .getPublicUrl(fileName);
+
+      // Upload to HeyGen via our API
+      const response = await fetch('/api/ugc/upload-asset', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`
+        },
+        body: JSON.stringify({
+          file_url: publicUrl,
+          asset_type: 'image'
+        })
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to upload asset');
+      }
+
+      const data = await response.json();
+      setBackgroundAssetId(data.asset_id);
+
+      toast({
+        title: "Success",
+        description: "Background image uploaded successfully",
+      });
+    } catch (error: any) {
+      console.error("Error uploading background:", error);
+      toast({
+        title: "Error",
+        description: error.message || "Failed to upload background",
+        variant: "destructive"
+      });
+    } finally {
+      setUploadingBackground(false);
+    }
+  }
+
   async function handleUGCGenerateAvatarVideo() {
     if (!ugcVideoId || !selectedUgcAvatarId || !selectedUgcVoiceId) {
       toast({
@@ -816,6 +884,23 @@ export default function Dashboard() {
         return;
       }
 
+      // Build payload with background options
+      const payload: any = {
+        ugc_video_id: ugcVideoId,
+        avatar_id: selectedUgcAvatarId,
+        voice_id: selectedUgcVoiceId,
+        resolution: ugcResolution
+      };
+
+      // Add background options if selected
+      if (ugcBackgroundType === 'image' && backgroundAssetId) {
+        payload.background_type = 'image';
+        payload.background_asset_id = backgroundAssetId;
+      } else if (ugcBackgroundType === 'color') {
+        payload.background_type = 'color';
+        payload.background_color = ugcBackgroundColor;
+      }
+
       // Generate avatar video with HeyGen (includes audio + lip-sync)
       const response = await fetch('/api/ugc/generate-avatar-video', {
         method: 'POST',
@@ -823,12 +908,7 @@ export default function Dashboard() {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${session.access_token}`
         },
-        body: JSON.stringify({
-          ugc_video_id: ugcVideoId,
-          avatar_id: selectedUgcAvatarId,
-          voice_id: selectedUgcVoiceId,
-          resolution: ugcResolution
-        })
+        body: JSON.stringify(payload)
       });
 
       if (!response.ok) {
@@ -1793,7 +1873,7 @@ export default function Dashboard() {
               }
             }}
             min={1}
-            max={30}
+            max={90}
             step={1}
             showValue={true}
             className="w-full"
@@ -3002,7 +3082,8 @@ export default function Dashboard() {
                     return (
                       <div
                         key={video.id}
-                        className="group relative"
+                        className="group relative cursor-pointer"
+                        onClick={() => router.push(`/ugc/${video.id}`)}
                       >
                         <div className="relative rounded-md overflow-hidden bg-gray-900 border border-gray-800 hover:border-orange-600 transition-all duration-200 aspect-[9/16]">
                           {video.video_url ? (
@@ -3601,23 +3682,44 @@ export default function Dashboard() {
                     Choose Avatar
                   </label>
                   {loadingUgcAvatars ? (
-                    <div className="text-center py-4">
+                    <div className="text-center py-6">
                       <Loader2 className="w-5 h-5 text-orange-500 animate-spin mx-auto" />
-                      <p className="text-xs text-gray-500 mt-2">Loading avatars...</p>
                     </div>
+                  ) : ugcAvatars.length === 0 ? (
+                    <p className="text-sm text-gray-500 text-center py-4">No avatars available</p>
                   ) : (
-                    <select
-                      value={selectedUgcAvatarId}
-                      onChange={(e) => setSelectedUgcAvatarId(e.target.value)}
-                      className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg text-white focus:outline-none focus:border-orange-600"
-                    >
-                      <option value="">Select an avatar</option>
+                    <div className="grid grid-cols-3 gap-3 max-h-56 overflow-y-auto pr-2" style={{ scrollbarWidth: 'thin' }}>
                       {ugcAvatars.map((avatar: any) => (
-                        <option key={avatar.avatar_id} value={avatar.avatar_id}>
-                          {avatar.avatar_name} {avatar.gender ? `(${avatar.gender})` : ''}
-                        </option>
+                        <button
+                          key={avatar.avatar_id}
+                          type="button"
+                          onClick={() => setSelectedUgcAvatarId(avatar.avatar_id)}
+                          className={`relative rounded overflow-hidden transition-all ${
+                            selectedUgcAvatarId === avatar.avatar_id
+                              ? 'ring-2 ring-orange-600'
+                              : 'hover:ring-2 hover:ring-gray-600'
+                          }`}
+                        >
+                          <div className="aspect-[3/4] bg-gray-800 relative">
+                            {avatar.preview_image_url ? (
+                              <Image
+                                src={avatar.preview_image_url}
+                                alt={avatar.avatar_name}
+                                fill
+                                className="object-cover"
+                              />
+                            ) : (
+                              <div className="absolute inset-0 flex items-center justify-center">
+                                <User className="w-5 h-5 text-gray-600" />
+                              </div>
+                            )}
+                            {selectedUgcAvatarId === avatar.avatar_id && (
+                              <div className="absolute inset-0 bg-orange-600/20" />
+                            )}
+                          </div>
+                        </button>
                       ))}
-                    </select>
+                    </div>
                   )}
                 </div>
 
@@ -3663,6 +3765,112 @@ export default function Dashboard() {
                   <p className="text-xs text-gray-400 mt-2">
                     Choose based on your HeyGen subscription plan
                   </p>
+                </div>
+
+                {/* Background Customization */}
+                <div className="border-t border-gray-700 pt-4">
+                  <label className="block text-sm font-medium text-gray-300 mb-3">
+                    Background (Optional)
+                  </label>
+
+                  <div className="space-y-3">
+                    {/* Background Type Selector */}
+                    <div className="flex gap-2">
+                      <Button
+                        type="button"
+                        variant={ugcBackgroundType === 'none' ? 'default' : 'outline'}
+                        className={`flex-1 ${ugcBackgroundType === 'none' ? 'bg-orange-600 hover:bg-orange-700' : 'border-gray-700'}`}
+                        onClick={() => setUgcBackgroundType('none')}
+                      >
+                        None
+                      </Button>
+                      <Button
+                        type="button"
+                        variant={ugcBackgroundType === 'image' ? 'default' : 'outline'}
+                        className={`flex-1 ${ugcBackgroundType === 'image' ? 'bg-orange-600 hover:bg-orange-700' : 'border-gray-700'}`}
+                        onClick={() => setUgcBackgroundType('image')}
+                      >
+                        Image/Product
+                      </Button>
+                      <Button
+                        type="button"
+                        variant={ugcBackgroundType === 'color' ? 'default' : 'outline'}
+                        className={`flex-1 ${ugcBackgroundType === 'color' ? 'bg-orange-600 hover:bg-orange-700' : 'border-gray-700'}`}
+                        onClick={() => setUgcBackgroundType('color')}
+                      >
+                        Color
+                      </Button>
+                    </div>
+
+                    {/* Image Upload */}
+                    {ugcBackgroundType === 'image' && (
+                      <div className="space-y-2">
+                        <Input
+                          type="file"
+                          accept="image/*"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) {
+                              setUgcBackgroundFile(file);
+                              // Create preview
+                              const reader = new FileReader();
+                              reader.onload = (ev) => {
+                                setUgcBackgroundPreview(ev.target?.result as string);
+                              };
+                              reader.readAsDataURL(file);
+                              // Upload to HeyGen
+                              handleUGCBackgroundUpload(file);
+                            }
+                          }}
+                          className="bg-gray-800 border-gray-700 text-white"
+                        />
+                        {ugcBackgroundPreview && (
+                          <div className="relative w-full h-32 bg-gray-800 rounded-lg overflow-hidden">
+                            <Image
+                              src={ugcBackgroundPreview}
+                              alt="Background preview"
+                              fill
+                              className="object-contain"
+                            />
+                          </div>
+                        )}
+                        {uploadingBackground && (
+                          <div className="flex items-center gap-2 text-sm text-orange-500">
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            Uploading to HeyGen...
+                          </div>
+                        )}
+                        {backgroundAssetId && (
+                          <p className="text-xs text-green-500">✓ Uploaded successfully</p>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Color Picker */}
+                    {ugcBackgroundType === 'color' && (
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="color"
+                          value={ugcBackgroundColor}
+                          onChange={(e) => setUgcBackgroundColor(e.target.value)}
+                          className="w-16 h-10 rounded border border-gray-700 bg-gray-800 cursor-pointer"
+                        />
+                        <Input
+                          type="text"
+                          value={ugcBackgroundColor}
+                          onChange={(e) => setUgcBackgroundColor(e.target.value)}
+                          placeholder="#00FF00"
+                          className="flex-1 bg-gray-800 border-gray-700 text-white"
+                        />
+                      </div>
+                    )}
+
+                    <p className="text-xs text-gray-400">
+                      {ugcBackgroundType === 'none' && '✨ Avatar will appear on default background'}
+                      {ugcBackgroundType === 'image' && '📸 Upload product images or custom backgrounds'}
+                      {ugcBackgroundType === 'color' && '🎨 Choose a solid color background'}
+                    </p>
+                  </div>
                 </div>
 
                 <div className="flex gap-3">
